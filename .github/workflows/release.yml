@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Check that the tag matches the pubspec version
+        run: |
+          version=$(sed -n 's/^version: *//p' pubspec.yaml | head -n1 | cut -d+ -f1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the pubspec version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --release
+      - name: Name the APK after the version
+        run: cp build/app/outputs/flutter-apk/app-release.apk "astrosophy-$VERSION.apk"
+      - name: Take the changelog entry for this version
+        run: |
+          awk -v heading="## [$VERSION]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            rm release-notes.md
+          fi
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=(--generate-notes)
+          if [ -f release-notes.md ]; then
+            notes=(--notes-file release-notes.md)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "AstroSophy $VERSION" \
+            "${notes[@]}" \
+            "astrosophy-$VERSION.apk"
