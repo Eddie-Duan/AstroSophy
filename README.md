@@ -1,3 +1,5 @@
+![AstroSophy：把手机拍的星空照片交给它，本机算出你拍到了哪片天](assets/brand/astrosophy_social_preview.png)
+
 # AstroSophy
 
 面向天文爱好者的 Flutter Android 应用。选一张手机里拍下的星空照片，它在本机找出星点、算出你拍的是哪片天，再把结果整理成看得懂的表格、图和一段中文说明。**不联网也能用**，没有账号，没有自建服务器。
