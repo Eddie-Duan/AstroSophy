@@ -14,6 +14,9 @@ dependencies:
   http: ^1.3.0
   image: ^4.5.3
   image_picker: ^1.1.2
+  # 历史记录的路径拼接。path_provider 会间接带上它，但直接 import 的包
+  # 必须在 pubspec 里显式声明，否则换个依赖版本就可能解析不到。
+  path: ^1.9.0
   path_provider: ^2.1.5
 
 dev_dependencies:

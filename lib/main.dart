@@ -9,6 +9,8 @@ import 'package:image_picker/image_picker.dart';
 
 import 'analysis.dart';
 import 'demo.dart';
+import 'history.dart';
+import 'history_screen.dart';
 import 'model.dart';
 import 'models.dart';
 import 'pipeline.dart';
@@ -79,6 +81,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   bool _astrometryConfigured = false;
 
   PipelineProgress? _progress;
+
+  /// 历史记录仓库。第一次用到时才打开——不存不读的会话不必碰磁盘。
+  HistoryStore? _history;
+  bool _saving = false;
+
+  /// 当前这张图在历史里对应的记录 id；没保存过就是 null。
+  String? _savedId;
 
   /// 后台解算 isolate。第一次用到时才起，之后一直留着——索引建一次要一秒
   /// 上下，起一次就够。
@@ -196,10 +205,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _explanation = null;
       _error = null;
       _warnings = const [];
+      _savedId = null;
     });
   }
-
-  /// 用自带的演示图。给第一次打开、手里还没有照片的人一条能走通的路。
   Future<void> _pickDemoImage() async {
     final choice = await showModalBottomSheet<DemoImage>(
       context: context,
@@ -269,6 +277,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _warnings = const [];
       _solve = null;
       _explanation = null;
+      // 重新解析出来的是新的一份结果，和之前存过的那条记录不再是一回事，
+      // 要能再存一次。
+      _savedId = null;
       _progress = const PipelineProgress(0.01, '正在准备');
     });
     try {
@@ -423,8 +434,127 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           textAlign: TextAlign.center,
           style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
         ),
+        const SizedBox(height: 12),
+        _actionRow(analysis: _analysis),
       ],
     );
+  }
+
+  /// 「保存」和「退出」。
+  ///
+  /// 这两件事原来没有出口：解析完一张图之后，想换一张只能从相册再选一张，
+  /// 想要的东西也没法留档。保存只在有解析结果时才可用——光有一张图没什么
+  /// 可存的，存下来也只是占地方。
+  Widget _actionRow({required SkyAnalysis? analysis}) => Row(
+        children: [
+          Expanded(
+            child: FilledButton.tonalIcon(
+              // 已经存过的这一份不能再存：每保存一次就是一条新记录，连点
+              // 两下会得到两条一模一样的档案。重新解析之后才重新可用。
+              onPressed:
+                  analysis == null || _saving || _savedId != null ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(_savedId == null
+                      ? Icons.bookmark_add_outlined
+                      : Icons.bookmark_added),
+              label: Text(
+                _saving
+                    ? '正在保存…'
+                    : _savedId == null
+                        ? '保存'
+                        : '已保存',
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _running ? null : _exit,
+              icon: const Icon(Icons.close_fullscreen_rounded),
+              label: const Text('退出'),
+            ),
+          ),
+        ],
+      );
+
+  Future<HistoryStore> _ensureHistory() async =>
+      _history ??= await HistoryStore.open();
+
+  /// 保存当前这一次的解析结果。
+  Future<void> _save() async {
+    final analysis = _analysis;
+    if (analysis == null || _saving) return;
+    setState(() => _saving = true);
+    try {
+      final store = await _ensureHistory();
+      final saved = await store.save(
+        name: _filename ?? '未命名',
+        analysis: analysis,
+        solve: _solve,
+        explanation: _explanation,
+      );
+      _savedId = saved.id;
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已保存到观星记录')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _showError('保存失败：$error');
+    }
+  }
+
+  /// 退出：把当前这张图和它的解析结果清掉，回到刚打开 APP 的样子。
+  ///
+  /// 已经保存过的记录不受影响——「退出」清的是工作台，不是档案柜。
+  void _exit() {
+    setState(() {
+      _bytes = null;
+      _filename = null;
+      _analysis = null;
+      _solve = null;
+      _explanation = null;
+      _error = null;
+      _warnings = const [];
+      _progress = null;
+      _savedId = null;
+    });
+  }
+
+  Future<void> _openHistory() async {
+    try {
+      final store = await _ensureHistory();
+      if (!mounted) return;
+      final entry = await Navigator.of(context).push<SavedAnalysis>(
+        MaterialPageRoute(builder: (_) => HistoryScreen(store: store)),
+      );
+      if (entry == null || !mounted) return;
+      final analysis = await entry.readAnalysis();
+      if (!mounted) return;
+      setState(() {
+        // 打开历史记录用的是存下来的预览图，不是原图——存的时候就没存原图
+        // （用户相册里本来就有）。所以从历史里再点「重新解析」，跑的是这张
+        // 缩小过的图。星点位置不受影响，能测到的最暗星等会差一点。
+        _bytes = analysis.preview;
+        _filename = entry.name;
+        _analysis = analysis;
+        _solve = entry.solve;
+        _explanation = entry.explanation;
+        _error = null;
+        _warnings = const [];
+        _progress = null;
+        _savedId = entry.id;
+      });
+    } catch (error) {
+      _showError('打开历史记录失败：$error');
+    }
   }
 
   /// 按钮下面那行小字：这一次点下去到底会跑哪几步。
@@ -462,6 +592,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             onPressed: () => _showOnboarding(),
             tooltip: '使用引导',
             icon: const Icon(Icons.help_outline_rounded),
+          ),
+          IconButton(
+            onPressed: _openHistory,
+            tooltip: '观星记录',
+            icon: const Icon(Icons.collections_bookmark_outlined),
           ),
           IconButton(
             onPressed: _settings,
