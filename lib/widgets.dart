@@ -197,6 +197,7 @@ class DetectedStarsPainter extends CustomPainter {
     required this.namedStars,
     required this.objects,
     this.figures = const [],
+    this.hidden = const {},
     this.selected,
     this.numbers = true,
   });
@@ -207,6 +208,13 @@ class DetectedStarsPainter extends CustomPainter {
 
   /// 星座连线，像素坐标已经由解算侧算好（见 `ConstellationFigure`）。
   final List<ConstellationFigure> figures;
+
+  /// 图上不画的编号（`numberedTargets` 的下标）。
+  ///
+  /// 用户在列表里按组把圆圈隐去了。隐去就是**什么都不画**：不画圈、不画编号。
+  /// 画淡一点或者打个叉都不行——那仍然是画面上一块要费神忽略的东西，而用户
+  /// 要的是画面干净。这只是不画：这些点一个都没少，测量和报告照旧。
+  final Set<int> hidden;
 
   /// 当前在下方列表里选中的那一项（`numberedTargets` 的下标）。图上会把它
   /// 单独框出来——点列表第 10 项和图上的 ⑩ 必须是同一颗星，否则这套编号
@@ -281,6 +289,7 @@ class DetectedStarsPainter extends CustomPainter {
 
     final targets = analysis.numberedTargets;
     for (var index = 0; index < targets.length; index++) {
+      if (hidden.contains(index)) continue;
       final star = targets[index];
       final point = toCanvas(star.x, star.y);
       final isSelected = index == selected;
@@ -288,6 +297,9 @@ class DetectedStarsPainter extends CustomPainter {
       // 拉长候选画成椭圆，长轴按检出到的方向。圆点看不出「这是条线还是一
       // 颗星」，而这两种东西在图上的意义完全不同——一条线可能是飞机或
       // 卫星，判断该不该留就得看它的方向和长度。
+      //
+      // 被判为非天体的飞线照样画，只是颜色压暗：用户要能一眼看出自己判过
+      // 哪一条、在哪儿判的，否则改主意时无从下手。
       final rejected = star.isRejected;
       final paint = Paint()
         ..style = PaintingStyle.stroke
@@ -319,15 +331,6 @@ class DetectedStarsPainter extends CustomPainter {
         canvas.drawCircle(point, isSelected ? 8 : 3.5, paint);
       }
 
-      if (rejected) {
-        // 划掉：一颗被剔除的星和一颗没被剔除的星，只靠颜色深浅区分不够，
-        // 屏幕上小尺寸下几乎看不出来。
-        canvas.drawLine(
-          point + const Offset(-5, -5),
-          point + const Offset(5, 5),
-          paint,
-        );
-      }
       if (isSelected) {
         canvas.drawCircle(
           point,
@@ -342,7 +345,9 @@ class DetectedStarsPainter extends CustomPainter {
       if (numbers && index < _numberLimit) {
         final label = TextPainter(
           text: TextSpan(
-            text: rejected ? '✕' : '${index + 1}',
+            text: '${index + 1}',
+            // 编号照留，只是压暗：编号是把列表和图上对上的唯一凭据，摘掉它
+            // 就等于把这条飞线从两边的对应关系里剔了出去。
             style: rejected
                 ? labelStyle.copyWith(color: const Color(0xFF8A5A66))
                 : labelStyle,
@@ -383,6 +388,10 @@ class DetectedStarsPainter extends CustomPainter {
       !identical(namedStars, oldDelegate.namedStars) ||
       !identical(objects, oldDelegate.objects) ||
       !identical(figures, oldDelegate.figures) ||
+      // 数目一样、又没有对方缺的元素，两个集合就是同一个。不引 foundation
+      // 的 setEquals，是为了让这个文件只依赖 material 一层。
+      hidden.length != oldDelegate.hidden.length ||
+      !hidden.containsAll(oldDelegate.hidden) ||
       oldDelegate.selected != selected ||
       oldDelegate.numbers != numbers;
 }

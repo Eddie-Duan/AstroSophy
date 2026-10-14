@@ -150,6 +150,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _card(SavedAnalysis entry) => Card(
         clipBehavior: Clip.antiAlias,
         margin: EdgeInsets.zero,
+        // 描边颜色就是这一条的结论：解算出来了 / 只检测到星点 / 什么都没算
+        // 出来。绿黄红是给一眼扫过用的，角标上的文字才是给认真看的人的——
+        // 只靠颜色传达状态，色觉障碍用户就等于没有这个信息。
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: outcomeColor(entry.outcome), width: 1.6),
+        ),
         child: InkWell(
           onTap: () => Navigator.of(context).pop(entry),
           onLongPress: () => _confirmDelete(entry),
@@ -166,6 +173,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       entry.imageFile,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => const MissingImage(compact: true),
+                    ),
+                    Positioned(
+                      left: 6,
+                      top: 6,
+                      child: _outcomeBadge(entry.outcome),
                     ),
                     Positioned(
                       right: 6,
@@ -207,8 +219,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      entry.constellation ?? '未解算',
-                      style: const TextStyle(color: kMint, fontSize: 11),
+                      entry.constellation ?? entry.outcome.label,
+                      style: TextStyle(
+                        color: entry.constellation == null
+                            ? outcomeColor(entry.outcome)
+                            : kMint,
+                        fontSize: 11,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -273,6 +290,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  /// 缩略图左上角的结论角标。
+  Widget _outcomeBadge(RecordOutcome outcome) {
+    final color = outcomeColor(outcome);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.66),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.7)),
+      ),
+      child: Text(
+        outcome.label,
+        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
   /// 卡片右上角那排圆形小按钮：改名、删除。共用一套样式，免得两处各写一份
   /// 半透明的黑底圆。
   Widget _roundButton(IconData icon, String tooltip, VoidCallback onTap) =>
@@ -292,6 +326,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
 }
+
+/// 三档结论各自的颜色。
+///
+/// 挑的不是纯红绿黄：这套配色在深蓝底上要够亮、又能互相区分，同时明度接近，
+/// 免得某一种颜色在缩略图上抢戏。绿色没用 `kMint`——它是整个 APP 的主色，
+/// 满屏的薄荷绿卡片反而让「成功」不再特别。
+Color outcomeColor(RecordOutcome outcome) => switch (outcome) {
+      RecordOutcome.ok => const Color(0xFF4FD1A5),
+      RecordOutcome.partial => const Color(0xFFE8C36A),
+      RecordOutcome.failed => const Color(0xFFE0708A),
+    };
 
 /// 「2026-10-14 22:39」。列表里不写秒——同一分钟内保存两条，一眼分不出
 /// 也没什么关系，而多两个数字会让日期更难扫。

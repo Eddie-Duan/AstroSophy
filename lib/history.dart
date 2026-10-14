@@ -27,6 +27,7 @@ class SavedAnalysis {
     required this.imageFile,
     required this.processedFile,
     required Map<String, Object?> rawAnalysis,
+    this.isStarfield = true,
   }) : _rawAnalysis = rawAnalysis;
 
   final String id;
@@ -52,6 +53,22 @@ class SavedAnalysis {
 
   final Map<String, Object?> _rawAnalysis;
 
+  /// 存下这一条时，那张图整体看起来是不是星空照片。
+  ///
+  /// 老记录里没有这个字段（那时候还没存），缺省按「有星点就算星空」兜底，
+  /// 见 [_decode]。
+  final bool isStarfield;
+
+  /// 这一条算得怎么样。历史列表据此给卡片描边，让用户一眼分出「这张解出来了」
+  /// 和「这张什么都没算出来」。
+  ///
+  /// 分三档而不是两档，是因为中间那一档最容易被误解：星点检测到了、天区没
+  /// 解算出来，既不是成功也不是失败，用户需要知道「图有用，只是没定位」。
+  RecordOutcome get outcome {
+    if (!isStarfield || starCount == 0) return RecordOutcome.failed;
+    return solve == null ? RecordOutcome.partial : RecordOutcome.ok;
+  }
+
   /// 把完整的测量结果读出来。
   ///
   /// 要读文件，所以是异步的——列表页不该为了这个付出代价。
@@ -73,6 +90,22 @@ class SavedAnalysis {
 
   static Future<Uint8List> _readOrEmpty(File file) async =>
       file.existsSync() ? await file.readAsBytes() : Uint8List(0);
+}
+
+/// 一条记录的解析结果，历史列表用它给卡片描边。
+enum RecordOutcome {
+  /// 天区解算成功，坐标、星表、测光都有。
+  ok('已解算'),
+
+  /// 星点检测成功，但天区没解算出来——图还是有用的，只是不知道拍的是哪儿。
+  partial('仅检测到星点'),
+
+  /// 几乎没检出星点，或者那张图根本不像星空照片。
+  failed('未能解析');
+
+  const RecordOutcome(this.label);
+
+  final String label;
 }
 
 /// 历史记录的读写。
@@ -158,6 +191,9 @@ class HistoryStore {
           'star_count': analysis.compactSources.length,
           'constellation': _firstOrNull(solve?.constellations),
           'solved': solve != null,
+          // 星空判定也要留在摘要里：历史列表要分「解算成功 / 只是检测到星点 /
+          // 这压根不像星空」三档，而一二档的区别只看 solved，二三档得看它。
+          'starfield': analysis.isLikelyStarfield,
         },
         'analysis': rawAnalysis,
         'solve': solve?.toJson(),
@@ -178,6 +214,7 @@ class HistoryStore {
       imageFile: imageFile,
       processedFile: processedFile,
       rawAnalysis: rawAnalysis,
+      isStarfield: analysis.isLikelyStarfield,
     );
   }
 
@@ -217,6 +254,9 @@ class HistoryStore {
       imageFile: entry.imageFile,
       processedFile: entry.processedFile,
       rawAnalysis: entry._rawAnalysis,
+      // 改个名字不能顺手把「这张解没解出来」也一起丢了，卡片描边的颜色
+      // 全靠它。
+      isStarfield: entry.isStarfield,
     );
   }
 
@@ -273,13 +313,14 @@ class HistoryStore {
         ? SolveResult.fromJson(Map<String, Object?>.from(json['solve']! as Map))
         : null;
     final parent = source.parent.path;
+    final starCount = _asInt(summary['star_count']);
     return SavedAnalysis(
       id: id,
       name: json['name'] as String? ?? '未命名',
       savedAt:
           DateTime.tryParse(json['saved_at'] as String? ?? '') ?? DateTime.now(),
       quality: summary['quality'] as String? ?? '未知',
-      starCount: _asInt(summary['star_count']),
+      starCount: starCount,
       constellation:
           summary['constellation'] as String? ?? _firstOrNull(solve?.constellations),
       solve: solve,
@@ -287,6 +328,9 @@ class HistoryStore {
       imageFile: File(p.join(parent, '$id.jpg')),
       processedFile: File(p.join(parent, '${id}_processed.jpg')),
       rawAnalysis: Map<String, Object?>.from(rawAnalysis),
+      // 这个字段是后加的，早先存下的记录里没有。缺省按「星点数为零才算不是
+      // 星空」兜底：老记录里唯一确定的事实就是星点数。
+      isStarfield: summary['starfield'] as bool? ?? starCount > 0,
     );
   }
 }

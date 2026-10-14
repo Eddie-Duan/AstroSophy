@@ -265,6 +265,78 @@ void main() {
     });
   });
 
+  group('记录结论', () {
+    test('解算成功、只检测到星点、压根不像星空，分成三档', () async {
+      final solved = await store.save(
+        name: '解出来了',
+        analysis: analysisOf(),
+        solve: solveOf(),
+        explanation: null,
+      );
+      expect(solved.outcome, RecordOutcome.ok);
+
+      final detected = await store.save(
+        name: '只检测到',
+        analysis: analysisOf(),
+        solve: null,
+        explanation: null,
+      );
+      expect(detected.outcome, RecordOutcome.partial);
+
+      // 星点检测到了，但那张图被判定为非星空（截图、文字表格）——这种情况
+      // 必须落到「未能解析」，否则用户会以为那张图多少算出了点东西。
+      final notStarfield = await store.save(
+        name: '不像星空',
+        analysis: analysisOf(isStarfield: false),
+        solve: null,
+        explanation: null,
+      );
+      expect(notStarfield.outcome, RecordOutcome.failed);
+
+      final nothingFound = await store.save(
+        name: '啥也没有',
+        analysis: analysisOf(starCount: 0),
+        solve: null,
+        explanation: null,
+      );
+      expect(nothingFound.outcome, RecordOutcome.failed);
+
+      // 星点数和解算结果都要跨进程读回来，不是只活在内存里的那个对象。
+      final listed = {for (final entry in await store.list()) entry.name: entry};
+      expect(listed['解出来了']!.outcome, RecordOutcome.ok);
+      expect(listed['不像星空']!.outcome, RecordOutcome.failed);
+    });
+
+    test('老记录没有星空判定字段时按星点数兜底', () async {
+      final saved = await store.save(
+        name: '老记录',
+        analysis: analysisOf(),
+        solve: null,
+        explanation: null,
+      );
+      // 模拟这份档案是加字段之前存下的：把 starfield 从摘要里删掉。
+      final file = File(p.join(store.directory.path, '${saved.id}.json'));
+      final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+      (json['summary']! as Map).remove('starfield');
+      file.writeAsStringSync(jsonEncode(json));
+
+      // 有星点、没解算 → 中间那一档，而不是因为读不到字段就当成失败。
+      expect((await store.list()).single.outcome, RecordOutcome.partial);
+    });
+
+    test('改名不会顺手改掉这条记录的结论', () async {
+      final saved = await store.save(
+        name: '旧名字',
+        analysis: analysisOf(),
+        solve: solveOf(),
+        explanation: null,
+      );
+      final renamed = await store.rename(saved, '新名字');
+      // 卡片描边的颜色全靠 outcome，改名时把它丢了就等于给记录重新判了级。
+      expect(renamed.outcome, RecordOutcome.ok);
+    });
+  });
+
   group('HistoryStore 重命名', () {
     test('改名只动 JSON 里的 name，图片和 id 都不变', () async {
       final saved = await store.save(

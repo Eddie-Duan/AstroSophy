@@ -11,6 +11,7 @@ import 'analysis.dart';
 import 'demo.dart';
 import 'history.dart';
 import 'history_screen.dart';
+import 'markdown.dart';
 import 'model.dart';
 import 'models.dart';
 import 'onboarding.dart';
@@ -102,6 +103,29 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 让画面干净一点。
   bool _showConstellations = true;
 
+  /// 三组亮点在代码里的名字。数组顺序就是列表里的显示顺序。
+  static const _groupIds = <String>['named', 'unnamed', 'streaks'];
+
+  /// 一开始既收起、又隐去圆圈的那两组。
+  ///
+  /// 亮星是「我到底拍到了什么」的答案，一进结果页就该看见。另外两组动辄几十
+  /// 项，一上来全画上、全展开，真正重要的那几颗立刻淹在里面。想看也容易：各
+  /// 自的 + 就在组标题右边。
+  static const _secondaryGroups = <String>{'unnamed', 'streaks'};
+
+  /// 图上不画圆圈的分组。只是不画——测量、星表匹配和报告都不受它影响。
+  final _hiddenGroups = <String>{..._secondaryGroups};
+
+  /// 列表里被折叠起来的分组。默认只展开亮星，与圆圈的默认可见性一致。
+  final _collapsedGroups = <String>{..._secondaryGroups};
+
+  /// 看图区的缩放/平移状态。
+  final _viewer = TransformationController();
+
+  /// 现在是不是放大过。只用来决定要不要显示「回到整幅」那个按钮——为一个
+  /// 按钮的显隐重建整个结果页太贵，所以只在跨过 1 倍时 setState 一次。
+  bool _isZoomed = false;
+
   /// 后台解算 isolate。第一次用到时才起，之后一直留着——索引建一次要一秒
   /// 上下，起一次就够。
   Future<SkyWorker>? _worker;
@@ -109,6 +133,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   @override
   void initState() {
     super.initState();
+    _viewer.addListener(_onViewChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _reloadSettings();
       await _showOnboarding(firstLaunch: true);
@@ -118,8 +143,34 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   @override
   void dispose() {
     _questionController.dispose();
+    _viewer.removeListener(_onViewChanged);
+    _viewer.dispose();
     _worker?.then((worker) => worker.dispose());
     super.dispose();
+  }
+
+  void _onViewChanged() {
+    final zoomed = _viewer.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed != _isZoomed && mounted) setState(() => _isZoomed = zoomed);
+  }
+
+  /// 换图时把看图区和列表的临时状态清干净。
+  ///
+  /// 这些记的都是「这一张图上的」选择：缩放比例、哪几组圈画着、哪几组折起来、
+  /// 选中了第几号。留到下一张图上，用户会以为程序记住了他上回的动作。
+  ///
+  /// 调用点都在 `setState` 回调里，所以这里只管改值、不再自己 setState。
+  void _resetPanelState() {
+    // 先落 `_isZoomed` 再动控制器：控制器会通知 [_onViewChanged]，顺序反了
+    // 就要多弹一次 setState。
+    _isZoomed = false;
+    _viewer.value = Matrix4.identity();
+    _hiddenGroups
+      ..clear()
+      ..addAll(_secondaryGroups);
+    _collapsedGroups
+      ..clear()
+      ..addAll(_secondaryGroups);
   }
 
   /// 把设置里的开关读进内存。设置表单保存之后也要再读一次。
@@ -236,6 +287,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _selectedTarget = null;
       _showProcessed = false;
       _showConstellations = true;
+      _resetPanelState();
     });
   }
   Future<void> _pickDemoImage() async {
@@ -561,6 +613,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _selectedTarget = null;
       _showProcessed = false;
       _showConstellations = true;
+      _resetPanelState();
     });
   }
 
@@ -590,6 +643,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _selectedTarget = null;
         _showProcessed = false;
         _showConstellations = true;
+        _resetPanelState();
       });
     } catch (error) {
       _showError('打开历史记录失败：$error');
@@ -976,47 +1030,68 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         children: [
           const ColoredBox(color: Color(0xFF05080F)),
           LayoutBuilder(
-            builder: (context, constraints) => GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapUp: (details) => _selectNearest(
-                details.localPosition,
-                constraints.biggest,
-                analysis,
-              ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // 历史记录里的图片文件被删掉或损坏时预览是空字节。空字节
-                  // 交给 Image.memory 会抛一串英文异常，而这时坐标和星表都
-                  // 还是好的——用户该看到的是「图找不到了」，不是报错。
-                  if (bytes.isEmpty)
-                    const MissingImage()
-                  else
-                    Image.memory(
-                      bytes,
-                      fit: BoxFit.contain,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, __, ___) => const MissingImage(),
+            builder: (context, constraints) => InteractiveViewer(
+              transformationController: _viewer,
+              // 缩到 1 倍以下没意义——图本来就整个缩在框里，四周是留白；放大
+              // 到 8 倍以上也看不出更多东西，只是把像素拉成色块。
+              minScale: 1,
+              maxScale: 8,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                // 这里的 localPosition 已经是要用的坐标：GestureDetector 在
+                // InteractiveViewer 的子树里，命中测试顺着变换矩阵找下来，
+                // 缩放和平移都替我们反算过了。再手动 `toScene` 一次等于反算
+                // 两遍——图放大两倍，点两倍远的地方才会选中同一颗星，而且不
+                // 会报错，只会「点不准」。
+                onTapUp: (details) => _selectNearest(
+                  details.localPosition,
+                  constraints.biggest,
+                  analysis,
+                ),
+                // 图和圆圈一起变换：放大之后圆圈必须跟着放大，否则它指的位置
+                // 就不再是它画的那个星点。所以两者放在同一个被变换的子树里，
+                // 而不是各自算一遍缩放。
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // 历史记录里的图片文件被删掉或损坏时预览是空字节。空字节
+                    // 交给 Image.memory 会抛一串英文异常，而这时坐标和星表都
+                    // 还是好的——用户该看到的是「图找不到了」，不是报错。
+                    if (bytes.isEmpty)
+                      const MissingImage()
+                    else
+                      Image.memory(
+                        bytes,
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                        errorBuilder: (_, __, ___) => const MissingImage(),
+                      ),
+                    CustomPaint(
+                      painter: DetectedStarsPainter(
+                        analysis: analysis,
+                        // 「亮星」那一组隐去时，连名字一起隐去：只剩名字没有圈，
+                        // 和「这块干净了」是两回事。
+                        namedStars: _circlesVisible('named')
+                            ? solve?.namedStars ?? const []
+                            : const [],
+                        objects: solve?.deepSkyObjects ?? const [],
+                        // 关掉连线时传空表而不是把 painter 换一个：换 painter
+                        // 会让整张图重画，而这里只是少画几条线。
+                        figures: _showConstellations
+                            ? solve?.constellationFigures ?? const []
+                            : const [],
+                        hidden: _hiddenIndices(analysis, solve),
+                        selected: _selectedTarget,
+                      ),
                     ),
-                  CustomPaint(
-                    painter: DetectedStarsPainter(
-                      analysis: analysis,
-                      namedStars: solve?.namedStars ?? const [],
-                      objects: solve?.deepSkyObjects ?? const [],
-                      // 关掉连线时传空表而不是把 painter 换一个：换 painter
-                      // 会让整张图重画，而这里只是少画几条线。
-                      figures: _showConstellations
-                          ? solve?.constellationFigures ?? const []
-                          : const [],
-                      selected: _selectedTarget,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
           Positioned(left: 8, top: 8, child: _imageModeToggle()),
           Positioned(right: 8, top: 8, child: _constellationToggle(solve)),
+          Positioned(right: 8, top: 44, child: _zoomReset()),
           Positioned(
             left: 8,
             right: 8,
@@ -1024,6 +1099,27 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             child: _selectionHint(analysis, solve),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 回到整幅。
+  ///
+  /// 放大容易，缩回去难：指尖要精确地把比例捏回 1.0 并不顺手，而多数人只是
+  /// 想凑近确认一颗星，看完就要退回全图。不给出口的话，用户会一直停在一个
+  /// 自己都收不回来的状态里。
+  Widget _zoomReset() {
+    if (!_isZoomed) return const SizedBox.shrink();
+    return Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: () => _viewer.value = Matrix4.identity(),
+        child: const Padding(
+          padding: EdgeInsets.all(6),
+          child: Icon(Icons.zoom_out_map, size: 17, color: kMint),
+        ),
       ),
     );
   }
@@ -1081,13 +1177,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final index = _selectedTarget;
     final String text;
     if (index == null || index >= targets.length) {
-      text = '点图中的亮点，或点下方列表——两边编号一一对应';
+      text = '点图中的亮点，或点下方列表——两边编号一一对应；双指可放大';
     } else {
       final star = targets[index];
       final position =
           '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)})';
       if (star.isRejected) {
-        text = '第 ${index + 1} 号 · $position · 已剔除，不计入报告';
+        text = '第 ${index + 1} 号 · $position · 已判为非天体，不计入报告';
       } else {
         final name = _nearestNamed(star, solve?.namedStars ?? const []);
         final what =
@@ -1136,33 +1232,59 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() => _selectedTarget = best);
   }
 
+  /// 图内亮点列表。
+  ///
+  /// 分成三组不是为了好看，而是因为这三类东西对用户意味着完全不同的事：
+  /// 有名字的回答「我拍到了什么」，没名字的回答「我这套设备能拍到多暗」，
+  /// 可疑飞线回答「这张要不要重拍」。混在一张表里，用户得逐行读才知道哪行
+  /// 是哪种；分开摆，各看各的。
+  ///
+  /// 分组只是显示上的事：编号仍然是 [SkyAnalysis.numberedTargets] 的下标，
+  /// 图上画的 ⑦ 和列表里的 ⑦ 永远是同一个东西。按组重排编号，这套对应就断了。
+  ///
+  /// − / + 管的是图上画不画圆圈，不是「算不算数」。绝大多数时候用户想做的
+  /// 是「把挡事的那一堆先收起来，好看清剩下几颗」，这跟测量结果没有半点关系。
+  /// 全页唯一会动数据的开关长在可疑飞线上（那对 ✓ / ✗）。
   Widget _highlightsCard(SkyAnalysis analysis, SolveResult? solve) {
     final targets = analysis.numberedTargets;
-    final rejected = targets.where((star) => star.isRejected).length;
+    final groups = _categoriseTargets(targets, solve);
     return Card(
       margin: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 8, 8),
+            padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
             child: Row(
               children: [
                 const Expanded(
                   child: SectionTitle('图内亮点', Icons.blur_on_rounded),
                 ),
-                if (rejected > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: MetricChip('已剔除', '$rejected'),
-                  ),
+                // 三个组的 − / + 各管一组，这两个一次管三组。
+                _batchButton(
+                  Icons.remove_circle_outline,
+                  '把图上所有的圆圈都隐去',
+                  _groupIds.any(_circlesVisible),
+                  () => _setAllCircles(true),
+                ),
+                _batchButton(
+                  Icons.add_circle_outline,
+                  '把图上所有的圆圈都显示回来',
+                  _groupIds.any((id) => !_circlesVisible(id)),
+                  () => _setAllCircles(false),
+                ),
                 const _HelpButton(
                   title: '图内亮点',
                   message:
-                      '编号与上图里的编号一一对应，点一行就能在图上定位到那一颗。'
-                      '拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星——'
-                      '单张照片无法确认是哪一种。剔除只是把它排除在测光和报告之外，'
-                      '并不表示它一定不是天体，随时可以恢复。',
+                      '编号与上图里的编号一一对应，点一行就能在图上定位到那一颗，'
+                      '双指捏合可以把图放大。放大之后圆圈跟着一起放大。'
+                      '每组的 − 把那一组的圆圈从图上隐去，+ 显示回来；'
+                      '卡片标题右边这两个按钮一次管全部三组。'
+                      '隐去只是不画，测量结果、报告和星表匹配一个字都不变。'
+                      '「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——'
+                      '判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。'
+                      '拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星，'
+                      '单张照片无法确认是哪一种。',
                 ),
               ],
             ),
@@ -1176,11 +1298,37 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       style: TextStyle(color: Color(0xFF8192A8)),
                     ),
                   )
-                : ListView.builder(
+                : ListView(
                     padding: const EdgeInsets.only(bottom: 10),
-                    itemCount: targets.length,
-                    itemBuilder: (context, index) =>
-                        _highlightRow(targets, index, solve),
+                    children: [
+                      _targetGroup(
+                        id: 'named',
+                        title: '亮星',
+                        icon: Icons.star_outline_rounded,
+                        emptyHint: '没有和星表对上名字的星。',
+                        targets: targets,
+                        items: groups.named,
+                        solve: solve,
+                      ),
+                      _targetGroup(
+                        id: 'unnamed',
+                        title: '亮点',
+                        icon: Icons.blur_on_rounded,
+                        emptyHint: '没有未命名的点源。',
+                        targets: targets,
+                        items: groups.unnamed,
+                        solve: solve,
+                      ),
+                      _targetGroup(
+                        id: 'streaks',
+                        title: '可疑飞线',
+                        icon: Icons.horizontal_rule_rounded,
+                        emptyHint: '没有发现拉长的亮点。',
+                        targets: targets,
+                        items: groups.streaks,
+                        solve: solve,
+                      ),
+                    ],
                   ),
           ),
         ],
@@ -1188,10 +1336,201 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     );
   }
 
+  /// 分组标题上那个小图标的颜色，和图上画这一类东西时用的颜色一致——
+  /// 列表里的「可疑飞线」和图上那些粉色椭圆是同一件事，颜色对上就省掉一次
+  /// 解释。
+  Color _groupColor(String id) => switch (id) {
+        'named' => const Color(0xFFFFDE77),
+        'streaks' => const Color(0xFFFF7B8C),
+        _ => kMint,
+      };
+
+  /// 把编号列表分成三组，每组记着自己在全局编号里的下标。
+  ///
+  /// 「有没有名字」用的就是图上标注名字的那套判据 [_nearestNamed]，阈值也
+  /// 一样。这里刻意不另立标准：图上标着「参宿四」的那颗星，列表里就必须出现
+  /// 在「亮星」组，否则用户会以为两边说的不是同一颗。
+  _TargetGroups _categoriseTargets(
+    List<DetectedStar> targets,
+    SolveResult? solve,
+  ) {
+    final namedStars = solve?.namedStars ?? const <SkyObject>[];
+    final named = <_NumberedTarget>[];
+    final unnamed = <_NumberedTarget>[];
+    final streaks = <_NumberedTarget>[];
+    for (var index = 0; index < targets.length; index++) {
+      final star = targets[index];
+      final target = _NumberedTarget(index, star);
+      if (star.isElongated) {
+        streaks.add(target);
+      } else if (_nearestNamed(star, namedStars) != null) {
+        named.add(target);
+      } else {
+        unnamed.add(target);
+      }
+    }
+    return _TargetGroups(named, unnamed, streaks);
+  }
+
+  /// 一组亮点：可折叠的表头、整组的 −/+、展开后的行。
+  Widget _targetGroup({
+    required String id,
+    required String title,
+    required IconData icon,
+    required String emptyHint,
+    required List<DetectedStar> targets,
+    required List<_NumberedTarget> items,
+    required SolveResult? solve,
+  }) {
+    final collapsed = _collapsedGroups.contains(id);
+    final visible = _circlesVisible(id);
+    final rejected = items.where((item) => item.star.isRejected).length;
+    // 隐去和显示互斥，所以两个按钮里永远只有一个能按。另一个变灰不是坏了，
+    // 是「现在就在这个状态上」。
+    final canHide = visible && items.isNotEmpty;
+    final canShow = !visible;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: () => setState(() {
+            if (!_collapsedGroups.remove(id)) _collapsedGroups.add(id);
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
+            child: Row(
+              children: [
+                Icon(
+                  collapsed
+                      ? Icons.chevron_right_rounded
+                      : Icons.expand_more_rounded,
+                  size: 20,
+                  color: const Color(0xFF8192A8),
+                ),
+                Icon(icon, size: 15, color: _groupColor(id)),
+                // 这一组现在在图上看不见，得有个记号。否则用户回到图上找
+                // 那几条飞线，会以为是自己看漏了。
+                if (!visible) ...[
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.visibility_off_outlined,
+                    size: 13,
+                    color: Color(0xFF8192A8),
+                  ),
+                ],
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '$title  ${items.length}',
+                    // 表头上挤着图标和四个按钮，窄一点的手机上留给标题的
+                    // 宽度很有限。截断比折成两行好：折行会让三个组标题高低
+                    // 不一，看起来像是出了错。
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (rejected > 0)
+                  Text(
+                    '已判非天体 $rejected',
+                    style: const TextStyle(
+                      color: Color(0xFF8192A8),
+                      fontSize: 11,
+                    ),
+                  ),
+                _batchButton(
+                  Icons.remove_circle_outline,
+                  '把这组的圆圈从图上隐去',
+                  canHide,
+                  () => _setGroupCircles(id, false),
+                ),
+                _batchButton(
+                  Icons.add_circle_outline,
+                  '把这组的圆圈显示回来',
+                  canShow,
+                  () => _setGroupCircles(id, true),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (!collapsed)
+          if (items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(38, 2, 12, 10),
+              child: Text(
+                emptyHint,
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+              ),
+            )
+          else
+            for (final item in items)
+              _highlightRow(targets, item.number, solve, id),
+        const Divider(height: 1),
+      ],
+    );
+  }
+
+  /// 图上不画圆圈的分组。
+  bool _circlesVisible(String id) => !_hiddenGroups.contains(id);
+
+  /// 图上不该画的编号。
+  ///
+  /// 分组是显示上的事，而 painter 只认编号，所以这里把「哪几组隐着」翻译成
+  /// 「哪几个下标不画」。翻译走的是同一套 [_categoriseTargets]——要是另算一
+  /// 遍，就可能隐去一组、图上少画的却是另一组。
+  Set<int> _hiddenIndices(SkyAnalysis analysis, SolveResult? solve) {
+    if (_hiddenGroups.isEmpty) return const <int>{};
+    final groups = _categoriseTargets(analysis.numberedTargets, solve);
+    return {
+      for (final id in _hiddenGroups)
+        for (final item in groups.of(id)) item.number,
+    };
+  }
+
+  void _setGroupCircles(String id, bool visible) => setState(() {
+        if (visible) {
+          _hiddenGroups.remove(id);
+        } else {
+          _hiddenGroups.add(id);
+        }
+      });
+
+  /// 一次管三组。
+  void _setAllCircles(bool hidden) => setState(() {
+        _hiddenGroups
+          ..clear()
+          ..addAll(hidden ? _groupIds : const <String>[]);
+      });
+
+  Widget _batchButton(
+    IconData icon,
+    String tooltip,
+    bool enabled,
+    VoidCallback onTap,
+  ) =>
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        // 图标小、又只出现一次，没有 tooltip 的话没人知道那个圆圈里的横杠
+        // 是「把这一组圈隐去」，也没人分得清它和旁边的加号谁管什么。
+        tooltip: tooltip,
+        onPressed: enabled ? onTap : null,
+        icon: Icon(icon, size: 19),
+        // 两个图标长得几乎一样，只靠默认那点灰度差别看不出哪个是按得动的：
+        // 亮着的那个才是当前能按的。
+        color: const Color(0xFFC3D2E4),
+        disabledColor: const Color(0xFF44536A),
+      );
+
   Widget _highlightRow(
     List<DetectedStar> targets,
     int index,
     SolveResult? solve,
+    String group,
   ) {
     final star = targets[index];
     final name = _nearestNamed(star, solve?.namedStars ?? const []);
@@ -1208,14 +1547,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       dense: true,
       selected: index == _selectedTarget,
       selectedTileColor: kMint.withValues(alpha: 0.10),
-      onTap: () => setState(() => _selectedTarget = index),
+      onTap: () => setState(() {
+        _selectedTarget = index;
+        // 点一行就是要看那一颗。它所在的组要是隐着，顺手把圆圈显示回来——
+        // 否则「点一行就能在图上定位到那一颗」这个承诺在隐去之后就是空的。
+        _hiddenGroups.remove(group);
+      }),
       leading: CircleAvatar(
         radius: 15,
         backgroundColor: star.isRejected
             ? const Color(0x33FF7B8C)
             : kMint.withValues(alpha: 0.16),
         child: Text(
-          star.isRejected ? '✕' : '${index + 1}',
+          '${index + 1}',
           style: TextStyle(
             color: star.isRejected ? const Color(0xFFFF7B8C) : kMint,
             fontSize: 12,
@@ -1225,7 +1569,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       title: Text(
         name?.name ?? (star.isElongated ? '拉长的亮点' : '图内亮点'),
         style: TextStyle(
-          decoration: star.isRejected ? TextDecoration.lineThrough : null,
           color: star.isRejected ? const Color(0xFF8192A8) : null,
         ),
       ),
@@ -1239,22 +1582,48 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(magnitude, style: const TextStyle(fontSize: 12)),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: star.isRejected ? '恢复这一项' : '剔除这一项',
-            onPressed: () => _toggleRejection(star),
-            icon: Icon(
-              star.isRejected
-                  ? Icons.add_circle_outline
-                  : Icons.do_not_disturb_on_outlined,
-              size: 19,
-              color: star.isRejected ? kMint : const Color(0xFF8192A8),
+          // 对错号只长在可疑飞线上。亮星和亮点是算出来的结论，没有「算不算
+          // 数」这回事——给它们一对对错号，等于邀请用户去改一份他从没打算改
+          // 的数据，而这正是这一页最不该发生的事。
+          if (star.isElongated) ...[
+            _judgeButton(
+              Icons.check_circle_outline,
+              '判为天体，计入报告',
+              !star.isRejected,
+              kMint,
+              () => _setRejection(star, false),
             ),
-          ),
+            _judgeButton(
+              Icons.cancel_outlined,
+              '判为非天体，不计入报告',
+              star.isRejected,
+              const Color(0xFFFF7B8C),
+              () => _setRejection(star, true),
+            ),
+          ],
         ],
       ),
     );
   }
+
+  /// 可疑飞线那一对「对 / 错」。
+  ///
+  /// 两个都摆出来、点亮其中一个，比一个按来按去的开关好读：用户要看的是
+  /// 「我判过没有、判的是哪一边」，而不是「按下去会变成什么」。
+  Widget _judgeButton(
+    IconData icon,
+    String tooltip,
+    bool active,
+    Color activeColor,
+    VoidCallback onTap,
+  ) =>
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: tooltip,
+        onPressed: onTap,
+        icon: Icon(icon, size: 19),
+        color: active ? activeColor : const Color(0xFF5A6B84),
+      );
 
   String _highlightSubtitle(DetectedStar star, SkyObject? name) {
     final position =
@@ -1269,16 +1638,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         '${star.confidenceLabel} ${(star.confidence * 100).toStringAsFixed(0)}%';
   }
 
-  /// 剔除 / 恢复一项。
+  /// 给一条可疑飞线判「是 / 不是天体」。
   ///
-  /// 剔除不是删除：`withRejection` 只是把这一项标成「不算数」，它仍在图上和
-  /// 列表里（划掉显示），用户随时能反悔。测光、报告和交给模型的摘要只认没被
-  /// 标的那批——所以剔除一改，重新生成的解读也跟着变。
-  void _toggleRejection(DetectedStar target) {
+  /// 判为不是的，从测光、星表匹配、报告和交给模型的摘要里排除，但仍在图上和
+  /// 列表里（颜色变淡），随时能改回来。这是这一页唯一会动数据的开关，所以它
+  /// 只长在可疑飞线上。
+  void _setRejection(DetectedStar target, bool rejected) {
     final analysis = _analysis;
-    if (analysis == null) return;
+    if (analysis == null || target.isRejected == rejected) return;
     setState(() {
-      _analysis = analysis.withRejection(target, !target.isRejected);
+      _analysis = analysis.withRejection(target, rejected);
     });
   }
 
@@ -1768,12 +2137,42 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               if (_explanation != null) ...[
                 const SizedBox(height: 12),
-                SelectableText(_explanation!),
+                // 模型返回的是 Markdown，交给渲染器排版。之前直接用
+                // SelectableText 显示，屏幕上就是一串裸露的 `##` 和 `**`。
+                MarkdownText(_explanation!),
               ],
             ],
           ),
         ),
       );
+}
+
+/// 一个检出星点，连同它在图上那个编号。
+///
+/// 编号是 `numberedTargets` 的下标，不是组内序号——分组只改变显示顺序，不能
+/// 改变编号，否则图和列表就说不到一块去了。
+class _NumberedTarget {
+  const _NumberedTarget(this.number, this.star);
+
+  final int number;
+  final DetectedStar star;
+}
+
+/// 亮点列表的三个分组。
+class _TargetGroups {
+  const _TargetGroups(this.named, this.unnamed, this.streaks);
+
+  final List<_NumberedTarget> named;
+  final List<_NumberedTarget> unnamed;
+  final List<_NumberedTarget> streaks;
+
+  /// 按组名取那一组。组名只在 [AnalysisScreen] 的 `_groupIds` 里，
+  /// painter 那边只认编号，靠这里来回翻译。
+  List<_NumberedTarget> of(String id) => switch (id) {
+        'named' => named,
+        'unnamed' => unnamed,
+        _ => streaks,
+      };
 }
 
 class _HelpButton extends StatelessWidget {
