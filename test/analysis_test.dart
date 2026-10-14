@@ -32,6 +32,27 @@ void main() {
       expect(result.height, 120);
     });
 
+    test('flags elongated sources instead of treating them as stars', () async {
+      final image = imglib.Image(width: 120, height: 90);
+      imglib.fill(image, color: imglib.ColorRgb8(9, 12, 18));
+      for (var y = 44; y <= 45; y++) {
+        for (var x = 46; x <= 60; x++) {
+          image.setPixelRgb(x, y, 245, 238, 226);
+        }
+      }
+
+      final result = await SkyAnalysis.analyze(
+        Uint8List.fromList(imglib.encodePng(image)),
+      );
+
+      expect(result.streakCandidates, isNotEmpty);
+      expect(result.compactSources, isEmpty);
+      expect(
+        result.diagnostics.any((message) => message.contains('不能据此确认卫星或飞机')),
+        isTrue,
+      );
+    });
+
     test('reports a uniform dark frame as weak without stars', () async {
       final image = imglib.Image(width: 64, height: 48);
       imglib.fill(image, color: imglib.ColorRgb8(0, 0, 0));

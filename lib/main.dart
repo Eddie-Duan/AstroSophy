@@ -206,7 +206,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   Map<String, Object?> _report(SkyAnalysis analysis, SolveResult? solve) => {
         'quality': analysis.quality,
-        'detected_stars': analysis.stars.length,
+        'detected_stars': analysis.compactSources.length,
+        'detected_sources': analysis.stars.length,
+        'compact_sources': analysis.compactSources.length,
+        'elongated_candidates': analysis.streakCandidates.length,
         'noise_fraction': analysis.noise,
         'background_visual_index': analysis.backgroundIndex,
         'diagnostics': analysis.diagnostics,
@@ -524,7 +527,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 runSpacing: 8,
                 children: [
                   _MetricChip('质量', analysis.quality),
-                  _MetricChip('星点', '${analysis.stars.length}'),
+                  _MetricChip('紧凑点源', '${analysis.compactSources.length}'),
+                  if (analysis.streakCandidates.isNotEmpty)
+                    _MetricChip('线状候选', '${analysis.streakCandidates.length}'),
                   _MetricChip('背景噪声', '${(analysis.noise * 100).toStringAsFixed(1)}%'),
                   _MetricChip('视觉背景', '${analysis.backgroundIndex.toStringAsFixed(0)} / 100'),
                 ],
@@ -546,7 +551,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       );
 
   Widget _starsCard(SkyAnalysis analysis, SolveResult? solve) {
-    final stars = [...analysis.stars]
+    final stars = [...analysis.compactSources]
       ..sort((first, second) => first.instrumentalMagnitude.compareTo(second.instrumentalMagnitude));
     return Card(
       child: Padding(
@@ -560,10 +565,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               '未完成天区解算时只显示相对亮度，不能据此确认星名。',
               style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
             ),
-            if (stars.isEmpty)
+            if (stars.isEmpty && analysis.streakCandidates.isEmpty)
               const Padding(
                 padding: EdgeInsets.only(top: 12),
                 child: Text('没有检出可信的紧凑亮点。'),
+              )
+            else if (stars.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: Text('没有可用于恒星测光的紧凑点源；下方仅列出形态异常候选。'),
               )
             else
               ...stars.take(12).map((star) {
@@ -577,11 +587,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     backgroundColor: _mint.withOpacity(0.16),
                     child: Text('${stars.indexOf(star) + 1}', style: const TextStyle(color: _mint)),
                   ),
-                  title: Text(name?.name ?? '图内亮点'),
+                  title: Text(
+                    name?.name ?? '图内亮点',
+                  ),
                   subtitle: Text(
                     '${name?.category.isNotEmpty == true ? '${name!.category} · ' : ''}'
                     '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)}) · '
-                    '置信度 ${(star.confidence * 100).toStringAsFixed(0)}%',
+                    '${star.confidenceLabel} ${(star.confidence * 100).toStringAsFixed(0)}%',
                   ),
                   trailing: Text(
                     solve?.magnitudeZeroPoint != null && star.confidence >= 0.25
@@ -593,6 +605,27 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 );
               }),
+            if (analysis.streakCandidates.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.only(top: 10, bottom: 4),
+                child: Text(
+                  '线状亮点候选（不参与恒星匹配/测光）',
+                  style: TextStyle(color: Color(0xFFFFDE77), fontWeight: FontWeight.w600),
+                ),
+              ),
+              ...analysis.streakCandidates.take(6).map(
+                    (candidate) => ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('拉长的亮点'),
+                      subtitle: Text(
+                        '可能是拖线、失焦或处理伪影；单张不能确认卫星/飞机。'
+                        ' 形态比 ${candidate.axisRatio.toStringAsFixed(1)}:1',
+                      ),
+                      trailing: Text(candidate.confidenceLabel),
+                    ),
+                  ),
+            ],
             if (solve?.magnitudeScatter != null)
               Text(
                 'Gaia G 近似标定的稳健散布约 ±${solve!.magnitudeScatter!.toStringAsFixed(2)} 等；'
@@ -606,6 +639,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   }
 
   SkyObject? _nearestNamed(DetectedStar star, List<SkyObject> objects) {
+    if (star.isElongated) return null;
     SkyObject? nearest;
     var distance = 10.0;
     for (final object in objects) {
@@ -989,6 +1023,12 @@ class SkyAnalysis {
   final List<String> diagnostics;
   final Uint8List preview;
 
+  List<DetectedStar> get streakCandidates =>
+      stars.where((star) => star.isElongated).toList(growable: false);
+
+  List<DetectedStar> get compactSources =>
+      stars.where((star) => !star.isElongated).toList(growable: false);
+
   static Future<SkyAnalysis> analyze(Uint8List bytes) async {
     final decoded = _decodeImageOrRawPreview(bytes);
     if (decoded == null) {
@@ -1036,19 +1076,33 @@ class SkyAnalysis {
     final primaryThreshold =
         math.max(background + 5 * noise, background + 4 / 255).toDouble();
     var stars = _detectStars(gray, width, height, primaryThreshold, noise);
-    final usedFallback = stars.length < 8;
+    var compactCount = stars.where((star) => !star.isElongated).length;
+    final usedFallback = compactCount < 8;
     if (usedFallback) {
       final retryThreshold =
           math.max(background + 3.5 * noise, background + 3 / 255).toDouble();
       final retryStars = _detectStars(gray, width, height, retryThreshold, noise);
-      if (retryStars.length > stars.length) stars = retryStars;
+      final retryCompactCount =
+          retryStars.where((star) => !star.isElongated).length;
+      if (retryCompactCount > compactCount) {
+        stars = retryStars;
+        compactCount = retryCompactCount;
+      }
     }
     final saturatedFraction = saturated / gray.length;
     final diagnostics = <String>[];
     if (usedFallback) {
       diagnostics.add('标准星点阈值检出较少，已自动降低阈值重试；弱点源中可能混入噪声。');
     }
-    if (stars.length < 8) {
+    final streakCount = stars.where((star) => star.isElongated).length;
+    final compactSources = stars.where((star) => !star.isElongated).toList();
+    if (streakCount > 0) {
+      diagnostics.add(
+        '发现 $streakCount 个拉长的亮点候选，可能是拖线、失焦或图像处理伪影；'
+        '单张照片不能据此确认卫星或飞机，已从恒星匹配和标定测光中排除。',
+      );
+    }
+    if (compactCount < 8) {
       diagnostics.add('检出的紧凑亮点较少；可能曝光不足、虚焦或云雾遮挡。');
     }
     if (noise > 0.06) diagnostics.add('背景噪声偏高，弱星检测和相对亮度测量可靠性下降。');
@@ -1056,13 +1110,16 @@ class SkyAnalysis {
     if (background > 0.38) {
       diagnostics.add('图像背景偏亮；受曝光影响，不能直接换算成 SQM 或 Bortle 等级。');
     }
-    if (stars.isNotEmpty &&
-        stars.take(30).map((star) => star.confidence).reduce((a, b) => a + b) /
-                math.min(30, stars.length) <
+    if (compactSources.isNotEmpty &&
+        compactSources
+                    .take(30)
+                    .map((star) => star.confidence)
+                    .reduce((a, b) => a + b) /
+                math.min(30, compactSources.length) <
             0.38) {
       diagnostics.add('点源形态不够集中，可能存在抖动、虚焦或强降噪；测光置信度偏低。');
     }
-    if (stars.length < 8) {
+    if (compactCount < 8) {
       diagnostics.add('拍摄建议：固定设备并重新手动对焦；避开云雾和灯光直射后再试。');
     }
     if (noise > 0.06) {
@@ -1074,9 +1131,9 @@ class SkyAnalysis {
     if (background > 0.38) {
       diagnostics.add('拍摄建议：若现场天空也明显发亮，可换到更暗地点并缩短单张曝光。');
     }
-    final quality = stars.length >= 25 && noise < 0.04 && saturatedFraction < 0.01
+    final quality = compactCount >= 25 && noise < 0.04 && saturatedFraction < 0.01
         ? '较好'
-        : stars.length >= 8
+        : compactCount >= 8
             ? '一般'
             : '较弱';
     if (diagnostics.isEmpty) {
@@ -1164,26 +1221,44 @@ DetectedStar? _measure(List<double> gray, int width, int height, int x, int y, d
   if (flux <= 0) return null;
   final centerX = weightedX / flux;
   final centerY = weightedY / flux;
-  var spread = 0.0;
+  var varianceX = 0.0;
+  var varianceY = 0.0;
+  var covariance = 0.0;
   for (var py = y0; py < y1; py++) {
     for (var px = x0; px < x1; px++) {
       final signal =
           math.max(0, gray[py * width + px] - localBackground).toDouble();
-      spread +=
-          signal * (math.pow(px - centerX, 2) + math.pow(py - centerY, 2));
+      final dx = px - centerX;
+      final dy = py - centerY;
+      varianceX += signal * dx * dx;
+      varianceY += signal * dy * dy;
+      covariance += signal * dx * dy;
     }
   }
-  spread /= flux;
+  varianceX /= flux;
+  varianceY /= flux;
+  covariance /= flux;
+  final halfTrace = (varianceX + varianceY) / 2;
+  final halfDifference = (varianceX - varianceY) / 2;
+  final eigenvalueOffset =
+      math.sqrt(halfDifference * halfDifference + covariance * covariance);
+  final majorVariance = math.max(0, halfTrace + eigenvalueOffset);
+  final minorVariance = math.max(0.05, halfTrace - eigenvalueOffset);
+  final axisRatio = math.sqrt(majorVariance / minorVariance);
+  final spread = varianceX + varianceY;
   final sharpness = 1 / (1 + math.max(0, spread - 1) / 8);
   final snr = flux / math.max(noise * math.sqrt(patch.length), 1e-6);
-  final confidence =
-      ((snr / (snr + 8)) * sharpness).clamp(0.0, 1.0).toDouble();
+  final shapePenalty = math.sqrt(math.min(1, 2 / axisRatio));
+  final confidence = ((snr / (snr + 8)) * sharpness * shapePenalty)
+      .clamp(0.0, 1.0)
+      .toDouble();
   return DetectedStar(
     centerX,
     centerY,
     flux,
     -2.5 * math.log(flux) / math.ln10,
     confidence,
+    axisRatio,
   );
 }
 
@@ -1232,13 +1307,29 @@ Future<SkyAnalysis> _analyzeImageBytes(Uint8List bytes) =>
     SkyAnalysis.analyze(bytes);
 
 class DetectedStar {
-  const DetectedStar(this.x, this.y, this.flux, this.instrumentalMagnitude, this.confidence);
+  const DetectedStar(
+    this.x,
+    this.y,
+    this.flux,
+    this.instrumentalMagnitude,
+    this.confidence,
+    this.axisRatio,
+  );
 
   final double x;
   final double y;
   final double flux;
   final double instrumentalMagnitude;
   final double confidence;
+  final double axisRatio;
+
+  bool get isElongated => axisRatio >= 2.2;
+
+  String get confidenceLabel => confidence >= 0.7
+      ? '较可信'
+      : confidence >= 0.35
+          ? '供参考'
+          : '低可信';
 }
 
 class SkyObject {
@@ -1851,17 +1942,19 @@ class AstrometryService {
 
   static ({DetectedStar star, double distance})? _nearest(
       List<DetectedStar> stars, double x, double y) {
-    if (stars.isEmpty) return null;
-    var best = stars.first;
+    final candidates = stars
+        .where((star) => !star.isElongated && star.confidence >= 0.15);
+    if (candidates.isEmpty) return null;
+    DetectedStar? best;
     var distance = double.infinity;
-    for (final star in stars) {
+    for (final star in candidates) {
       final current = math.sqrt(math.pow(star.x - x, 2) + math.pow(star.y - y, 2));
       if (current < distance) {
         distance = current;
         best = star;
       }
     }
-    return (star: best, distance: distance);
+    return best == null ? null : (star: best, distance: distance);
   }
 
   static double _median(List<double> sorted) {
