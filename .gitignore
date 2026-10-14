@@ -54,3 +54,8 @@ coverage/
 *.freezed.dart
 *.g.dart
 .env.recraft
+# 星表构建脚本下载的原始星表，体积大且可重新获取
+tools/.cache/
+
+# Flutter 工具链自动生成的 Android 源文件
+android/app/src/main/java/io/flutter/plugins/

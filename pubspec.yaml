@@ -27,3 +27,8 @@ flutter:
     - assets/brand/astrosophy_app_icon.svg
     - assets/brand/astrosophy_app_icon.png
     - assets/brand/astrosophy_app_icon_recraft.svg
+    # 内置亮星目录，由 tools/build_catalog.py 离线生成，供本机解算使用。
+    - assets/catalog/stars.json
+    - assets/catalog/names.json
+    - assets/catalog/constellations.json
+    - assets/catalog/constellation_grid.bin
