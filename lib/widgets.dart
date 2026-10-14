@@ -155,6 +155,42 @@ class StarfieldPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+/// 图片读不到时的占位。
+///
+/// 历史记录里的图有可能被系统清理或被用户手动删掉，而同一份档案里的坐标、
+/// 星表和测光结果都还在——这时候要让用户看见「图没了，别的还在」，而不是
+/// 一串英文异常。
+class MissingImage extends StatelessWidget {
+  const MissingImage({super.key, this.compact = false});
+
+  /// 紧凑模式只画一个图标，给缩略图那种小格子用。
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+        color: const Color(0xFF101A2A),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.broken_image_outlined,
+                size: compact ? 26 : 38,
+                color: const Color(0xFF46556B),
+              ),
+              if (!compact) ...[
+                const SizedBox(height: 10),
+                const Text(
+                  '这张图已经不在手机上了',
+                  style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+}
+
 class DetectedStarsPainter extends CustomPainter {
   const DetectedStarsPainter({
     required this.analysis,

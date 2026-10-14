@@ -974,14 +974,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.memory(
-                    bytes,
-                    fit: BoxFit.contain,
-                    gaplessPlayback: true,
-                    errorBuilder: (_, error, __) => Center(
-                      child: Text('$error', textAlign: TextAlign.center),
+                  // 历史记录里的图片文件被删掉或损坏时预览是空字节。空字节
+                  // 交给 Image.memory 会抛一串英文异常，而这时坐标和星表都
+                  // 还是好的——用户该看到的是「图找不到了」，不是报错。
+                  if (bytes.isEmpty)
+                    const MissingImage()
+                  else
+                    Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) => const MissingImage(),
                     ),
-                  ),
                   CustomPaint(
                     painter: DetectedStarsPainter(
                       analysis: analysis,

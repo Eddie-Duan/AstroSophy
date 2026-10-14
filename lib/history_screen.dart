@@ -165,13 +165,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     Image.file(
                       entry.imageFile,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const ColoredBox(
-                        color: Color(0xFF18263A),
-                        child: Center(
-                          child: Icon(Icons.broken_image_outlined,
-                              color: Color(0xFF46556B)),
-                        ),
-                      ),
+                      errorBuilder: (_, __, ___) => const MissingImage(compact: true),
                     ),
                     Positioned(
                       right: 6,
