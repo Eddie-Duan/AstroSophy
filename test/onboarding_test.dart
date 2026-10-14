@@ -38,6 +38,7 @@ void main() {
   testWidgets('第一页讲清楚这是什么，按钮是「下一步」', (tester) async {
     await pumpOnboarding(tester, onDone: () {});
     expect(find.text('AstroSophy'), findsOneWidget);
+    expect(find.text('嗨，我是 Nox，你的观星搭子。'), findsOneWidget);
     expect(find.text('下一步'), findsOneWidget);
     expect(find.text('开始探索'), findsNothing);
   });

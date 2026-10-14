@@ -6,7 +6,7 @@
 - 图片分析先缩放到最大边长 1200 px，再计算稳健背景、背景噪声、饱和比例和紧凑亮点；星点检测放在独立 isolate，避免阻塞 UI。
 - 点源形态使用局部亮度加权二阶矩估计长短轴比；明显拉长的候选不参与恒星坐标匹配和 Gaia 标定测光，并提示其可能为拖线、失焦或处理伪影。单张图不能据此确认卫星或飞机。
 - 首次启动显示整屏四页新手引导（导入星图 / 本机解析 / 看懂结果 / 保存回看）；各卡片的“？”可随时查看该指标的解释，顶部问号可以重播引导。
-- 启动器图标与引导页吉祥物由 Recraft 在开发期生成矢量稿（前者渲染为 Android 多密度及自适应图标资源，后者栅格化为 PNG 后随应用分发）；Recraft 凭据不进入应用或仓库，见 [`tools/make_mascot.py`](../tools/make_mascot.py)。
+- 启动器图标与引导页吉祥物 Nox 由 Recraft 在开发期生成矢量稿（前者渲染为 Android 多密度及自适应图标资源，后者栅格化为 PNG 后随应用分发）；Recraft 凭据不进入应用或仓库，见 [`tools/make_mascot.py`](../tools/make_mascot.py)。
 - 图片选择支持常见图片和相机 RAW 文件。RAW 解码尝试在容器中查找最大的嵌入式 JPEG 预览；不同相机格式和厂商编码差异很大，因此不是完整 LibRaw 支持，也不是对传感器原始线性数据的分析。
 
 ## 本机天区解算
@@ -98,4 +98,4 @@
 
 星座连线不是抄自任何星图的现成画法，而是对每个星座最亮的成员跑最小生成树（按角距加权）自动生成的，因此不引入第三方星图数据的授权问题。
 
-应用启动图标与引导页吉祥物插画由 [Recraft](https://www.recraft.ai/) 在开发期生成（矢量稿），凭据不进入应用或仓库。运行时用到的第三方服务是 [Astrometry.net](https://astrometry.net/)、[ESA Gaia 归档](https://gea.esac.esa.int/archive/) 与 [SIMBAD](https://simbad.cds.unistra.fr/)，均为可选功能，说明见上文“隐私与联网”。
+应用启动图标与引导页吉祥物 Nox 的插画由 [Recraft](https://www.recraft.ai/) 在开发期生成（矢量稿），凭据不进入应用或仓库。运行时用到的第三方服务是 [Astrometry.net](https://astrometry.net/)、[ESA Gaia 归档](https://gea.esac.esa.int/archive/) 与 [SIMBAD](https://simbad.cds.unistra.fr/)，均为可选功能，说明见上文“隐私与联网”。

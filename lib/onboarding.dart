@@ -110,7 +110,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   // -- 四页内容 --
 
   Widget _welcomeSlide() => _pageShell([
-        _mascotDialogue('嗨，我是你的观星搭子。'),
+        _mascotDialogue('嗨，我是 Nox，你的观星搭子。'),
         const SizedBox(height: 16),
         const Text(
           'AstroSophy',
@@ -246,7 +246,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
       );
 
   Widget _mascotDialogue(String dialogue) => Semantics(
-        label: '助手说：$dialogue',
+        label: 'Nox 说：$dialogue',
         child: Row(
           children: [
             SizedBox(
