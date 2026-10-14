@@ -33,3 +33,24 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+#docs
+initial.txt
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/secrets.toml
+
+# Flutter / Dart
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+coverage/
+*.freezed.dart
+*.g.dart
+.env.recraft
