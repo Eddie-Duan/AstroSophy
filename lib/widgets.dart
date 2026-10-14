@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'analysis.dart';
 import 'models.dart';
+import 'report.dart';
 import 'theme.dart';
 
 /// 各页面共用的展示组件与自绘图表。
@@ -302,4 +303,167 @@ class _StarRushPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _StarRushPainter oldDelegate) => false;
+}
+
+/// 星等分布直方图。
+///
+/// 横轴是星等（往右越暗），纵轴是星数。爱好者看这张图是想知道一件事：
+/// 「我这套装备在当天的天空下能拍到多暗」。所以横轴按星等数值从小到大，
+/// 右边那几根柱子才是重点——它们代表最暗的那批星，也就是这套设备这次
+/// 拍摄的极限。
+class MagnitudeHistogram extends StatelessWidget {
+  const MagnitudeHistogram({
+    super.key,
+    required this.bins,
+    this.height = 150,
+    this.calibrated = false,
+  });
+
+  final List<MagnitudeBin> bins;
+  final double height;
+
+  /// 是否已经用星等零点标定过。没标定时横轴只是相对亮度，
+  /// 图注必须说清楚，否则用户会把它当成真实星等。
+  final bool calibrated;
+
+  @override
+  Widget build(BuildContext context) {
+    if (bins.isEmpty) {
+      return const Text(
+        '没有可用于星等统计的点源。',
+        style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: height,
+          width: double.infinity,
+          child: CustomPaint(painter: _MagnitudeHistogramPainter(bins)),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          calibrated
+              ? '横轴：标定星等（数值越大越暗）　纵轴：星数'
+              : '横轴：图内相对星等（未标定，只能比较亮度，不是真实星等）　纵轴：星数',
+          style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+        ),
+      ],
+    );
+  }
+}
+
+class _MagnitudeHistogramPainter extends CustomPainter {
+  const _MagnitudeHistogramPainter(this.bins);
+
+  final List<MagnitudeBin> bins;
+
+  /// 留给柱顶数字和横轴刻度的高度。
+  static const _topPad = 16.0;
+  static const _bottomPad = 20.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (bins.isEmpty || size.width <= 8) return;
+    final plotHeight = size.height - _topPad - _bottomPad;
+    if (plotHeight <= 4) return;
+
+    var peak = 1;
+    for (final bin in bins) {
+      if (bin.count > peak) peak = bin.count;
+    }
+
+    final slot = size.width / bins.length;
+    // 柱子之间留缝，缝宽取格宽的三成、上限 6 像素：箱子少的时候缝不至于
+    // 把柱子挤没，箱子多的时候柱子也不会粘成一片。
+    final gap = math.min(slot * 0.3, 6.0);
+    final barWidth = math.max(slot - gap, 1.0);
+    final baseline = _topPad + plotHeight;
+
+    final barPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.bottomCenter,
+        end: Alignment.topCenter,
+        colors: [Color(0xFF2E8C7A), kMint],
+      ).createShader(Rect.fromLTWH(0, _topPad, size.width, plotHeight));
+    final zeroPaint = Paint()..color = const Color(0xFF2A3B52);
+    final axisPaint = Paint()
+      ..color = const Color(0xFF33455F)
+      ..strokeWidth = 1;
+
+    canvas.drawLine(
+      Offset(0, baseline + 0.5),
+      Offset(size.width, baseline + 0.5),
+      axisPaint,
+    );
+
+    for (var index = 0; index < bins.length; index++) {
+      final bin = bins[index];
+      final left = index * slot + gap / 2;
+      final barHeight = bin.count == 0 ? 2.0 : plotHeight * bin.count / peak;
+      final rect = Rect.fromLTWH(
+        left,
+        baseline - barHeight,
+        barWidth,
+        barHeight,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndCorners(
+          rect,
+          topLeft: const Radius.circular(3),
+          topRight: const Radius.circular(3),
+        ),
+        bin.count == 0 ? zeroPaint : barPaint,
+      );
+      _text(
+        canvas,
+        '${bin.count}',
+        Offset(left + barWidth / 2, baseline - barHeight - 13),
+        const TextStyle(color: Color(0xFFA6B5C8), fontSize: 10),
+      );
+    }
+
+    // 横轴只标首尾两个星等值，中间不标——箱子多的时候刻度会挤成一团黑。
+    _text(
+      canvas,
+      bins.first.lower.toStringAsFixed(1),
+      Offset(4, baseline + 4),
+      const TextStyle(color: Color(0xFF8192A8), fontSize: 10),
+      alignLeft: true,
+    );
+    _text(
+      canvas,
+      bins.last.upper.toStringAsFixed(1),
+      Offset(size.width - 4, baseline + 4),
+      const TextStyle(color: Color(0xFF8192A8), fontSize: 10),
+      alignRight: true,
+    );
+  }
+
+  /// 以 [center] 为水平中心画一行小字。图表里的数字都要居中在柱子上，
+  /// 用 TextPainter 手动定位比套一层 Widget 便宜。
+  void _text(
+    Canvas canvas,
+    String value,
+    Offset center,
+    TextStyle style, {
+    bool alignLeft = false,
+    bool alignRight = false,
+  }) {
+    final painter = TextPainter(
+      text: TextSpan(text: value, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final dx = alignLeft
+        ? center.dx
+        : alignRight
+            ? center.dx - painter.width
+            : center.dx - painter.width / 2;
+    painter.paint(canvas, Offset(dx, center.dy));
+  }
+
+  @override
+  bool shouldRepaint(covariant _MagnitudeHistogramPainter oldDelegate) =>
+      !identical(oldDelegate.bins, bins);
 }

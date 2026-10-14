@@ -454,14 +454,24 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ],
                 if (analysis != null) ...[
                   const SizedBox(height: 18),
+                  // 顺序按「用户此刻想知道什么」排：这张拍到了什么 →
+                  // 拍得怎么样 → 具体是哪些星 → 装备能拍到多暗 → 逐颗细看。
+                  _observationCard(analysis, solve),
+                  const SizedBox(height: 12),
                   _diagnosticsCard(analysis),
                   const SizedBox(height: 12),
-                  _starsCard(analysis, solve),
-                  const SizedBox(height: 12),
                   _solveCard(solve),
-                  if (solve != null) ...[
+                  if (solve != null && solve.namedStars.isNotEmpty) ...[
                     const SizedBox(height: 12),
-                    _objectCard(solve),
+                    _starTableCard(analysis, solve),
+                  ],
+                  const SizedBox(height: 12),
+                  _magnitudeCard(analysis, solve),
+                  const SizedBox(height: 12),
+                  _starsCard(analysis, solve),
+                  if (solve != null && solve.deepSkyObjects.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _deepSkyCard(solve),
                   ],
                   const SizedBox(height: 12),
                   _agentCard(),
@@ -864,15 +874,175 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
       );
 
-  Widget _objectCard(SolveResult solve) {
+  /// 观星记录：一张照片的「成交报告」。
+  ///
+  /// 用户拍完一张星空，最想知道的是「我拍到了什么、拍得怎么样、下次怎么
+  /// 更好」。这三件事分别对应这里的一段话、一排数字、一份建议清单。下面
+  /// 那些卡都是过程性的细节，只有这张是结论。
+  Widget _observationCard(SkyAnalysis analysis, SolveResult? solve) {
+    final record = buildObservationRecord(analysis, solve);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SectionTitle('视场中的天体', Icons.auto_awesome_mosaic_rounded),
-            const SizedBox(height: 8),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                SectionTitle('观星记录', Icons.nights_stay_rounded),
+                _HelpButton(
+                  title: '观星记录怎么来的',
+                  message:
+                      '所有数字都是从这张照片本身量出来的——包括天空背景、点源大小和星等。'
+                      '它们会随曝光、ISO、光圈和后期处理变化，换个晚上、换台机器就不一样，'
+                      '适合和「你自己过去拍的」比，不适合和别人的照片比。',
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SelectableText(
+              record.summary,
+              style: const TextStyle(height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (record.constellation != null)
+                  MetricChip('拍到', record.constellation!),
+                MetricChip('画质', record.quality),
+                MetricChip('天空背景', record.skyBrightness),
+                MetricChip('点源 FWHM',
+                    '${analysis.fwhm.toStringAsFixed(1)} px'),
+                if (solve != null) ...[
+                  MetricChip('星表匹配', '${record.matchedStars} 颗'),
+                  MetricChip('视场对角', record.fieldOfView),
+                  MetricChip('像素比例', record.scale),
+                ],
+              ],
+            ),
+            if (record.brightest != null) ...[
+              const SizedBox(height: 10),
+              Text('画面最亮：${record.brightest}',
+                  style: const TextStyle(fontSize: 13)),
+            ],
+            const Divider(height: 26),
+            const Text('拍摄建议', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            for (final item in record.advice)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 6, right: 8),
+                      child: Icon(Icons.circle, size: 5, color: kMint),
+                    ),
+                    Expanded(
+                      child: Text(item, style: const TextStyle(height: 1.45, fontSize: 13)),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 视场内的恒星表：爱好者熟悉的「一张星表」的样子。
+  ///
+  /// 用 DataTable 而不是 ListTile：列表适合「挑一条点进去」，表格适合
+  /// 「横着比较」。这里要做的事情是后者——哪颗最亮、哪颗离中心最近、
+  /// 哪几颗是同一星座的，都需要一眼扫过整列。
+  Widget _starTableCard(SkyAnalysis analysis, SolveResult solve) {
+    final rows = buildStarTable(analysis, solve);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SectionTitle('视场内的恒星', Icons.table_chart_outlined),
+            const SizedBox(height: 6),
+            Text(
+              solve.source == SolveSource.local
+                  ? '名称来自 APP 内置的 Hipparcos 亮星目录，解算过程完全离线。'
+                  : '星名来自在线星表（Gaia DR3 / SIMBAD）。',
+              style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+            ),
+            const SizedBox(height: 10),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columnSpacing: 18,
+                horizontalMargin: 0,
+                headingTextStyle: const TextStyle(
+                  color: kMint,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                dataTextStyle: const TextStyle(fontSize: 12),
+                columns: const [
+                  DataColumn(label: Text('星名')),
+                  DataColumn(label: Text('类型')),
+                  DataColumn(label: Text('星等')),
+                  DataColumn(label: Text('赤经')),
+                  DataColumn(label: Text('赤纬')),
+                  DataColumn(label: Text('图上置信度')),
+                ],
+                rows: [
+                  for (final row in rows.take(20))
+                    DataRow(
+                      cells: [
+                        DataCell(Text(row.name)),
+                        DataCell(Text(row.category)),
+                        DataCell(Text(row.magnitude)),
+                        DataCell(Text(formatRa(row.ra))),
+                        DataCell(Text(formatDec(row.dec))),
+                        DataCell(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                row.confidence == null
+                                    ? Icons.remove
+                                    : row.confidence! >= 0.7
+                                        ? Icons.check_circle_outline
+                                        : Icons.help_outline,
+                                size: 14,
+                                color: row.confidence == null
+                                    ? const Color(0xFF8192A8)
+                                    : row.confidence! >= 0.7
+                                        ? kMint
+                                        : const Color(0xFFFFDE77),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                row.confidence == null
+                                    ? '未检出'
+                                    : '${row.confidenceLabel} '
+                                        '${(row.confidence! * 100).toStringAsFixed(0)}%',
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+            if (rows.length > 20)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '共 ${rows.length} 颗，此处显示最亮的 20 颗。',
+                  style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+                ),
+              ),
             if (solve.catalogWarning != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -881,33 +1051,68 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
                 ),
               ),
-            if (solve.namedStars.isEmpty && solve.deepSkyObjects.isEmpty)
-              const Text('已解算位置，但星表目录暂未返回位于视场内的匹配对象。'),
-            ...solve.namedStars.take(15).map(
-              (object) => ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(object.name),
-                subtitle: Text(object.category),
-                trailing: object.magnitude == null
-                    ? null
-                    : Text('${object.magnitudeBand} ${object.magnitude!.toStringAsFixed(2)}'),
-              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 星等分布图。
+  Widget _magnitudeCard(SkyAnalysis analysis, SolveResult? solve) {
+    final bins = magnitudeHistogram(analysis, solve);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                SectionTitle('星等分布', Icons.bar_chart_rounded),
+                _HelpButton(
+                  title: '星等分布怎么看',
+                  message:
+                      '横轴是星等，往右越暗；纵轴是落在这个亮度区间的星数。'
+                      '右边最后几根柱子就是你这次的探测极限——再暗一等的星就淹在背景噪声里了。'
+                      '如果分布在最暗那端突然掉到零，说明是设备极限；'
+                      '如果整条分布都在很亮的几档里堆着，多半是曝光不足或天空太亮。',
+                ),
+              ],
             ),
-            ...solve.deepSkyObjects.map(
-              (object) => ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(object.name),
-                subtitle: Text(object.category),
-                trailing: const Icon(Icons.scatter_plot, color: Color(0xFFFF7B8C)),
-              ),
+            const SizedBox(height: 12),
+            MagnitudeHistogram(
+              bins: bins,
+              calibrated: solve?.magnitudeZeroPoint != null,
             ),
           ],
         ),
       ),
     );
   }
+
+  Widget _deepSkyCard(SolveResult solve) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SectionTitle('视场中的深空天体', Icons.scatter_plot),
+              const SizedBox(height: 8),
+              ...solve.deepSkyObjects.map(
+                (object) => ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(object.name),
+                  subtitle: Text(object.category),
+                  trailing:
+                      const Icon(Icons.auto_awesome, color: Color(0xFFFF7B8C)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _agentCard() => Card(
         child: Padding(
