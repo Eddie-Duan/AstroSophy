@@ -39,7 +39,7 @@ flutter run
 
 这个项目站在别人的肩膀上，用到的数据和服务都在这里说明白：
 
-- **[Recraft](https://www.recraft.ai/)** —— 应用启动图标与引导页吉祥物 Nox 的插画均由 Recraft 在开发期生成（矢量稿）。Recraft 凭据不进入应用，也不进入仓库；生成的图纸本体随仓库分发，来源见 `assets/brand/`，生成脚本见 [`tools/make_mascot.py`](./tools/make_mascot.py)。
+- **[Recraft](https://www.recraft.ai/)** —— 应用启动图标与引导页吉祥物 Nox 的插画均由 Recraft 在开发期生成（矢量稿）。Recraft 凭据不进入应用，也不进入仓库；生成的图纸本体随仓库分发，来源见 `assets/brand/`，生成脚本见 [`tools/make_mascot.py`](./tools/make_mascot.py)。仓库设置里的社交预览图由 [`tools/make_social_preview.py`](./tools/make_social_preview.py) 用同一张吉祥物合成，只上传到 GitHub，不进 APP 安装包。
 - **[Hipparcos 主表](https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239)（ESA 1997，I/239）** —— 内置亮星目录的位置与 V 星等来源。
 - **[Bright Star Catalogue, 5th ed.](https://cdsarc.cds.unistra.fr/viz-bin/cat/V/50)（Hoffleit & Warren 1991，V/50）** —— 提供 Bayer/Flamsteed 星名、B-V 色指数和光谱型。
 - **[星座边界表](https://cdsarc.cds.unistra.fr/viz-bin/cat/VI/42)（Roman 1987，VI/42）** —— 判断一颗星属于哪个星座。
