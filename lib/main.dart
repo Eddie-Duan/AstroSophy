@@ -69,6 +69,38 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   bool _allowUpload = false;
   bool _solving = false;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding(firstLaunch: true));
+  }
+
+  Future<void> _showOnboarding({bool firstLaunch = false}) async {
+    try {
+      if (firstLaunch &&
+          await _storage.read(key: 'onboardingComplete') == 'true') {
+        return;
+      }
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: !firstLaunch,
+        builder: (dialogContext) => _OnboardingDialog(
+          onFinish: () async {
+            try {
+              await _storage.write(key: 'onboardingComplete', value: 'true');
+              if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+            } on Exception catch (error) {
+              _showError('无法保存引导状态：$error');
+            }
+          },
+        ),
+      );
+    } on Exception catch (error) {
+      _showError('无法打开新手引导：$error');
+    }
+  }
+
   Future<void> _selectImage(ImageSource source) async {
     try {
       final file = await _picker.pickImage(
@@ -288,6 +320,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       appBar: AppBar(
         title: const Text('✦  星鉴'),
         actions: [
+          IconButton(
+            onPressed: () => _showOnboarding(),
+            tooltip: '使用引导',
+            icon: const Icon(Icons.help_outline_rounded),
+          ),
           IconButton(
             onPressed: _settings,
             tooltip: 'API 设置',
@@ -520,7 +557,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('图像诊断', Icons.monitor_heart_outlined),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const _SectionTitle('图像诊断', Icons.monitor_heart_outlined),
+                  _HelpButton(
+                    title: '图像指标说明',
+                    message:
+                        '视觉背景指数会受曝光、ISO、白平衡和后期处理影响，不是 SQM 光度或 Bortle 等级。'
+                        '线状候选可能来自拖线、失焦或处理伪影，单张图片不能确认卫星或飞机。',
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
@@ -534,15 +582,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   _MetricChip('视觉背景', '${analysis.backgroundIndex.toStringAsFixed(0)} / 100'),
                 ],
               ),
-              const SizedBox(height: 12),
-              const Text(
-                '背景视觉指数会受曝光和后期处理影响，不是 SQM 光度或 Bortle 等级。',
-                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
-              ),
-              ...analysis.diagnostics.map(
+              ...analysis.diagnostics.take(2).map(
                 (item) => Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text('• $item'),
+                  child: Text(
+                    '• $item',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
             ],
@@ -559,11 +606,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _SectionTitle('亮星与测光', Icons.stars_rounded),
-            const SizedBox(height: 6),
-            const Text(
-              '未完成天区解算时只显示相对亮度，不能据此确认星名。',
-              style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const _SectionTitle('亮星与测光', Icons.stars_rounded),
+                _HelpButton(
+                  title: '星名与测光',
+                  message:
+                      '未完成天区解算时只显示图内相对亮度，不能确认星名。'
+                      'Gaia G 近似标定受相机光谱响应、白平衡、饱和与图像处理影响；'
+                      '显示的散布不包含全部系统误差。',
+                ),
+              ],
             ),
             if (stars.isEmpty && analysis.streakCandidates.isEmpty)
               const Padding(
@@ -608,29 +662,34 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             if (analysis.streakCandidates.isNotEmpty) ...[
               const Padding(
                 padding: EdgeInsets.only(top: 10, bottom: 4),
-                child: Text(
-                  '线状亮点候选（不参与恒星匹配/测光）',
-                  style: TextStyle(color: Color(0xFFFFDE77), fontWeight: FontWeight.w600),
-                ),
+                child: Text('线状候选'),
               ),
               ...analysis.streakCandidates.take(6).map(
                     (candidate) => ListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
                       title: const Text('拉长的亮点'),
-                      subtitle: Text(
-                        '可能是拖线、失焦或处理伪影；单张不能确认卫星/飞机。'
-                        ' 形态比 ${candidate.axisRatio.toStringAsFixed(1)}:1',
-                      ),
+                      subtitle: Text('形态比 ${candidate.axisRatio.toStringAsFixed(1)}:1'),
                       trailing: Text(candidate.confidenceLabel),
                     ),
                   ),
             ],
             if (solve?.magnitudeScatter != null)
-              Text(
-                'Gaia G 近似标定的稳健散布约 ±${solve!.magnitudeScatter!.toStringAsFixed(2)} 等；'
-                '相机光谱响应与图像处理可能造成额外系统误差。',
-                style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Gaia G 近似散布 ±${solve!.magnitudeScatter!.toStringAsFixed(2)} 等',
+                      style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+                    ),
+                  ),
+                  _HelpButton(
+                    title: '测光误差',
+                    message:
+                        '该散布不包含相机光谱响应、白平衡、饱和、镜头暗角和图像处理造成的系统误差，'
+                        '结果仅供参考。',
+                  ),
+                ],
               ),
           ],
         ),
@@ -663,10 +722,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             children: [
               const _SectionTitle('天区识别', Icons.public_rounded),
               if (solve == null) ...[
-                const SizedBox(height: 6),
-                const Text(
-                  '联网解算会把预览图发送给 Astrometry.net。未解算前，不标注猜测的星名。',
-                  style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+                Row(
+                  children: [
+                    const Expanded(child: SizedBox()),
+                    _HelpButton(
+                      title: '天区解算与隐私',
+                      message:
+                          '天区解算使用 Astrometry.net 在线服务，会上传分析预览图。'
+                          '只有勾选同意后才会发送；取消勾选时不会上传。'
+                          '不解算时仍可查看本机星点与画质分析。',
+                    ),
+                  ],
                 ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
@@ -780,6 +846,176 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ],
           ),
         ),
+      );
+}
+
+class _OnboardingDialog extends StatefulWidget {
+  const _OnboardingDialog({required this.onFinish});
+
+  final VoidCallback onFinish;
+
+  @override
+  State<_OnboardingDialog> createState() => _OnboardingDialogState();
+}
+
+class _OnboardingDialogState extends State<_OnboardingDialog> {
+  static const _steps = <({IconData icon, String title, String message})>[
+    (
+      icon: Icons.photo_library_outlined,
+      title: '导入星图',
+      message: '选一张星空照片，分析默认在手机本机进行。',
+    ),
+    (
+      icon: Icons.auto_awesome,
+      title: '查看结果',
+      message: '浏览星点、图像质量与测光；点“？”查看指标说明。',
+    ),
+    (
+      icon: Icons.public_rounded,
+      title: '认识天区',
+      message: '在线解算和 AI 都是可选功能；上传照片前会单独征求同意。',
+    ),
+  ];
+
+  final _controller = PageController();
+  int _page = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _next() {
+    if (_page == _steps.length - 1) {
+      widget.onFinish();
+      return;
+    }
+    _controller.nextPage(
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Image.asset(
+                    'assets/brand/astrosophy_app_icon.png',
+                    width: 32,
+                    height: 32,
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      '欢迎使用星鉴',
+                      style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    '${_page + 1}/${_steps.length}',
+                    style: const TextStyle(color: Color(0xFFA6B5C8)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 245,
+                child: PageView.builder(
+                  controller: _controller,
+                  itemCount: _steps.length,
+                  onPageChanged: (page) => setState(() => _page = page),
+                  itemBuilder: (context, index) {
+                    final step = _steps[index];
+                    return Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(step.icon, size: 58, color: _mint),
+                        const SizedBox(height: 18),
+                        Text(
+                          step.title,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          step.message,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFA6B5C8)),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var index = 0; index < _steps.length; index++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: index == _page ? 18 : 6,
+                      height: 6,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      decoration: BoxDecoration(
+                        color: index == _page ? _mint : const Color(0xFF46556B),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: widget.onFinish,
+                    child: const Text('跳过'),
+                  ),
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: _next,
+                    child: Text(_page == _steps.length - 1 ? '开始探索' : '下一步'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+class _HelpButton extends StatelessWidget {
+  const _HelpButton({required this.title, required this.message});
+
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+        tooltip: '了解更多',
+        visualDensity: VisualDensity.compact,
+        onPressed: () => showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('知道了'),
+              ),
+            ],
+          ),
+        ),
+        icon: const Icon(Icons.help_outline_rounded, size: 20),
       );
 }
 
@@ -927,6 +1163,16 @@ class _SettingsFormState extends State<SettingsForm> {
               const Text(
                 '快速模板（仅填写接口地址和模型名，不含 API Key）',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: _HelpButton(
+                  title: '模型 API 模板',
+                  message:
+                      '模板仅预填兼容接口的 Base URL 和模型名，不包含 API Key。'
+                      '请在服务商处自行申请 Key，核对模型是否仍可用。'
+                      '填写的密钥保存在本机安全存储，并发送至你配置的模型服务。',
+                ),
               ),
               const SizedBox(height: 8),
               Wrap(

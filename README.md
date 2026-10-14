@@ -19,6 +19,8 @@ flutter run
 
 想启用 Agent，在应用“本机 API 设置”中选择 DeepSeek、OpenAI、OpenRouter 或硅基流动模板，核对/修改模型名并填写自己的 API Key。模板不含密钥；密钥只保存在设备安全存储中。
 
+首次打开会显示简短上手引导；分析指标旁的“？”可随时查看解释，顶部问号可重新打开引导。Android 启动图标由 Recraft 生成的矢量稿导出。
+
 星等、天空背景指数、RAW 支持边界和隐私说明见 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)。
 
 使用限制见 [`LICENSE`](./LICENSE)。如有违反，作者将保留追究其责任的权利。

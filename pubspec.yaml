@@ -22,3 +22,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/brand/astrosophy_app_icon.svg
+    - assets/brand/astrosophy_app_icon.png
+    - assets/brand/astrosophy_app_icon_recraft.svg

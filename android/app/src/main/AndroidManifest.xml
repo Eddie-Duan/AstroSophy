@@ -4,7 +4,8 @@
     <application
         android:label="星鉴 AstroSophy"
         android:name="${applicationName}"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/LaunchTheme"
         android:usesCleartextTraffic="false">
         <activity
