@@ -2,10 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show HttpException;
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -176,7 +174,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
   }
 
-  Future<void> _solve() async {
+  Future<void> _solveSky() async {
     final analysis = _analysis;
     if (analysis == null) return;
     final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
@@ -557,10 +555,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              const Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const _SectionTitle('图像诊断', Icons.monitor_heart_outlined),
+                  _SectionTitle('图像诊断', Icons.monitor_heart_outlined),
                   _HelpButton(
                     title: '图像指标说明',
                     message:
@@ -606,10 +604,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            const Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const _SectionTitle('亮星与测光', Icons.stars_rounded),
+                _SectionTitle('亮星与测光', Icons.stars_rounded),
                 _HelpButton(
                   title: '星名与测光',
                   message:
@@ -638,7 +636,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   contentPadding: EdgeInsets.zero,
                   leading: CircleAvatar(
                     radius: 15,
-                    backgroundColor: _mint.withOpacity(0.16),
+                    backgroundColor: _mint.withValues(alpha: 0.16),
                     child: Text('${stars.indexOf(star) + 1}', style: const TextStyle(color: _mint)),
                   ),
                   title: Text(
@@ -683,7 +681,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
                     ),
                   ),
-                  _HelpButton(
+                  const _HelpButton(
                     title: '测光误差',
                     message:
                         '该散布不包含相机光谱响应、白平衡、饱和、镜头暗角和图像处理造成的系统误差，'
@@ -722,9 +720,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             children: [
               const _SectionTitle('天区识别', Icons.public_rounded),
               if (solve == null) ...[
-                Row(
+                const Row(
                   children: [
-                    const Expanded(child: SizedBox()),
+                    Expanded(child: SizedBox()),
                     _HelpButton(
                       title: '天区解算与隐私',
                       message:
@@ -744,7 +742,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: _solving ? null : _solve,
+                    onPressed: _solving ? null : _solveSky,
                     icon: _solving
                         ? const SizedBox(
                             width: 18,
@@ -1021,6 +1019,7 @@ class _HelpButton extends StatelessWidget {
 
 class SettingsForm extends StatefulWidget {
   const SettingsForm({
+    super.key,
     required this.current,
     required this.astrometryKey,
     required this.storage,
@@ -1164,7 +1163,7 @@ class _SettingsFormState extends State<SettingsForm> {
                 '快速模板（仅填写接口地址和模型名，不含 API Key）',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
-              Align(
+              const Align(
                 alignment: Alignment.centerRight,
                 child: _HelpButton(
                   title: '模型 API 模板',
@@ -2370,7 +2369,7 @@ class _OrbitPainter extends CustomPainter {
         point,
         radius,
         Paint()
-          ..color = Colors.white.withOpacity(random.nextDouble() * 0.38 + 0.08),
+          ..color = Colors.white.withValues(alpha: random.nextDouble() * 0.38 + 0.08),
       );
     }
     final haloRect = Rect.fromCircle(center: center, radius: 74);
@@ -2380,8 +2379,8 @@ class _OrbitPainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(
           colors: [
-            const Color(0xFF8EF4DC).withOpacity(0.28),
-            const Color(0xFF3BAA9C).withOpacity(0.12),
+            const Color(0xFF8EF4DC).withValues(alpha: 0.28),
+            const Color(0xFF3BAA9C).withValues(alpha: 0.12),
             Colors.transparent,
           ],
         ).createShader(haloRect),
@@ -2431,7 +2430,7 @@ class _OrbitPainter extends CustomPainter {
       Offset(size.width * 0.52, size.height * 0.28),
       Offset(size.width * 0.85, size.height * 0.14),
       Paint()
-        ..color = Colors.white.withOpacity(0.48)
+        ..color = Colors.white.withValues(alpha: 0.48)
         ..strokeWidth = 0.8,
     );
   }
@@ -2455,7 +2454,7 @@ class _StarfieldPainter extends CustomPainter {
       canvas.drawCircle(
         point,
         radius,
-        Paint()..color = const Color(0xFFB8D6E8).withOpacity(random.nextDouble() * 0.2 + 0.025),
+        Paint()..color = const Color(0xFFB8D6E8).withValues(alpha: random.nextDouble() * 0.2 + 0.025),
       );
     }
   }
