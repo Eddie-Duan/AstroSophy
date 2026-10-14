@@ -37,7 +37,7 @@ Future<void> pumpOnboarding(
 void main() {
   testWidgets('第一页讲清楚这是什么，按钮是「下一步」', (tester) async {
     await pumpOnboarding(tester, onDone: () {});
-    expect(find.text('AstroSophy ✦ 星鉴'), findsOneWidget);
+    expect(find.text('AstroSophy'), findsOneWidget);
     expect(find.text('下一步'), findsOneWidget);
     expect(find.text('开始探索'), findsNothing);
   });
@@ -62,7 +62,7 @@ void main() {
     await pumpOnboarding(tester, onDone: () {});
     // 每页的标题，翻了就该出现。
     const titles = [
-      'AstroSophy ✦ 星鉴',
+      'AstroSophy',
       '解析在本机进行',
       '结果能一边看一边点',
       '存下来，慢慢看',

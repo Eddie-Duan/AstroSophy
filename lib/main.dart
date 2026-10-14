@@ -619,7 +619,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final solve = _solve?.withoutRejected(analysis?.stars ?? const []);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('✦  星鉴'),
+        title: const Text('AstroSophy'),
         actions: [
           IconButton(
             onPressed: () => _showOnboarding(),

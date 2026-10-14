@@ -1,4 +1,4 @@
-# AstroSophy ✦ 星鉴
+# AstroSophy
 
 Local-first astrophotography companion for Android — plate-solves your night-sky photos on-device, then explains them in plain language.
 
