@@ -30,6 +30,10 @@ flutter:
     - assets/brand/astrosophy_app_icon.svg
     - assets/brand/astrosophy_app_icon.png
     - assets/brand/astrosophy_app_icon_recraft.svg
+    # 引导页吉祥物。SVG 是 Recraft 出的矢量源稿，PNG 是用无头浏览器栅格化
+    # 之后 APP 真正加载的那张，见 tools/make_mascot.py。
+    - assets/brand/astrosophy_mascot.png
+    - assets/brand/astrosophy_mascot.svg
     # 内置亮星目录，由 tools/build_catalog.py 离线生成，供本机解算使用。
     - assets/catalog/stars.json
     - assets/catalog/names.json

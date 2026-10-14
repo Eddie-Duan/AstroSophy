@@ -13,6 +13,7 @@ import 'history.dart';
 import 'history_screen.dart';
 import 'model.dart';
 import 'models.dart';
+import 'onboarding.dart';
 import 'pipeline.dart';
 import 'report.dart';
 import 'theme.dart';
@@ -135,6 +136,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   Future<SkyWorker> _ensureWorker() => _worker ??= SkyWorker.spawn();
 
+  /// 打开新手引导。
+  ///
+  /// [firstLaunch] 为真时只在没看过的情况下打开，并且不给返回键——首次启动
+  /// 看到的应该是整屏引导，而不是浮在空界面上的一个弹窗。之后的每一次重播都
+  /// 是用户主动点的，能进能退。
   Future<void> _showOnboarding({bool firstLaunch = false}) async {
     try {
       if (firstLaunch &&
@@ -142,22 +148,29 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         return;
       }
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: !firstLaunch,
-        builder: (dialogContext) => _OnboardingDialog(
-          onFinish: () async {
-            try {
-              await _storage.write(key: 'onboardingComplete', value: 'true');
-              if (dialogContext.mounted) Navigator.of(dialogContext).pop();
-            } on Exception catch (error) {
-              _showError('无法保存引导状态：$error');
-            }
-          },
+      final navigator = Navigator.of(context);
+      await navigator.push<void>(
+        MaterialPageRoute(
+          builder: (_) => OnboardingPage(
+            isReplay: !firstLaunch,
+            onDone: () {
+              if (navigator.canPop()) navigator.pop();
+              unawaited(_markOnboarded());
+            },
+          ),
         ),
       );
     } on Exception catch (error) {
       _showError('无法打开新手引导：$error');
+    }
+  }
+
+  /// 写下「看过了」。写失败最多让用户下次再看一遍引导，不值得为此弹错误框。
+  Future<void> _markOnboarded() async {
+    try {
+      await _storage.write(key: 'onboardingComplete', value: 'true');
+    } on Exception {
+      return;
     }
   }
 
@@ -1672,149 +1685,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const SizedBox(height: 12),
                 SelectableText(_explanation!),
               ],
-            ],
-          ),
-        ),
-      );
-}
-
-class _OnboardingDialog extends StatefulWidget {
-  const _OnboardingDialog({required this.onFinish});
-
-  final VoidCallback onFinish;
-
-  @override
-  State<_OnboardingDialog> createState() => _OnboardingDialogState();
-}
-
-class _OnboardingDialogState extends State<_OnboardingDialog> {
-  static const _steps = <({IconData icon, String title, String message})>[
-    (
-      icon: Icons.photo_library_outlined,
-      title: '导入星图',
-      message: '选一张星空照片，分析默认在手机本机进行。',
-    ),
-    (
-      icon: Icons.auto_awesome,
-      title: '查看结果',
-      message: '浏览星点、图像质量与测光；点“？”查看指标说明。',
-    ),
-    (
-      icon: Icons.public_rounded,
-      title: '认识天区',
-      message: '在线解算和 AI 都是可选功能；上传照片前会单独征求同意。',
-    ),
-  ];
-
-  final _controller = PageController();
-  int _page = 0;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _next() {
-    if (_page == _steps.length - 1) {
-      widget.onFinish();
-      return;
-    }
-    _controller.nextPage(
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) => Dialog(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Image.asset(
-                    'assets/brand/astrosophy_app_icon.png',
-                    width: 32,
-                    height: 32,
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      '欢迎使用星鉴',
-                      style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Text(
-                    '${_page + 1}/${_steps.length}',
-                    style: const TextStyle(color: Color(0xFFA6B5C8)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 245,
-                child: PageView.builder(
-                  controller: _controller,
-                  itemCount: _steps.length,
-                  onPageChanged: (page) => setState(() => _page = page),
-                  itemBuilder: (context, index) {
-                    final step = _steps[index];
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(step.icon, size: 58, color: kMint),
-                        const SizedBox(height: 18),
-                        Text(
-                          step.title,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          step.message,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFA6B5C8)),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  for (var index = 0; index < _steps.length; index++)
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      width: index == _page ? 18 : 6,
-                      height: 6,
-                      margin: const EdgeInsets.symmetric(horizontal: 3),
-                      decoration: BoxDecoration(
-                        color: index == _page ? kMint : const Color(0xFF46556B),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  TextButton(
-                    onPressed: widget.onFinish,
-                    child: const Text('跳过'),
-                  ),
-                  const Spacer(),
-                  FilledButton(
-                    onPressed: _next,
-                    child: Text(_page == _steps.length - 1 ? '开始探索' : '下一步'),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
