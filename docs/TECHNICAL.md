@@ -23,6 +23,7 @@
 - Gaia TAP 查询只发送解算得到的中心坐标和视场，不上传原始照片。
 - 星名与深空天体目录查询发送视场坐标至 SIMBAD TAP 服务。
 - 可选语言模型仅收到本地质量指标、天体名和测量摘要，不接收照片或 Key。模型 Key 会发送到用户输入的 Base URL；只应填写可信服务地址。
+- 启用 Agent 需由用户自行在“本机 API 设置”填写 Key。DeepSeek、OpenAI、OpenRouter 和硅基流动模板仅预填 OpenAI 兼容 Base URL 与模型名，不内置 Key；模型名和接口支持可能变更，请以服务商控制台为准。自定义服务须兼容 `/chat/completions` 请求格式。
 - 未启用解算或 Agent 时，图像读取、星点检测和画质诊断不需要网络。
 
 ## Android 启动与测试

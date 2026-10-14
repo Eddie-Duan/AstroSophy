@@ -775,6 +775,41 @@ class _SettingsFormState extends State<SettingsForm> {
   bool _obscureStrong = true;
   bool _obscureAstrometry = true;
 
+  static const _apiTemplates = <_AgentApiTemplate>[
+    _AgentApiTemplate(
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      lightModel: 'deepseek-chat',
+      strongModel: 'deepseek-reasoner',
+    ),
+    _AgentApiTemplate(
+      name: 'OpenAI',
+      baseUrl: 'https://api.openai.com/v1',
+      lightModel: 'gpt-4.1-mini',
+      strongModel: 'gpt-4.1',
+    ),
+    _AgentApiTemplate(
+      name: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      lightModel: 'deepseek/deepseek-chat',
+      strongModel: 'deepseek/deepseek-r1',
+    ),
+    _AgentApiTemplate(
+      name: '硅基流动',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      lightModel: 'deepseek-ai/DeepSeek-V3',
+      strongModel: 'deepseek-ai/DeepSeek-R1',
+    ),
+  ];
+
+  void _applyTemplate(_AgentApiTemplate template) {
+    setState(() {
+      _baseUrl.text = template.baseUrl;
+      _lightModel.text = template.lightModel;
+      _strongModel.text = template.strongModel;
+    });
+  }
+
   Future<void> _save() async {
     final uri = Uri.tryParse(_baseUrl.text.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
@@ -855,6 +890,30 @@ class _SettingsFormState extends State<SettingsForm> {
             children: [
               const _SectionTitle('本机 API 设置', Icons.lock_outline),
               const SizedBox(height: 14),
+              const Text(
+                '快速模板（仅填写接口地址和模型名，不含 API Key）',
+                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final template in _apiTemplates)
+                    ActionChip(
+                      label: Text(template.name),
+                      onPressed: () => _applyTemplate(template),
+                    ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  '模板值可编辑；请按服务商控制台确认当前可用的模型名称及兼容接口地址。'
+                  '填入你自己的 Key 后保存即可启用 Agent。',
+                  style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+                ),
+              ),
               _field('模型 API Base URL', _baseUrl),
               _field('轻量模型名称', _lightModel),
               _field(
@@ -889,6 +948,20 @@ class _SettingsFormState extends State<SettingsForm> {
           ),
         ),
       );
+}
+
+class _AgentApiTemplate {
+  const _AgentApiTemplate({
+    required this.name,
+    required this.baseUrl,
+    required this.lightModel,
+    required this.strongModel,
+  });
+
+  final String name;
+  final String baseUrl;
+  final String lightModel;
+  final String strongModel;
 }
 
 class SkyAnalysis {

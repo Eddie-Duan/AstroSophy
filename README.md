@@ -17,6 +17,8 @@ flutter run
 
 从手机相册选择 JPG/PNG/TIFF 或相机 RAW 文件，星点与画质分析在手机本机进行。RAW 尝试读取文件中嵌入的 JPEG 预览；不保证所有相机格式都能解码，也不等同于线性 RAW 测光。可选填写 Astrometry.net Key 和 OpenAI 兼容模型 Key；天区解算上传预览图前必须明确授权，模型仅接收测量摘要。
 
+想启用 Agent，在应用“本机 API 设置”中选择 DeepSeek、OpenAI、OpenRouter 或硅基流动模板，核对/修改模型名并填写自己的 API Key。模板不含密钥；密钥只保存在设备安全存储中。
+
 星等、天空背景指数、RAW 支持边界和隐私说明见 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)。
 
 使用限制见 [`LICENSE`](./LICENSE)。如有违反，作者将保留追究其责任的权利。
