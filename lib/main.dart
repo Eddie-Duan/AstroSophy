@@ -89,6 +89,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 当前这张图在历史里对应的记录 id；没保存过就是 null。
   String? _savedId;
 
+  /// 下方列表里当前选中的那一项（`numberedTargets` 的下标）。图上的高亮环
+  /// 和列表的选中底色都跟着它走，两边同号才是同一颗星。
+  int? _selectedTarget;
+
+  /// 看图区显示的是处理图还是原图。默认原图——处理图是加工过的。
+  bool _showProcessed = false;
+
   /// 后台解算 isolate。第一次用到时才起，之后一直留着——索引建一次要一秒
   /// 上下，起一次就够。
   Future<SkyWorker>? _worker;
@@ -206,6 +213,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _error = null;
       _warnings = const [];
       _savedId = null;
+      // 编号只在同一张图里有意义，换图必须把选中项清掉，否则新图会在第 10
+      // 号位置高亮一颗跟用户完全无关的星。
+      _selectedTarget = null;
+      _showProcessed = false;
     });
   }
   Future<void> _pickDemoImage() async {
@@ -280,6 +291,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       // 重新解析出来的是新的一份结果，和之前存过的那条记录不再是一回事，
       // 要能再存一次。
       _savedId = null;
+      _selectedTarget = null;
       _progress = const PipelineProgress(0.01, '正在准备');
     });
     try {
@@ -495,7 +507,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       final saved = await store.save(
         name: _filename ?? '未命名',
         analysis: analysis,
-        solve: _solve,
+        // 存的是剔除后的解算结果，和屏幕上看到的一致。剔除项本身跟着
+        // `analysis.stars` 的 `isRejected` 一起存，重开还能改回来。
+        solve: _solve?.withoutRejected(analysis.stars),
         explanation: _explanation,
       );
       _savedId = saved.id;
@@ -525,6 +539,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _warnings = const [];
       _progress = null;
       _savedId = null;
+      _selectedTarget = null;
+      _showProcessed = false;
     });
   }
 
@@ -551,6 +567,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _warnings = const [];
         _progress = null;
         _savedId = entry.id;
+        _selectedTarget = null;
+        _showProcessed = false;
       });
     } catch (error) {
       _showError('打开历史记录失败：$error');
@@ -583,7 +601,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   @override
   Widget build(BuildContext context) {
     final analysis = _analysis;
-    final solve = _solve;
+    // 用户剔除掉的亮点不进报告：星表、测光、摘要和交给模型的读法都以过滤后
+    // 的这一份为准。图上仍然画着它们（划掉），所以剔除随时可以反悔。
+    final solve = _solve?.withoutRejected(analysis?.stars ?? const []);
     return Scaffold(
       appBar: AppBar(
         title: const Text('✦  星鉴'),
@@ -646,21 +666,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ],
                 if (analysis != null) ...[
                   const SizedBox(height: 18),
+                  // 上半屏看图、下半屏点星点，两块必须同时在视野里：点第 10
+                  // 号亮点却看不到图上的 ⑩，这套编号就没有意义了。所以这块
+                  // 是固定高度的，不随页面滚动拆开。下面那些卡片才需要滚。
+                  SizedBox(
+                    height: math.max(
+                      MediaQuery.sizeOf(context).height * 0.88,
+                      560,
+                    ),
+                    child: _interactivePanel(analysis, solve),
+                  ),
+                  const SizedBox(height: 14),
                   // 顺序按「用户此刻想知道什么」排：这张拍到了什么 →
-                  // 拍得怎么样 → 具体是哪些星 → 装备能拍到多暗 → 逐颗细看。
+                  // 拍得怎么样 → 具体是哪些星 → 装备能拍到多暗。
                   _observationCard(analysis, solve),
                   const SizedBox(height: 12),
-                  _diagnosticsCard(analysis),
-                  const SizedBox(height: 12),
-                  _solveCard(solve),
+                  _magnitudeCard(analysis, solve),
                   if (solve != null && solve.namedStars.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _starTableCard(analysis, solve),
                   ],
                   const SizedBox(height: 12),
-                  _magnitudeCard(analysis, solve),
+                  _diagnosticsCard(analysis),
                   const SizedBox(height: 12),
-                  _starsCard(analysis, solve),
+                  _solveCard(solve),
+                  const SizedBox(height: 12),
+                  _photometryCard(analysis, solve),
                   if (solve != null && solve.deepSkyObjects.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _deepSkyCard(solve),
@@ -787,61 +818,65 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ],
       );
 
-  Widget _imagePreview() => Card(
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            AspectRatio(
-              aspectRatio: 0.82,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _isRawName(_filename ?? '') && _analysis == null
-                      ? const Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.raw_on, size: 42, color: kMint),
-                              SizedBox(height: 10),
-                              Text('相机 RAW · 将尝试读取内嵌预览'),
-                            ],
-                          ),
-                        )
-                      : Image.memory(
-                          _analysis?.preview ?? _bytes!,
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, error, __) => Center(
-                            child: Text(
-                              '暂不支持此图片格式：$error',
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ),
-                  if (_analysis != null)
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: DetectedStarsPainter(
-                          analysis: _analysis!,
-                          namedStars: _solve?.namedStars ?? const [],
-                          objects: _solve?.deepSkyObjects ?? const [],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
-              child: Text(
-                _filename ?? '已选图片',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+  /// 选好图但还没解析时的那张预览卡。
+  ///
+  /// 解析完之后这里只剩一条文件名——标注图挪到了下面的联动面板里，那份更大
+  /// 还能点。同一张图在一屏里画两遍，用户会以为有两张，也白占半屏高度。
+  Widget _imagePreview() {
+    if (_analysis != null) {
+      return Card(
+        child: ListTile(
+          leading: const Icon(Icons.image_outlined, color: kMint),
+          title: Text(
+            _filename ?? '已选图片',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: const Text('解析结果见下方', style: TextStyle(fontSize: 11)),
         ),
       );
+    }
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AspectRatio(
+            aspectRatio: 0.82,
+            child: _isRawName(_filename ?? '')
+                ? const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.raw_on, size: 42, color: kMint),
+                        SizedBox(height: 10),
+                        Text('相机 RAW · 将尝试读取内嵌预览'),
+                      ],
+                    ),
+                  )
+                : Image.memory(
+                    _bytes!,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, error, __) => Center(
+                      child: Text(
+                        '暂不支持此图片格式：$error',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+            child: Text(
+              _filename ?? '已选图片',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _diagnosticsCard(SkyAnalysis analysis) => Card(
         child: Padding(
@@ -889,102 +924,390 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
       );
 
-  Widget _starsCard(SkyAnalysis analysis, SolveResult? solve) {
-    final stars = [...analysis.compactSources]
-      ..sort((first, second) => first.instrumentalMagnitude.compareTo(second.instrumentalMagnitude));
+  // -------------------------------------------------------------------------
+  // 图像与星点的联动面板
+  // -------------------------------------------------------------------------
+
+  /// 上半屏看图、下半屏点星点。
+  ///
+  /// 两块共享一屏是刻意的：用户要做的判断是「列表里第 10 项，在图上到底是
+  /// 哪一颗」，这个问题只有在两边同时可见时才能回答。所以不折叠、不翻页，
+  /// 5:6 分屏——图上留白多，列表还要放两行字。
+  Widget _interactivePanel(SkyAnalysis analysis, SolveResult? solve) => Column(
+        children: [
+          Expanded(flex: 5, child: _imagePanel(analysis, solve)),
+          const SizedBox(height: 10),
+          Expanded(flex: 6, child: _highlightsCard(analysis, solve)),
+        ],
+      );
+
+  Widget _imagePanel(SkyAnalysis analysis, SolveResult? solve) {
+    final bytes = _showProcessed ? analysis.processedPreview : analysis.preview;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                SectionTitle('亮星与测光', Icons.stars_rounded),
-                _HelpButton(
-                  title: '星名与测光',
-                  message:
-                      '未完成天区解算时只显示图内相对亮度，不能确认星名。'
-                      'Gaia G 近似标定受相机光谱响应、白平衡、饱和与图像处理影响；'
-                      '显示的散布不包含全部系统误差。',
-                ),
-              ],
-            ),
-            if (stars.isEmpty && analysis.streakCandidates.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 12),
-                child: Text('没有检出可信的紧凑亮点。'),
-              )
-            else if (stars.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 12),
-                child: Text('没有可用于恒星测光的紧凑点源；下方仅列出形态异常候选。'),
-              )
-            else
-              ...stars.take(12).map((star) {
-                final name = _nearestNamed(star, solve?.namedStars ?? const []);
-                final magnitude = name?.magnitude;
-                return ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(
-                    radius: 15,
-                    backgroundColor: kMint.withValues(alpha: 0.16),
-                    child: Text('${stars.indexOf(star) + 1}', style: const TextStyle(color: kMint)),
-                  ),
-                  title: Text(
-                    name?.name ?? '图内亮点',
-                  ),
-                  subtitle: Text(
-                    '${name?.category.isNotEmpty == true ? '${name!.category} · ' : ''}'
-                    '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)}) · '
-                    '${star.confidenceLabel} ${(star.confidence * 100).toStringAsFixed(0)}%',
-                  ),
-                  trailing: Text(
-                    solve?.magnitudeZeroPoint != null && star.confidence >= 0.25
-                        ? 'G~${(star.instrumentalMagnitude + solve!.magnitudeZeroPoint!).toStringAsFixed(2)}'
-                        : magnitude != null
-                            ? '${name!.magnitudeBand} ${magnitude.toStringAsFixed(2)}'
-                            : 'Δm ${_relativeMagnitude(star, stars.first).toStringAsFixed(2)}',
-                    textAlign: TextAlign.end,
-                  ),
-                );
-              }),
-            if (analysis.streakCandidates.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.only(top: 10, bottom: 4),
-                child: Text('线状候选'),
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFF05080F)),
+          LayoutBuilder(
+            builder: (context, constraints) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (details) => _selectNearest(
+                details.localPosition,
+                constraints.biggest,
+                analysis,
               ),
-              ...analysis.streakCandidates.take(6).map(
-                    (candidate) => ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('拉长的亮点'),
-                      subtitle: Text('形态比 ${candidate.axisRatio.toStringAsFixed(1)}:1'),
-                      trailing: Text(candidate.confidenceLabel),
-                    ),
-                  ),
-            ],
-            if (solve?.magnitudeScatter != null)
-              Row(
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  Expanded(
-                    child: Text(
-                      'Gaia G 近似散布 ±${solve!.magnitudeScatter!.toStringAsFixed(2)} 等',
-                      style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+                  Image.memory(
+                    bytes,
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                    errorBuilder: (_, error, __) => Center(
+                      child: Text('$error', textAlign: TextAlign.center),
                     ),
                   ),
-                  const _HelpButton(
-                    title: '测光误差',
-                    message:
-                        '该散布不包含相机光谱响应、白平衡、饱和、镜头暗角和图像处理造成的系统误差，'
-                        '结果仅供参考。',
+                  CustomPaint(
+                    painter: DetectedStarsPainter(
+                      analysis: analysis,
+                      namedStars: solve?.namedStars ?? const [],
+                      objects: solve?.deepSkyObjects ?? const [],
+                      selected: _selectedTarget,
+                    ),
                   ),
                 ],
               ),
-          ],
+            ),
+          ),
+          Positioned(left: 8, top: 8, child: _imageModeToggle()),
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: _selectionHint(analysis, solve),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 原图 / 处理图切换。
+  ///
+  /// 处理图扣掉了天空背景、抹掉了非星场区域，星场本身反而看得更清楚；但它
+  /// 是加工过的，不能拿来判断「我到底拍到了什么」。所以两张都留着，默认给
+  /// 用户看没动过的原图。
+  Widget _imageModeToggle() => SegmentedButton<bool>(
+        segments: const [
+          ButtonSegment(value: false, label: Text('原图')),
+          ButtonSegment(value: true, label: Text('处理图')),
+        ],
+        selected: {_showProcessed},
+        showSelectedIcon: false,
+        onSelectionChanged: (values) =>
+            setState(() => _showProcessed = values.first),
+        style: const ButtonStyle(
+          visualDensity: VisualDensity(horizontal: -3, vertical: -3),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 11)),
         ),
+      );
+
+  /// 图下方那一小块说明：现在选中的是第几号，或者提示这套编号怎么用。
+  Widget _selectionHint(SkyAnalysis analysis, SolveResult? solve) {
+    final targets = analysis.numberedTargets;
+    final index = _selectedTarget;
+    final String text;
+    if (index == null || index >= targets.length) {
+      text = '点图中的亮点，或点下方列表——两边编号一一对应';
+    } else {
+      final star = targets[index];
+      final position =
+          '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)})';
+      if (star.isRejected) {
+        text = '第 ${index + 1} 号 · $position · 已剔除，不计入报告';
+      } else {
+        final name = _nearestNamed(star, solve?.namedStars ?? const []);
+        final what =
+            name?.name ?? (star.isElongated ? '拉长的亮点' : '图内亮点');
+        text = '第 ${index + 1} 号 · $what · $position · ${star.confidenceLabel}';
+      }
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(text, style: const TextStyle(fontSize: 11)),
+    );
+  }
+
+  /// 点图上的某个位置，选中离它最近的那一项。
+  ///
+  /// 判定半径按**图像**像素给（22 像素），不是屏幕像素：图被缩到原来一半都
+  /// 不到，按屏幕像素判会让用户明明点在 A 星上、却选中二十几像素外的 B 星。
+  /// 22 像素比典型 FWHM（三四个像素）宽得多，是为了让手指能点得中；真点偏
+  /// 了，用户还能从下方列表里纠正回来。
+  void _selectNearest(Offset local, Size widgetSize, SkyAnalysis analysis) {
+    final point = containPointToImage(
+      local: local,
+      widgetSize: widgetSize,
+      imageSize: Size(analysis.width.toDouble(), analysis.height.toDouble()),
+    );
+    if (point == null) return;
+    final targets = analysis.numberedTargets;
+    var best = -1;
+    var bestDistance = 22.0;
+    for (var index = 0; index < targets.length; index++) {
+      final star = targets[index];
+      final distance = math.sqrt(
+        math.pow(star.x - point.dx, 2) + math.pow(star.y - point.dy, 2),
+      );
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = index;
+      }
+    }
+    // 点在空处就什么都不选——硬吸到最近的一颗会让用户以为自己点中了。
+    if (best < 0) return;
+    setState(() => _selectedTarget = best);
+  }
+
+  Widget _highlightsCard(SkyAnalysis analysis, SolveResult? solve) {
+    final targets = analysis.numberedTargets;
+    final rejected = targets.where((star) => star.isRejected).length;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 8, 8),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: SectionTitle('图内亮点', Icons.blur_on_rounded),
+                ),
+                if (rejected > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: MetricChip('已剔除', '$rejected'),
+                  ),
+                const _HelpButton(
+                  title: '图内亮点',
+                  message:
+                      '编号与上图里的编号一一对应，点一行就能在图上定位到那一颗。'
+                      '拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星——'
+                      '单张照片无法确认是哪一种。剔除只是把它排除在测光和报告之外，'
+                      '并不表示它一定不是天体，随时可以恢复。',
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: targets.isEmpty
+                ? const Center(
+                    child: Text(
+                      '没有检出可信的亮点。',
+                      style: TextStyle(color: Color(0xFF8192A8)),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    itemCount: targets.length,
+                    itemBuilder: (context, index) =>
+                        _highlightRow(targets, index, solve),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _highlightRow(
+    List<DetectedStar> targets,
+    int index,
+    SolveResult? solve,
+  ) {
+    final star = targets[index];
+    final name = _nearestNamed(star, solve?.namedStars ?? const []);
+    final zeroPoint = solve?.magnitudeZeroPoint;
+    // 标定过就给真实星等，没标定就退回星表星等或图内相对亮度——三者不能混
+    // 着看，所以每行只在末尾写一个数，且用不同的记号区分来源。
+    final magnitude = zeroPoint != null && star.confidence >= 0.25
+        ? 'G ${(star.instrumentalMagnitude + zeroPoint).toStringAsFixed(2)}'
+        : name?.magnitude != null
+            ? '${name!.magnitudeBand} ${name.magnitude!.toStringAsFixed(2)}'
+            : 'Δm ${_relativeMagnitude(star, targets.first).toStringAsFixed(2)}';
+
+    return ListTile(
+      dense: true,
+      selected: index == _selectedTarget,
+      selectedTileColor: kMint.withValues(alpha: 0.10),
+      onTap: () => setState(() => _selectedTarget = index),
+      leading: CircleAvatar(
+        radius: 15,
+        backgroundColor: star.isRejected
+            ? const Color(0x33FF7B8C)
+            : kMint.withValues(alpha: 0.16),
+        child: Text(
+          star.isRejected ? '✕' : '${index + 1}',
+          style: TextStyle(
+            color: star.isRejected ? const Color(0xFFFF7B8C) : kMint,
+            fontSize: 12,
+          ),
+        ),
+      ),
+      title: Text(
+        name?.name ?? (star.isElongated ? '拉长的亮点' : '图内亮点'),
+        style: TextStyle(
+          decoration: star.isRejected ? TextDecoration.lineThrough : null,
+          color: star.isRejected ? const Color(0xFF8192A8) : null,
+        ),
+      ),
+      subtitle: Text(
+        _highlightSubtitle(star, name),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 11),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(magnitude, style: const TextStyle(fontSize: 12)),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            tooltip: star.isRejected ? '恢复这一项' : '剔除这一项',
+            onPressed: () => _toggleRejection(star),
+            icon: Icon(
+              star.isRejected
+                  ? Icons.add_circle_outline
+                  : Icons.do_not_disturb_on_outlined,
+              size: 19,
+              color: star.isRejected ? kMint : const Color(0xFF8192A8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _highlightSubtitle(DetectedStar star, SkyObject? name) {
+    final position =
+        '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)})';
+    if (star.isElongated) {
+      return '长宽比 ${star.axisRatio.toStringAsFixed(1)}:1 · '
+          '可能是卫星、飞机或抖动 · $position';
+    }
+    final category =
+        name?.category.isNotEmpty == true ? '${name!.category} · ' : '';
+    return '$category$position · '
+        '${star.confidenceLabel} ${(star.confidence * 100).toStringAsFixed(0)}%';
+  }
+
+  /// 剔除 / 恢复一项。
+  ///
+  /// 剔除不是删除：`withRejection` 只是把这一项标成「不算数」，它仍在图上和
+  /// 列表里（划掉显示），用户随时能反悔。测光、报告和交给模型的摘要只认没被
+  /// 标的那批——所以剔除一改，重新生成的解读也跟着变。
+  void _toggleRejection(DetectedStar target) {
+    final analysis = _analysis;
+    if (analysis == null) return;
+    setState(() {
+      _analysis = analysis.withRejection(target, !target.isRejected);
+    });
+  }
+
+  /// 亮星与测光。默认折叠——这一张是给想深究的人看的，第一眼看结果的人不
+  /// 需要它。
+  Widget _photometryCard(SkyAnalysis analysis, SolveResult? solve) {
+    final zeroPoint = solve?.magnitudeZeroPoint;
+    final stars = [...analysis.compactSources]
+      ..sort((first, second) =>
+          first.instrumentalMagnitude.compareTo(second.instrumentalMagnitude));
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        leading: const Icon(Icons.straighten_rounded, color: kMint),
+        title: const Text(
+          '亮星与测光',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          zeroPoint == null
+              ? '尚未标定星等零点，只能比较图内相对亮度'
+              : 'Gaia G 近似标定 · 零点 ${zeroPoint.toStringAsFixed(2)}',
+          style: const TextStyle(fontSize: 11),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              MetricChip('可测光点源', '${stars.length}'),
+              MetricChip('点源 FWHM', '${analysis.fwhm.toStringAsFixed(1)} px'),
+              if (solve?.magnitudeScatter != null)
+                MetricChip(
+                  '标定散布',
+                  '±${solve!.magnitudeScatter!.toStringAsFixed(2)} 等',
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (stars.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('没有可用于恒星测光的紧凑点源。'),
+            )
+          else
+            ...stars.take(8).map((star) {
+              final name = _nearestNamed(star, solve?.namedStars ?? const []);
+              final error = star.magnitudeError;
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(name?.name ?? '图内亮点'),
+                subtitle: Text(
+                  '孔径通量 ${star.flux.toStringAsFixed(0)}'
+                  '${error == null ? '' : ' · 星等误差 ±${error.toStringAsFixed(2)}'}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: Text(
+                  zeroPoint != null && star.confidence >= 0.25
+                      ? 'G ${(star.instrumentalMagnitude + zeroPoint).toStringAsFixed(2)}'
+                      : 'Δm ${_relativeMagnitude(star, stars.first).toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              );
+            }),
+          const SizedBox(height: 6),
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  'Gaia G 是近似标定，不含相机光谱响应、白平衡、饱和与后期处理'
+                  '带来的系统误差，只适合与同一台设备的其他照片比较。',
+                  style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+                ),
+              ),
+              _HelpButton(
+                title: '测光误差',
+                message:
+                    '星等误差只算了光子噪声和天空背景估计的误差，不包含相机光谱响应、'
+                    '白平衡、饱和、镜头暗角和图像处理造成的系统误差。结果仅供参考。',
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

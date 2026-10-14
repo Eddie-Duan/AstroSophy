@@ -160,11 +160,25 @@ class DetectedStarsPainter extends CustomPainter {
     required this.analysis,
     required this.namedStars,
     required this.objects,
+    this.selected,
+    this.numbers = true,
   });
 
   final SkyAnalysis analysis;
   final List<SkyObject> namedStars;
   final List<SkyObject> objects;
+
+  /// 当前在下方列表里选中的那一项（`numberedTargets` 的下标）。图上会把它
+  /// 单独框出来——点列表第 10 项和图上的 ⑩ 必须是同一颗星，否则这套编号
+  /// 就白做了。
+  final int? selected;
+
+  /// 是否在圈旁边标编号。
+  final bool numbers;
+
+  /// 图上最多标多少个编号。视场里动辄上百个点源，全标上就成了一片数字，
+  /// 反而认不出哪颗是哪颗。
+  static const _numberLimit = 40;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -179,10 +193,13 @@ class DetectedStarsPainter extends CustomPainter {
     );
     final scaleX = destination.width / analysis.width;
     final scaleY = destination.height / analysis.height;
-    final starPaint = Paint()
-      ..color = kMint
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
+    final scale = (scaleX + scaleY) / 2;
+
+    Offset toCanvas(double x, double y) => Offset(
+          destination.left + x * scaleX,
+          destination.top + y * scaleY,
+        );
+
     final labelStyle = const TextStyle(
       color: Color(0xFFFFDE77),
       fontSize: 10,
@@ -190,22 +207,87 @@ class DetectedStarsPainter extends CustomPainter {
       shadows: [Shadow(color: Colors.black, blurRadius: 5)],
     );
 
-    for (final star in analysis.stars.take(80)) {
-      final point = Offset(
-        destination.left + star.x * scaleX,
-        destination.top + star.y * scaleY,
-      );
-      canvas.drawCircle(point, 3.5, starPaint);
-      for (final named in namedStars) {
-        if ((named.x - star.x).abs() < 0.01 &&
-            (named.y - star.y).abs() < 0.01) {
-          final label = TextPainter(
-            text: TextSpan(text: named.name, style: labelStyle),
-            textDirection: TextDirection.ltr,
-          )..layout(maxWidth: destination.width * 0.55);
-          label.paint(canvas, point + const Offset(5, -13));
-        }
+    final targets = analysis.numberedTargets;
+    for (var index = 0; index < targets.length; index++) {
+      final star = targets[index];
+      final point = toCanvas(star.x, star.y);
+      final isSelected = index == selected;
+
+      // 拉长候选画成椭圆，长轴按检出到的方向。圆点看不出「这是条线还是一
+      // 颗星」，而这两种东西在图上的意义完全不同——一条线可能是飞机或
+      // 卫星，判断该不该留就得看它的方向和长度。
+      final rejected = star.isRejected;
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = rejected ? 1.0 : (isSelected ? 2.0 : 1.2)
+        ..color = rejected
+            ? const Color(0xFF8A5A66)
+            : star.isElongated
+                ? const Color(0xFFFF7B8C)
+                : kMint;
+
+      if (star.isElongated) {
+        final semiMajor = math.max(star.fwhm * star.axisRatio, 8) / 2 * scale;
+        final semiMinor = math.max(star.fwhm, 4) / 2 * scale;
+        canvas.save();
+        canvas.translate(point.dx, point.dy);
+        // 图像坐标 y 轴向下，椭圆参数里的角度也是顺时针为正，两者一致，
+        // 所以这里可以直接用检出到的方向角。
+        canvas.rotate(star.orientation);
+        canvas.drawOval(
+          Rect.fromCenter(
+            center: Offset.zero,
+            width: semiMajor * 2,
+            height: semiMinor * 2,
+          ),
+          paint,
+        );
+        canvas.restore();
+      } else {
+        canvas.drawCircle(point, isSelected ? 8 : 3.5, paint);
       }
+
+      if (rejected) {
+        // 划掉：一颗被剔除的星和一颗没被剔除的星，只靠颜色深浅区分不够，
+        // 屏幕上小尺寸下几乎看不出来。
+        canvas.drawLine(
+          point + const Offset(-5, -5),
+          point + const Offset(5, 5),
+          paint,
+        );
+      }
+      if (isSelected) {
+        canvas.drawCircle(
+          point,
+          star.isElongated ? 12 : 10,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.4
+            ..color = Colors.white.withValues(alpha: 0.9),
+        );
+      }
+
+      if (numbers && index < _numberLimit) {
+        final label = TextPainter(
+          text: TextSpan(
+            text: rejected ? '✕' : '${index + 1}',
+            style: rejected
+                ? labelStyle.copyWith(color: const Color(0xFF8A5A66))
+                : labelStyle,
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        label.paint(canvas, point + const Offset(5, -12));
+      }
+    }
+
+    for (final named in namedStars) {
+      final point = toCanvas(named.x, named.y);
+      final label = TextPainter(
+        text: TextSpan(text: named.name, style: labelStyle),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: destination.width * 0.55);
+      label.paint(canvas, point + const Offset(6, 4));
     }
 
     final objectPaint = Paint()
@@ -213,10 +295,7 @@ class DetectedStarsPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     for (final object in objects) {
-      final point = Offset(
-        destination.left + object.x * scaleX,
-        destination.top + object.y * scaleY,
-      );
+      final point = toCanvas(object.x, object.y);
       canvas.drawCircle(point, 9, objectPaint);
       final label = TextPainter(
         text: TextSpan(text: object.name, style: labelStyle),
@@ -230,7 +309,9 @@ class DetectedStarsPainter extends CustomPainter {
   bool shouldRepaint(covariant DetectedStarsPainter oldDelegate) =>
       !identical(analysis, oldDelegate.analysis) ||
       !identical(namedStars, oldDelegate.namedStars) ||
-      !identical(objects, oldDelegate.objects);
+      !identical(objects, oldDelegate.objects) ||
+      oldDelegate.selected != selected ||
+      oldDelegate.numbers != numbers;
 }
 
 /// 一键解析的进度条。
@@ -303,6 +384,28 @@ class _StarRushPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _StarRushPainter oldDelegate) => false;
+}
+
+/// 把 [BoxFit.contain] 布局里的一次点击换算成图像像素坐标。
+///
+/// 点在图外的留白上返回 null——留白不是「图像的边缘」，把边缘的星点吸过去
+/// 会让用户以为点中了什么。
+Offset? containPointToImage({
+  required Offset local,
+  required Size widgetSize,
+  required Size imageSize,
+}) {
+  if (imageSize.width <= 0 || imageSize.height <= 0) return null;
+  final fitted = applyBoxFit(BoxFit.contain, imageSize, widgetSize);
+  final destination = Alignment.center.inscribe(
+    fitted.destination,
+    Offset.zero & widgetSize,
+  );
+  if (!destination.contains(local)) return null;
+  return Offset(
+    (local.dx - destination.left) * imageSize.width / destination.width,
+    (local.dy - destination.top) * imageSize.height / destination.height,
+  );
 }
 
 /// 星等分布直方图。
