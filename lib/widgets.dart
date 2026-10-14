@@ -231,3 +231,75 @@ class DetectedStarsPainter extends CustomPainter {
       !identical(namedStars, oldDelegate.namedStars) ||
       !identical(objects, oldDelegate.objects);
 }
+
+/// 一键解析的进度条。
+///
+/// 没有直接用 [LinearProgressIndicator]：进度条在已填充的那一段里撒了一片
+/// 星点，进度往前走，星星一点点亮起来。解算动辄要等一两分钟，进度条是这
+/// 段时间里屏幕上唯一在动的东西，做得像「星空正在显影」比一根灰条好。
+class SkyProgressBar extends StatelessWidget {
+  const SkyProgressBar({super.key, required this.value, this.height = 10});
+
+  /// 0–1。
+  final double value;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+        // 进度是跳着报上来的（阶段之间会跳一大格），补间让它滑过去而不是
+        // 生硬地弹一下。
+        tween: Tween<double>(begin: 0, end: value.clamp(0.0, 1.0)),
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeOutCubic,
+        builder: (context, animated, _) => SizedBox(
+          height: height,
+          child: LayoutBuilder(
+            builder: (context, constraints) => ClipRRect(
+              borderRadius: BorderRadius.circular(height),
+              child: Stack(
+                children: [
+                  const Positioned.fill(
+                    child: ColoredBox(color: Color(0xFF1B2739)),
+                  ),
+                  SizedBox(
+                    width: constraints.maxWidth * animated,
+                    height: height,
+                    child: const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF2E8C7A), kMint, Color(0xFFCFF6EA)],
+                        ),
+                      ),
+                      child: CustomPaint(painter: _StarRushPainter()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// 进度条填充段里的星点。位置写死（用下标换算），这样每帧都一样，
+/// 不会出现星星乱抖的噪声感。
+class _StarRushPainter extends CustomPainter {
+  const _StarRushPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 2 || size.height <= 2) return;
+    final paint = Paint()..color = Colors.white.withValues(alpha: 0.75);
+    final faint = Paint()..color = Colors.white.withValues(alpha: 0.35);
+    for (var i = 0; i < 7; i++) {
+      // 黄金比取模，得到一组足够散、又完全确定的横向位置。
+      final x = ((i * 0.618 + 0.11) % 1.0) * size.width;
+      final y = ((i * 0.377 + 0.29) % 1.0) * size.height;
+      final radius = i.isEven ? 1.4 : 1.0;
+      canvas.drawCircle(Offset(x, y), radius, i.isEven ? paint : faint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StarRushPainter oldDelegate) => false;
+}

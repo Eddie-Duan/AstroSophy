@@ -158,7 +158,18 @@ class PlateSolver {
   /// 手机卡住好几秒。
   static const _verificationBudget = 4000;
 
-  static const _minimumInliers = 6;
+  /// 判定一个解成立所需的最少内点数。
+  ///
+  /// 这个数不能定小。一次候选变换由三组对应关系完全确定，剩下的图内星点
+  /// 每落进某颗目录星附近三个像素以内就算一个内点。安全起见算一下：在
+  /// 400×320 的像面上、视场里有二十来颗目录星时，一个候选蒙到六个内点的
+  /// 概率约是千分之二。乘以 [verificationBudget] 四千次候选，一张纯随机的
+  /// 图几乎必然能凑出一个「解」——用户会拿到一张每个星名都标错的图，
+  /// 比解不出来糟糕得多。
+  ///
+  /// 十是量出来的：随机点凑出的假解恰好卡在六个，而真实天区（含只有
+  /// 十七个检出星点的窄视场）都在十七个以上，两边差着两倍有余。
+  static const _minimumInliers = 10;
   static const _strongInliers = 15;
 
   /// 一个候选最多试几种顶点对应。排在前面的是残差小的，正常三角形第一个
@@ -545,20 +556,21 @@ class PlateSolver {
       scatter = 1.4826 * _median(deviations);
     }
 
+    // 星座名称直接用目录里的中文名：「你拍到了猎户座」比「Ori」有用得多。
     final constellations = <String>[];
     final seen = <String>{};
     // 视场中心所在星座排第一，它才是「这张照片拍的是哪个星座」的答案。
     final centreConstellation = catalog.constellationAt(centreRa, centreDec);
     if (centreConstellation != null && !centreConstellation.isEmpty) {
       seen.add(centreConstellation.abbreviation);
-      constellations.add(centreConstellation.abbreviation);
+      constellations.add(centreConstellation.displayName);
     }
     for (final star in catalogStars) {
       if (star.vMagnitude > 5.5) continue;
       final constellation = catalog.constellationOf(star);
       if (constellation == null || constellation.isEmpty) continue;
       if (seen.add(constellation.abbreviation)) {
-        constellations.add(constellation.abbreviation);
+        constellations.add(constellation.displayName);
       }
     }
 

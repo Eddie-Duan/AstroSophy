@@ -8,9 +8,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'analysis.dart';
-import 'astrometry.dart';
 import 'model.dart';
 import 'models.dart';
+import 'pipeline.dart';
+import 'report.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -62,15 +63,60 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   SolveResult? _solve;
   String? _explanation;
   String? _error;
-  bool _busy = false;
-  bool _allowUpload = false;
-  bool _solving = false;
+  List<String> _warnings = const [];
+  bool _running = false;
+  bool _explaining = false;
+
+  /// 是否允许把预览图上传到 Astrometry.net。默认不允许，且要用户在设置里
+  /// 明确勾选过才为真——上传照片是不可逆的动作，不能靠一次性的弹窗确认。
+  bool _uploadAllowed = false;
+
+  /// 模型是不是配好了。没配就不在链路里排「生成解读」这一步，进度条也
+  /// 不会为它留格子。
+  bool _aiConfigured = false;
+
+  bool _astrometryConfigured = false;
+
+  PipelineProgress? _progress;
+
+  /// 后台解算 isolate。第一次用到时才起，之后一直留着——索引建一次要一秒
+  /// 上下，起一次就够。
+  Future<SkyWorker>? _worker;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showOnboarding(firstLaunch: true));
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _reloadSettings();
+      await _showOnboarding(firstLaunch: true);
+    });
   }
+
+  @override
+  void dispose() {
+    _questionController.dispose();
+    _worker?.then((worker) => worker.dispose());
+    super.dispose();
+  }
+
+  /// 把设置里的开关读进内存。设置表单保存之后也要再读一次。
+  Future<void> _reloadSettings() async {
+    try {
+      final upload = await _storage.read(key: 'allowUpload');
+      final astrometry = await _storage.read(key: 'astrometryKey') ?? '';
+      final settings = await _readModelSettings();
+      if (!mounted) return;
+      setState(() {
+        _uploadAllowed = upload == 'true';
+        _astrometryConfigured = astrometry.trim().isNotEmpty;
+        _aiConfigured = settings.hasAnyModel;
+      });
+    } on Exception catch (error) {
+      _showError('无法读取设置：$error');
+    }
+  }
+
+  Future<SkyWorker> _ensureWorker() => _worker ??= SkyWorker.spawn();
 
   Future<void> _showOnboarding({bool firstLaunch = false}) async {
     try {
@@ -117,7 +163,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _solve = null;
         _explanation = null;
         _error = null;
-        _allowUpload = false;
+        _warnings = const [];
       });
     } catch (error) {
       _showError('读取图片失败：$error');
@@ -146,73 +192,74 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _solve = null;
         _explanation = null;
         _error = null;
-        _allowUpload = false;
+        _warnings = const [];
       });
     } catch (error) {
       _showError('读取图片失败：$error');
     }
   }
 
-  Future<void> _analyze() async {
+  /// 一键解析：本地分析 → 本机解算 →（失败且已授权）在线解算 → AI 解读。
+  ///
+  /// 这条链路是「一键」的：用户只需要点一次。跑哪几步由已配置的 API 决定，
+  /// 没配的部分自动跳过，不需要用户先想清楚自己配了什么。
+  Future<void> _run() async {
     final bytes = _bytes;
     if (bytes == null) return;
     setState(() {
-      _busy = true;
+      _running = true;
       _error = null;
+      _warnings = const [];
       _solve = null;
       _explanation = null;
+      _progress = const PipelineProgress(0.01, '正在准备');
     });
     try {
-      final analysis = await compute(analyzeImageBytes, bytes);
-      if (!mounted) return;
-      setState(() => _analysis = analysis);
-    } catch (error) {
-      _showError('图片分析失败：$error');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _solveSky() async {
-    final analysis = _analysis;
-    if (analysis == null) return;
-    final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
-    if (key.isEmpty) {
-      _showError('请先在设置中填写 Astrometry.net API Key。');
-      return;
-    }
-    if (!_allowUpload) {
-      _showError('请先确认授权将预览图上传至 Astrometry.net。');
-      return;
-    }
-    setState(() {
-      _solving = true;
-      _error = null;
-    });
-    try {
-      final result = await AstrometryService.solve(
-        analysis: analysis,
-        apiKey: key,
+      final worker = await _ensureWorker();
+      final settings = await _readModelSettings();
+      final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
+      final outcome = await SkyPipeline(
+        worker: worker,
+        astrometryKey: key,
+        allowUpload: _uploadAllowed,
+        modelSettings: settings,
+      ).run(
+        bytes,
+        question: _questionController.text,
+        onProgress: (progress) {
+          if (mounted) setState(() => _progress = progress);
+        },
       );
       if (!mounted) return;
-      setState(() => _solve = result);
+      setState(() {
+        _analysis = outcome.analysis;
+        _solve = outcome.solve;
+        _explanation = outcome.explanation;
+        _warnings = outcome.warnings;
+      });
     } catch (error) {
-      _showError('天区解算未完成：$error');
+      _showError('解析失败：$error');
     } finally {
-      if (mounted) setState(() => _solving = false);
+      if (mounted) {
+        setState(() {
+          _running = false;
+          _progress = null;
+        });
+      }
     }
   }
 
+  /// 只重跑解读。坐标、测光都是现成的，没必要为了换一句问法重算一遍。
   Future<void> _explain() async {
     final analysis = _analysis;
     if (analysis == null) return;
     final settings = await _readModelSettings();
-    if (settings.lightKey.isEmpty && settings.strongKey.isEmpty) {
+    if (!settings.hasAnyModel) {
       _showError('请先在设置中配置至少一个兼容 OpenAI 接口的模型 API Key。');
       return;
     }
     setState(() {
-      _busy = true;
+      _explaining = true;
       _error = null;
     });
     try {
@@ -222,53 +269,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         lightModel: settings.lightModel,
         strongKey: settings.strongKey,
         strongModel: settings.strongModel,
-        report: _report(analysis, _solve),
+        report: buildAgentReport(analysis, _solve),
         question: _questionController.text,
       );
       if (mounted) setState(() => _explanation = text);
     } catch (error) {
       _showError('模型解读失败：$error');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _explaining = false);
     }
   }
-
-  Map<String, Object?> _report(SkyAnalysis analysis, SolveResult? solve) => {
-        'quality': analysis.quality,
-        'detected_stars': analysis.compactSources.length,
-        'detected_sources': analysis.stars.length,
-        'compact_sources': analysis.compactSources.length,
-        'elongated_candidates': analysis.streakCandidates.length,
-        'noise_fraction': analysis.noise,
-        'background_visual_index': analysis.backgroundIndex,
-        'diagnostics': analysis.diagnostics,
-        'solved': solve != null,
-        'center_ra_deg': solve?.centerRa,
-        'center_dec_deg': solve?.centerDec,
-        'catalog_stars': solve?.namedStars
-            .map(
-              (object) => {
-                'name': object.name,
-                'catalog_type': object.category,
-                'ra_deg': object.ra,
-                'dec_deg': object.dec,
-                'gaia_g_magnitude': object.magnitude,
-              },
-            )
-            .toList(),
-        'deep_sky_objects': solve?.deepSkyObjects
-            .map(
-              (object) => {
-                'name': object.name,
-                'catalog_type': object.category,
-                'ra_deg': object.ra,
-                'dec_deg': object.dec,
-              },
-            )
-            .toList(),
-        'catalog_warning': solve?.catalogWarning,
-        'photometry_scatter_mag': solve?.magnitudeScatter,
-      };
 
   Future<ModelSettings> _readModelSettings() async => ModelSettings(
         baseUrl:
@@ -285,28 +295,102 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final current = await _readModelSettings();
     final astrometryKey = await _storage.read(key: 'astrometryKey') ?? '';
     if (!mounted) return;
-    final form = SettingsForm(
-      current: current,
-      astrometryKey: astrometryKey,
-      storage: _storage,
-    );
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: kPanel,
-      builder: (_) => form,
+      builder: (_) => SettingsForm(
+        current: current,
+        astrometryKey: astrometryKey,
+        allowUpload: _uploadAllowed,
+        storage: _storage,
+      ),
     );
+    await _reloadSettings();
+  }
+
+  /// 上传授权放在设置里，不是每张图都问一遍。
+  ///
+  /// 每次解析前再弹一次勾选框，用户会条件反射地点「同意」——那种同意没有
+  /// 意义。放进设置里、默认关闭、并且把「会上传预览图」写进按钮下面那行
+  /// 提示，用户才有机会真的看清楚自己授权了什么。
+  Widget _runButton() {
+    final progress = _progress;
+    if (_running && progress != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      progress.stage,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    '${(progress.fraction * 100).round()}%',
+                    style: const TextStyle(
+                      color: kMint,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SkyProgressBar(value: progress.fraction),
+            ],
+          ),
+        ),
+      );
+    }
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: _run,
+            icon: const Icon(Icons.auto_awesome),
+            label: Text(_analysis == null ? '一键解析' : '重新解析'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _runHint,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+        ),
+      ],
+    );
+  }
+
+  /// 按钮下面那行小字：这一次点下去到底会跑哪几步。
+  ///
+  /// 「配了几个 Key、分别管什么用」是这个 APP 里最容易搞混的事。与其让用户
+  /// 自己回忆，不如每次都写清楚，尤其是哪一步会把照片发出去。
+  String get _runHint {
+    final sharesUpload = _astrometryConfigured && _uploadAllowed;
+    final steps = <String>[
+      '本机分析',
+      '本机解算天区',
+      if (sharesUpload) '必要时在线解算',
+      if (_aiConfigured) 'AI 解读',
+    ];
+    final tail = sharesUpload
+        ? '；只有本机解算不出来时才会把预览图上传到 Astrometry.net'
+        : '；全程不上传图片';
+    return '将执行：${steps.join(' → ')}$tail。';
   }
 
   void _showError(String message) {
     if (!mounted) return;
     setState(() => _error = message);
-  }
-
-  @override
-  void dispose() {
-    _questionController.dispose();
-    super.dispose();
   }
 
   @override
@@ -351,18 +435,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const SizedBox(height: 20),
                 if (_bytes == null) _emptyPicker() else _imagePreview(),
                 const SizedBox(height: 14),
-                if (_bytes != null)
-                  FilledButton.icon(
-                    onPressed: _busy || _solving ? null : _analyze,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.auto_awesome),
-                    label: Text(_busy ? '正在分析…' : '本地分析星图'),
-                  ),
+                if (_bytes != null) _runButton(),
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   Card(
@@ -374,6 +447,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ),
                     ),
                   ),
+                ],
+                if (_warnings.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  for (final warning in _warnings) _warningCard(warning),
                 ],
                 if (analysis != null) ...[
                   const SizedBox(height: 18),
@@ -717,52 +794,71 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SectionTitle('天区识别', Icons.public_rounded),
-              if (solve == null) ...[
-                const Row(
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  SectionTitle('天区识别', Icons.public_rounded),
+                  _HelpButton(
+                    title: '天区识别与隐私',
+                    message:
+                        '优先在手机本机解算，不上传任何图片。本机解算不出来时，'
+                        '如果已在设置里授权，才会把分析预览图上传到 Astrometry.net。'
+                        '不解算也能查看本机星点与画质分析。',
+                  ),
+                ],
+              ),
+              if (solve == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: Text(
+                    '还没有解开这片天区。点上面的「一键解析」；'
+                    '如果本机星点太少或视场太窄，需要在设置里填写 '
+                    'Astrometry.net API Key 并授权上传，交给在线解算。',
+                  ),
+                )
+              else ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
-                    Expanded(child: SizedBox()),
-                    _HelpButton(
-                      title: '天区解算与隐私',
-                      message:
-                          '天区解算使用 Astrometry.net 在线服务，会上传分析预览图。'
-                          '只有勾选同意后才会发送；取消勾选时不会上传。'
-                          '不解算时仍可查看本机星点与画质分析。',
+                    MetricChip(
+                      '解算方式',
+                      solve.source == SolveSource.local ? '本机离线' : 'Astrometry.net',
                     ),
+                    if (solve.constellations.isNotEmpty)
+                      MetricChip('星座', solve.constellations.first),
                   ],
                 ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: _allowUpload,
-                  onChanged: (value) => setState(() => _allowUpload = value ?? false),
-                  title: const Text('我同意将预览图上传至 Astrometry.net'),
-                  controlAffinity: ListTileControlAffinity.leading,
-                ),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _solving ? null : _solveSky,
-                    icon: _solving
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.travel_explore),
-                    label: Text(_solving ? '正在解算…' : '解算天球位置并匹配星表'),
-                  ),
-                ),
-              ] else ...[
                 const SizedBox(height: 10),
                 Text(
                   '中心 RA ${formatRa(solve.centerRa)}  ·  Dec ${solve.centerDec.toStringAsFixed(4)}°',
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text(
-                  '视场角比例 ${solve.arcsecPerPixel.toStringAsFixed(2)}″/px'
-                  '   ·   Gaia 匹配 ${solve.matchedStars.length} 颗',
+                  '像素比例 ${solve.arcsecPerPixel.toStringAsFixed(2)}″/px'
+                  '   ·   视场对角 ${solve.fieldOfViewDegrees.toStringAsFixed(2)}°',
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '匹配 ${solve.matchedCount == 0 ? solve.matchedStars.length : solve.matchedCount} 颗星'
+                  '${solve.rotationDegrees == 0 ? '' : '   ·   画面旋转 ${solve.rotationDegrees.toStringAsFixed(1)}°'}',
                 ),
               ],
+            ],
+          ),
+        ),
+      );
+
+  Widget _warningCard(String message) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.info_outline, size: 18, color: Color(0xFFFFDE77)),
+              const SizedBox(width: 10),
+              Expanded(child: Text(message, style: const TextStyle(fontSize: 13))),
             ],
           ),
         ),
@@ -832,8 +928,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.tonal(
-                  onPressed: _busy ? null : _explain,
-                  child: const Text('基于测量结果生成解读'),
+                  onPressed: _explaining ? null : _explain,
+                  child: Text(_explaining ? '正在生成解读…' : '基于测量结果生成解读'),
                 ),
               ),
               if (_explanation != null) ...[
@@ -1021,11 +1117,13 @@ class SettingsForm extends StatefulWidget {
     super.key,
     required this.current,
     required this.astrometryKey,
+    required this.allowUpload,
     required this.storage,
   });
 
   final ModelSettings current;
   final String astrometryKey;
+  final bool allowUpload;
   final FlutterSecureStorage storage;
 
   @override
@@ -1042,6 +1140,7 @@ class _SettingsFormState extends State<SettingsForm> {
   bool _obscureLight = true;
   bool _obscureStrong = true;
   bool _obscureAstrometry = true;
+  late bool _allowUpload = widget.allowUpload;
 
   static const _apiTemplates = <_AgentApiTemplate>[
     _AgentApiTemplate(
@@ -1087,6 +1186,8 @@ class _SettingsFormState extends State<SettingsForm> {
       return;
     }
     final values = {
+      // 授权是个开关不是密钥，空值也照样写进去。
+      'allowUpload': _allowUpload ? 'true' : 'false',
       'modelBaseUrl': _baseUrl.text.trim(),
       'lightKey': _lightKey.text.trim(),
       'lightModel': _lightModel.text.trim(),
@@ -1096,7 +1197,9 @@ class _SettingsFormState extends State<SettingsForm> {
     };
     try {
       for (final entry in values.entries) {
-        if (entry.value.isEmpty) {
+        if (entry.key == 'allowUpload') {
+          await widget.storage.write(key: entry.key, value: entry.value);
+        } else if (entry.value.isEmpty) {
           await widget.storage.delete(key: entry.key);
         } else {
           await widget.storage.write(key: entry.key, value: entry.value);
@@ -1216,8 +1319,20 @@ class _SettingsFormState extends State<SettingsForm> {
                 obscure: _obscureAstrometry,
                 toggle: () => setState(() => _obscureAstrometry = !_obscureAstrometry),
               ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _allowUpload,
+                onChanged: (value) => setState(() => _allowUpload = value ?? false),
+                title: const Text('允许在必要时把分析预览图上传至 Astrometry.net'),
+                subtitle: const Text(
+                  '默认关闭。手机本机解算失败、且这张图确实需要天区坐标时才会用到；'
+                  '不上传就只用本机星表。',
+                  style: TextStyle(fontSize: 12, color: Color(0xFFA6B5C8)),
+                ),
+              ),
               const Text(
-                '密钥保存在本机安全存储。模型只接收测量摘要；天区解算会上传预览图。',
+                '密钥保存在本机安全存储。模型只接收测量摘要。',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 16),

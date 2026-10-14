@@ -124,7 +124,9 @@ void main() {
       expect(agreement, greaterThan(0.9),
           reason: '只有 ${(agreement * 100).toStringAsFixed(0)}% 的星点落回目录星');
 
-      expect(result.constellations, contains('Ori'));
+      // 星座给的是给人看的中文名，不是 IAU 缩写——「你拍到了猎户座」
+      // 比「Ori」有用。
+      expect(result.constellations, contains('猎户座'));
       expect(result.matchedCount, greaterThanOrEqualTo(15));
     });
 

@@ -358,5 +358,8 @@ class Constellation {
   /// 连线，每一段是两个 HIP 号。
   final List<(int, int)> lines;
 
+  /// 界面上显示的名字。中文名缺失时退回缩写——缩写至少还能查。
+  String get displayName => chinese.isEmpty ? abbreviation : chinese;
+
   bool get isEmpty => abbreviation.isEmpty;
 }
