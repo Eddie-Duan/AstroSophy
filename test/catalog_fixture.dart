@@ -101,7 +101,7 @@ SkyAnalysis synthesiseField({
     maskRegions: const [],
     isLikelyStarfield: true,
     starfieldConfidence: 1,
-    flatAreaFraction: 0,
+    brightFlatFraction: 0,
   );
 }
 

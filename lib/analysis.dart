@@ -80,7 +80,7 @@ class SkyAnalysis {
     required this.maskRegions,
     required this.isLikelyStarfield,
     required this.starfieldConfidence,
-    required this.flatAreaFraction,
+    required this.brightFlatFraction,
   });
 
   final int width;
@@ -118,7 +118,7 @@ class SkyAnalysis {
   final double starfieldConfidence;
 
   /// 近乎平坦（没有噪声起伏）的像素占比。截图、纯色背景会非常高。
-  final double flatAreaFraction;
+  final double brightFlatFraction;
 
   /// 参与星表匹配和测光的紧凑点源（排除拉长候选和用户剔除项）。
   List<DetectedStar> get compactSources => stars
@@ -176,7 +176,7 @@ class SkyAnalysis {
         maskRegions: maskRegions,
         isLikelyStarfield: isLikelyStarfield,
         starfieldConfidence: starfieldConfidence,
-        flatAreaFraction: flatAreaFraction,
+        brightFlatFraction: brightFlatFraction,
       );
 
   static bool _sameSource(DetectedStar a, DetectedStar b) =>
@@ -197,7 +197,7 @@ class SkyAnalysis {
         'mask_regions': maskRegions.map((region) => region.toJson()).toList(),
         'is_likely_starfield': isLikelyStarfield,
         'starfield_confidence': starfieldConfidence,
-        'flat_area_fraction': flatAreaFraction,
+        'bright_flat_fraction': brightFlatFraction,
       };
 
   /// 历史记录里只存索引信息，图片从磁盘重新读，不在 JSON 里塞 base64。
@@ -231,7 +231,7 @@ class SkyAnalysis {
             .toList(growable: false),
         isLikelyStarfield: json['is_likely_starfield'] != false,
         starfieldConfidence: _asDouble(json['starfield_confidence']),
-        flatAreaFraction: _asDouble(json['flat_area_fraction']),
+        brightFlatFraction: _asDouble(json['bright_flat_fraction']),
       );
 
   /// 对外唯一入口：给一份图片字节，返回分析结果。
@@ -258,14 +258,12 @@ class SkyAnalysis {
 
     var classified = _classify(
       _findComponents(gray, width, height, threshold.primary, grid),
-      grid,
     );
     // 标准阈值下点源太少时，降低阈值再试一次：手机夜景常见的欠曝照片能多救回一些星。
     var usedRelaxedThreshold = false;
     if (classified.stars.length < 8) {
       final relaxed = _classify(
         _findComponents(gray, width, height, threshold.relaxed, grid),
-        grid,
       );
       if (relaxed.stars.length > classified.stars.length) {
         classified = relaxed;
@@ -273,17 +271,35 @@ class SkyAnalysis {
       }
     }
 
-    final suppressed = _suppressTextClusters(classified.stars);
-    final stars = [...classified.stars, ...classified.trails]
+    // 测光要等分类全部定下来、整帧的 PSF 有得估了再做，所以放在这里而不是
+    // 分类过程里。孔径半径整帧统一，理由写在 [_measureAperture]。
+    final apertureRadius = _apertureRadiusOf(classified.stars);
+    final compact = <DetectedStar>[
+      for (final component in classified.stars)
+        _toStar(
+          component,
+          grid,
+          aperture: apertureRadius > 0
+              ? _measureAperture(component, grid, gray, width, height,
+                  apertureRadius)
+              : null,
+        ),
+    ];
+    final streaks = <DetectedStar>[
+      for (final component in classified.trails) _toStar(component, grid),
+    ];
+
+    final suppressed = _suppressTextRows([...compact, ...streaks]);
+    final stars = [...compact, ...streaks]
         .where((star) => !suppressed.contains(star))
         .toList(growable: false)
       ..sort((a, b) => a.instrumentalMagnitude.compareTo(b.instrumentalMagnitude));
 
-    final flatAreaFraction = _flatAreaFraction(gray, width, height);
+    final brightFlatFraction = _brightFlatFraction(gray, width, height);
     final starfield = _judgeStarfield(
       stars: stars,
       maskRegions: classified.regions,
-      flatAreaFraction: flatAreaFraction,
+      brightFlatFraction: brightFlatFraction,
       width: width,
       height: height,
     );
@@ -294,8 +310,12 @@ class SkyAnalysis {
     for (final region in classified.regions) {
       _fillMask(mask, width, height, region.x, region.y, region.width, region.height);
     }
+    // 掩膜按笔画的实际大小铺：一像素宽、几十像素高的笔画用 8×8 的小方块
+    // 盖不住，处理图上会留下一条线。
     for (final star in suppressed) {
-      _fillMask(mask, width, height, star.x - 4, star.y - 4, 8, 8);
+      final reach = math.max(star.fwhm * star.axisRatio, 5.0) / 2 + 2;
+      _fillMask(mask, width, height, star.x - reach, star.y - reach,
+          reach * 2, reach * 2);
     }
     var maskedPixels = 0;
     for (var i = 0; i < mask.length; i++) {
@@ -325,6 +345,7 @@ class SkyAnalysis {
         saturatedFraction: saturatedFraction,
         fwhm: fwhm,
         usedRelaxedThreshold: usedRelaxedThreshold,
+        suppressedText: suppressed.length,
       ),
       preview: Uint8List.fromList(imglib.encodeJpg(image, quality: 92)),
       processedPreview: _renderProcessedPreview(gray, width, height, grid, mask),
@@ -333,7 +354,7 @@ class SkyAnalysis {
       maskRegions: classified.regions,
       isLikelyStarfield: starfield.isStarfield,
       starfieldConfidence: starfield.confidence,
-      flatAreaFraction: flatAreaFraction,
+      brightFlatFraction: brightFlatFraction,
     );
   }
 }
@@ -708,56 +729,70 @@ void _computeMoments(
 class _ClassifiedField {
   _ClassifiedField(this.stars, this.trails, this.regions);
 
-  final List<DetectedStar> stars;
-  final List<DetectedStar> trails;
+  final List<_Component> stars;
+  final List<_Component> trails;
   final List<MaskRegion> regions;
 }
 
-/// 形态分类：紧凑点源 → 星点；规则细长 → 拉线候选；其余大块/不规则 → 非星空区域。
-_ClassifiedField _classify(List<_Component> components, _BackgroundGrid grid) {
-  final stars = <DetectedStar>[];
-  final trails = <DetectedStar>[];
+/// 形态分类：紧凑点源 → 星点；细长均匀 → 拉线候选；其余 → 非星空区域。
+///
+/// 只做形态判断，不做测光——测光要等整帧的点扩散函数估出来之后统一做，
+/// 见 [_measureAperture]。
+_ClassifiedField _classify(List<_Component> components) {
+  final stars = <_Component>[];
+  final trails = <_Component>[];
   final regions = <MaskRegion>[];
 
   for (final component in components) {
     if (component.area < 3 || component.flux <= 0) continue;
 
-    final spread = component.spread;
-    final fill = component.fillRatio;
-    final axisRatio = component.axisRatio;
-
-    // 面积或尺度远超星点：月亮、路灯、被照亮的建筑、整行文字糊在一起。
-    if (component.area > 400 || spread > 64) {
-      regions.add(_regionOf(component, MaskKind.blob));
+    // 尺度远超星点：月亮、路灯、被照亮的建筑，以及表格、栏杆这类
+    // 横跨大半个画面的长结构。
+    if (component.area > 400 || component.spread > 64) {
+      regions.add(_regionOf(component, _kindOf(component)));
       continue;
     }
 
-    if (spread <= 8) {
-      // 填充率太低说明是一圈细笔画（文字轮廓、图标），不是星点。
-      if (fill < 0.30) {
-        regions.add(_regionOf(component, MaskKind.text));
-        continue;
-      }
-      // 中心集中度低、峰均比接近 1 的均匀亮块（实心单元格、纯色标签）不算星点。
-      if (component.concentration < 0.30 && component.peakRatio < 1.35) {
-        regions.add(_regionOf(component, MaskKind.text));
-        continue;
-      }
-      stars.add(_toStar(component, grid));
+    // 星点要有明确的核心，或者足够紧凑。
+    //
+    // 判「有没有核心」比判「面积够不够小」可靠得多：同一颗星亮一倍，过阈
+    // 面积就大一圈，卡面积的写法会让一颗星随着曝光不同、时有时无地被划成
+    // 非星空；而峰值和均值的比例几乎不随曝光变。反过来，印刷文字的笔画和
+    // 实心色块通体一个亮度，峰值和均值几乎相等，正好落在另一头。
+    //
+    // 硬边的小亮块（手机样张里不少星点就是这样，没有高斯尾巴）峰值和均值
+    // 一样，但中心集中度很高，靠 [concentration] 兜住；真正均匀铺开的色块
+    // 两个条件都不满足。
+    final hasCore = component.peakRatio >= 1.35;
+    final compact = component.concentration >= 0.30;
+
+    if (component.axisRatio < 2.2 && (hasCore || compact)) {
+      stars.add(component);
       continue;
     }
 
-    // 细长结构：又直又均匀的是拉线（拖线/卫星/飞机），
-    // 填充率低或宽度不均的是表格边框、电缆这类伪影。
-    if (axisRatio >= 2.2 && fill >= 0.5 && component.thinness <= 6) {
-      trails.add(_toStar(component, grid));
-    } else {
-      regions.add(
-        _regionOf(component, fill < 0.5 ? MaskKind.text : MaskKind.line),
-      );
+    // 细长又均匀的是拖线（卫星、飞机、赤道仪抖动）。填充率低或者太粗的
+    // 细长结构不是拖线，是表格边框、电缆、栏杆这一类。
+    if (component.axisRatio >= 2.2 &&
+        component.fillRatio >= 0.5 &&
+        component.thinness <= 6) {
+      trails.add(component);
+      continue;
     }
+
+    regions.add(_regionOf(component, _kindOf(component)));
   }
   return _ClassifiedField(stars, trails, regions);
+}
+
+/// 给一块非星空区域定个说得通的类型，UI 上据此换提示措辞。
+MaskKind _kindOf(_Component component) {
+  // 细长的，或者填得很稀的（表格网格、大号文字笔画）：是线状结构。
+  if (component.axisRatio >= 2.2 && component.thinness <= 6) return MaskKind.line;
+  if (component.fillRatio < 0.25) return MaskKind.line;
+  // 成片的实心亮块：月亮、路灯、纯色高亮框。
+  if (component.area > 60) return MaskKind.blob;
+  return MaskKind.text;
 }
 
 MaskRegion _regionOf(_Component component, MaskKind kind) => MaskRegion(
@@ -768,18 +803,154 @@ MaskRegion _regionOf(_Component component, MaskKind kind) => MaskRegion(
       kind: kind,
     );
 
-DetectedStar _toStar(_Component component, _BackgroundGrid grid) {
-  final flux = component.flux;
+/// 圆孔径测光的产物。
+/// 假定的传感器增益（每光子对应多少灰度）。
+///
+/// 灰度是 0–1 的浮点，但来源是 8 位量化，所以 1/255 就是它的量化步长。
+/// 用这个数把「灰度」换算成「相对光子数」，天体本身的光子噪声才有量纲
+/// 可算。绝对测光需要用相机的实际增益重新标定，文档里也是这么写的。
+const _assumedGain = 255.0;
+
+class _Aperture {
+  const _Aperture(this.flux, this.variance, this.radius);
+
+  /// 扣掉天空之后的孔内总通量（相对单位）。
+  final double flux;
+
+  /// 通量的一倍方差，翻成星等误差就是 1.0857·√variance / flux。
+  final double variance;
+
+  final double radius;
+}
+
+/// 对一颗星做圆孔径测光。
+///
+/// **为什么不直接用阈值连通域的通量**：阈值是绝对的（局部背景 + kσ），
+/// 由整帧的短轴 σ 给出一个统一的孔径半径。
+///
+/// 取中位数而不是平均值：视场里总混着几块没被掩膜吃掉的碎块，平均值会被
+/// 它们拽偏，中位数不会。σ 太小或太大的一律不采信——那是噪声碎块和糊成
+/// 一片的星团，不是这个视场的 PSF。
+double _apertureRadiusOf(List<_Component> components) {
+  final sigmas = <double>[];
+  for (final component in components) {
+    final sigma = component.minorSigma;
+    if (sigma > 0.5 && sigma < 8.0) sigmas.add(sigma);
+  }
+  if (sigmas.isEmpty) return 0;
+  sigmas.sort();
+  final middle = sigmas.length ~/ 2;
+  final sigma = sigmas.length.isOdd
+      ? sigmas[middle]
+      : (sigmas[middle - 1] + sigmas[middle]) / 2;
+  return (1.5 * 2.355 * sigma).clamp(2.5, 18.0);
+}
+
+/// 星越亮，过阈的连通域就越大。十倍的亮度差会被量成十几倍的通量差，而且
+/// 放大倍数还跟着背景亮度和局部噪声漂移。星等都是相对量，这种系统性偏差
+/// 会原样变成错误的星等差——比随机误差糟糕得多，因为它不会因为多拍几张
+/// 就抵消掉。
+///
+/// 所以另开一圈固定角半径的圆孔径：孔外再套一圈环带，只取环带像素的
+/// 中位数当天空值，孔内的像素才计入通量。孔径半径由整帧的 FWHM 决定
+/// （见 [_apertureRadiusOf]），取 1.5 倍 FWHM——对高斯来说这一圈已经收到
+/// 99% 以上，再往外开只是白白多收噪声。
+///
+/// 半径是**整帧统一**的，不是每颗星各算各的。这一点很关键：逐颗星从自己
+/// 的过阈连通域反推 σ，亮星的连通域被阈值多切出一圈，推出来的 σ 就偏大，
+/// 孔径跟着变大，通量又被系统性地抬高——正好抵消掉改用孔径测光想消除的
+/// 那个偏差。同一个视场里所有星的 PSF 是同一个，孔径也就该是同一个。
+///
+/// 误差预算用标准的三项：天体光子噪声、天空光子噪声按孔径面积缩放、
+/// 以及「天空值本身估得不准」带来的那一项。像素值是相对单位不是电子数，
+/// 所以这里给出的是相对不确定度，文档里也是这么写的。
+_Aperture _measureAperture(
+  _Component component,
+  _BackgroundGrid grid,
+  Float32List gray,
+  int width,
+  int height,
+  double radius,
+) {
+  final annulusInner = radius + 1.5;
+  final annulusOuter = radius + 6.0;
+  final cx = component.centroidX;
+  final cy = component.centroidY;
+
+  final x0 = math.max(0, (cx - annulusOuter).floor());
+  final x1 = math.min(width - 1, (cx + annulusOuter).ceil());
+  final y0 = math.max(0, (cy - annulusOuter).floor());
+  final y1 = math.min(height - 1, (cy + annulusOuter).ceil());
+
+  final samples = <double>[];
+  for (var y = y0; y <= y1; y++) {
+    for (var x = x0; x <= x1; x++) {
+      final dx = x - cx;
+      final dy = y - cy;
+      final squared = dx * dx + dy * dy;
+      if (squared > annulusOuter * annulusOuter) continue;
+      if (squared < annulusInner * annulusInner) continue;
+      samples.add(gray[y * width + x]);
+    }
+  }
+
+  double sky;
+  double skyVariance;
+  if (samples.isEmpty) {
+    // 环带被画面边缘切光了（贴着角的星），退回背景面的局部值。
+    sky = grid.backgroundAt(cx, cy);
+    skyVariance = grid.noiseAt(cx, cy) * grid.noiseAt(cx, cy);
+  } else {
+    samples.sort();
+    sky = _medianSorted(samples);
+    var sum = 0.0;
+    for (final value in samples) {
+      sum += (value - sky) * (value - sky);
+    }
+    skyVariance = samples.length > 1 ? sum / (samples.length - 1) : 0;
+  }
+
+  var flux = 0.0;
+  var objectPhotons = 0.0;
+  var area = 0;
+  final squaredRadius = radius * radius;
+  for (var y = y0; y <= y1; y++) {
+    for (var x = x0; x <= x1; x++) {
+      final dx = x - cx;
+      final dy = y - cy;
+      if (dx * dx + dy * dy > squaredRadius) continue;
+      final value = gray[y * width + x];
+      flux += value - sky;
+      objectPhotons += math.max(value - sky, 0);
+      area++;
+    }
+  }
+  if (area == 0) return _Aperture(0, 0, radius);
+
+  // 误差预算三项，单位统一在灰度平方上：
+  //   1. 天体自身的光子噪声——灰度来源是 8 位量化，除以「每光子多少灰度」
+  //      就得到光子数；JPEG/PNG 的 8 位量化让这个换算在量级上是站得住的。
+  //   2. 天空光子噪声，按孔径面积缩放。
+  //   3. 天空值本身估得不准带来的那一项，随孔径面积和环带样本数变化。
+  // 这里给出的是相对不确定度；要做绝对测光得用传感器的实际增益重新标定。
+  final skySamples = math.max(samples.length, 1);
+  final variance = objectPhotons / _assumedGain +
+      area * skyVariance * (1 + area / skySamples);
+  return _Aperture(flux, variance, radius);
+}
+
+DetectedStar _toStar(_Component component, _BackgroundGrid grid, {_Aperture? aperture}) {
+  final flux = aperture?.flux ?? component.flux;
   final magnitude = flux <= 0 ? 30.0 : -2.5 * math.log(flux) / math.ln10;
   final sigma = grid.noiseAt(component.centroidX, component.centroidY);
 
-  // 信噪比按“总通量 / 孔径内噪声”估，比原来的经验式更接近真实测光。
-  final noiseFlux = sigma * math.sqrt(component.area.toDouble());
-  final snr = noiseFlux <= 0 ? 0.0 : flux / noiseFlux;
+  // 信噪比按「通量 / 通量的一倍标准差」估。走圆孔径时用孔径自己的误差预算，
+  // 没有孔径（拉线）时退回「局部噪声 × 根号面积」。
+  final fluxError = aperture != null
+      ? math.sqrt(math.max(aperture.variance, 0.0))
+      : math.sqrt(math.max(component.flux, 0.0) + component.area * sigma * sigma);
+  final snr = fluxError <= 0 ? 0.0 : flux / fluxError;
 
-  // 天体像素按增益 1（相对单位）估光子噪声；这里只用于给星等配误差棒，
-  // 不代表真实电子数，文档里已说明是相对不确定度。
-  final fluxError = math.sqrt(math.max(flux, 0.0) + component.area * sigma * sigma);
   final axisRatio = component.axisRatio;
   final shapePenalty = math.sqrt(math.min(1.0, 2 / math.max(axisRatio, 1.0)));
   final concentrated = component.concentration.clamp(0.0, 1.0);
@@ -801,76 +972,97 @@ DetectedStar _toStar(_Component component, _BackgroundGrid grid) {
   );
 }
 
-/// 文字/表格抑制：文字笔画亮度几乎一致，而且沿基线排成一行。
-/// 真星空里的恒星亮度按幂律分布，也不会整齐共线。
-/// 两个条件同时成立才判定为文字，避免把疏散星团误伤。
-Set<DetectedStar> _suppressTextClusters(List<DetectedStar> stars) {
+/// 一行文字最少要有几个笔画才值得动手。
+const _textRowMinimum = 5;
+
+/// 同一行文字的竖直中心最多能差多少像素。真实的一行字基线对齐，
+/// 字形的重心也就差几个像素；差得更多的对象不该算作同一行。
+const _textRowTolerance = 6.0;
+
+/// 同一行相邻笔画之间允许的最大水平间隔。整行字里最宽的通常是词间距，
+/// 再大就该断开成两串了。
+const _textStrokeGap = 24.0;
+
+/// 文字与图标的抑制。
+///
+/// 单个笔画和一颗星几乎没法区分：都小、都亮、都圆头圆脑，形态分类器在
+/// 这里使不上劲。文字的特征不在单笔画上，而在**排列**上——同一行字的
+/// 笔画高度接近、通量接近、沿基线排开。真实星空是随机分布的，不会出现
+/// 这种秩序。
+///
+/// 所以按「行」判：先把对象按竖直中心归行，再在行内按 x 找出间距连续的
+/// 一段，一段够长、而且通量足够均匀，就整段判为文字。
+///
+/// 之所以连拉线候选项一起过滤：一根一像素宽、十几像素高的笔画，形态上
+/// 和卫星拖线是同一类，只看单体会被报成拖线。但卫星一次只来一条，不会
+/// 在一条水平线上排成整齐的一串。
+Set<DetectedStar> _suppressTextRows(List<DetectedStar> detections) {
   final suppressed = <DetectedStar>{};
-  if (stars.length < 6) return suppressed;
+  if (detections.length < _textRowMinimum) return suppressed;
 
-  const radius = 14.0;
-  for (final star in stars) {
-    final group = <DetectedStar>[
-      star,
-      ...stars.where(
-        (other) =>
-            !identical(other, star) &&
-            (other.x - star.x).abs() <= radius &&
-            (other.y - star.y).abs() <= radius,
-      ),
-    ];
-    if (group.length < 6) continue;
+  final ordered = [...detections]..sort((a, b) => a.y.compareTo(b.y));
+  final rows = <List<DetectedStar>>[];
+  for (final star in ordered) {
+    if (rows.isNotEmpty &&
+        (star.y - rows.last.first.y).abs() <= _textRowTolerance) {
+      rows.last.add(star);
+    } else {
+      rows.add(<DetectedStar>[star]);
+    }
+  }
 
-    final fluxValues = group.map((item) => item.flux).toList();
-    final mean = fluxValues.reduce((a, b) => a + b) / fluxValues.length;
-    if (mean <= 0) continue;
-    final variance = fluxValues
-            .map((value) => (value - mean) * (value - mean))
-            .reduce((a, b) => a + b) /
-        fluxValues.length;
-    // 亮度几乎一致的密集点簇：文字。恒星簇的相对标准差通常远大于 0.25。
-    if (math.sqrt(variance) / mean > 0.18) continue;
-    if (!_isCollinear(group)) continue;
-    suppressed.addAll(group);
+  for (final row in rows) {
+    if (row.length < _textRowMinimum) continue;
+    row.sort((a, b) => a.x.compareTo(b.x));
+    var start = 0;
+    for (var i = 1; i <= row.length; i++) {
+      if (i < row.length && row[i].x - row[i - 1].x <= _textStrokeGap) continue;
+      final run = row.sublist(start, i);
+      start = i;
+      if (run.length < _textRowMinimum) continue;
+      // 跨度太短说明只是碰巧在竖直方向挤到一起，不是一行字。
+      if (run.last.x - run.first.x < _textRowMinimum * 4) continue;
+      if (!_looksLikeUniformInk(run)) continue;
+      suppressed.addAll(run);
+    }
   }
   return suppressed;
 }
 
-/// 判断一簇点是否共线（拟合直线的横向残差很小、沿主轴铺得够长）。
-bool _isCollinear(List<DetectedStar> group) {
-  if (group.length < 6) return false;
-  var meanX = 0.0;
-  var meanY = 0.0;
-  for (final star in group) {
-    meanX += star.x;
-    meanY += star.y;
+/// 同一行字用的是一支笔，笔画通量几乎一样。
+///
+/// 恒星亮度按幂律分布，即使碰巧排成一行，通量的相对离散度也远大于这个
+/// 阈值——这一条是「整行字」和「一行亮星」之间最可靠的分界。
+bool _looksLikeUniformInk(List<DetectedStar> run) {
+  var mean = 0.0;
+  for (final star in run) {
+    mean += star.flux;
   }
-  meanX /= group.length;
-  meanY /= group.length;
-
-  var sxx = 0.0;
-  var syy = 0.0;
-  var sxy = 0.0;
-  for (final star in group) {
-    final dx = star.x - meanX;
-    final dy = star.y - meanY;
-    sxx += dx * dx;
-    syy += dy * dy;
-    sxy += dx * dy;
+  mean /= run.length;
+  if (mean <= 0) return false;
+  var variance = 0.0;
+  for (final star in run) {
+    variance += (star.flux - mean) * (star.flux - mean);
   }
-  final trace = sxx + syy;
-  final offset = math.sqrt((sxx - syy) * (sxx - syy) / 4 + sxy * sxy);
-  final major = trace / 2 + offset;
-  if (major <= 0) return false;
-  final minor = math.max(trace / 2 - offset, 0.0);
-  final ratio = math.sqrt(minor / major);
-  final length = math.sqrt(major / group.length) * 2;
-  return ratio < 0.22 && length >= 12;
+  return math.sqrt(variance / run.length) / mean < 0.22;
 }
 
 /// 近乎平坦的像素占比：截图、纯色块会非常高，真实夜空因为噪声不会。
-double _flatAreaFraction(Float32List gray, int width, int height) {
+/// 明亮的平坦区域占多大比例。
+///
+/// 大片的平坦区域是截图和文档的典型特征，但这条判据对天文照片要格外小心：
+/// **堆栈、降噪之后的星空照片同样平坦**——天空背景被压成近乎纯色，八像素
+/// 见方的窗口里灰度起伏还不到一个量化步长。只看平坦比例的话，越是认真
+/// 处理过的照片越容易被判成「不是星空」，正好把最用心拍的那批用户挡在
+/// 门外。
+///
+/// 所以只把**明亮的**平坦区域算进来：文档的白纸、界面的浅色面板是亮的，
+/// 夜空是暗的。暗色界面截图也拦得住——它们几乎没有紧凑点源，还有成片的
+/// 文字被掩膜，那两项就足够把它压下去了。
+double _brightFlatFraction(Float32List gray, int width, int height) {
   const tile = 8;
+  // 比这亮的平坦块才算「白纸」；夜空即使在明亮的城市里也远低于此。
+  const brightLevel = 0.35;
   var flat = 0;
   var total = 0;
   for (var ty = 0; ty < height; ty += tile) {
@@ -879,15 +1071,21 @@ double _flatAreaFraction(Float32List gray, int width, int height) {
       final y1 = math.min(height, ty + tile);
       var min = double.infinity;
       var max = -double.infinity;
+      var sum = 0.0;
+      var count = 0;
       for (var y = ty; y < y1; y++) {
         for (var x = tx; x < x1; x++) {
           final value = gray[y * width + x];
           if (value < min) min = value;
           if (value > max) max = value;
+          sum += value;
+          count++;
         }
       }
       total++;
-      if (max - min < 1.5 / 255) flat++;
+      if (max - min < 1.5 / 255 && count > 0 && sum / count > brightLevel) {
+        flat++;
+      }
     }
   }
   return total == 0 ? 0 : flat / total;
@@ -904,7 +1102,7 @@ class _StarfieldVerdict {
 _StarfieldVerdict _judgeStarfield({
   required List<DetectedStar> stars,
   required List<MaskRegion> maskRegions,
-  required double flatAreaFraction,
+  required double brightFlatFraction,
   required int width,
   required int height,
 }) {
@@ -933,10 +1131,10 @@ _StarfieldVerdict _judgeStarfield({
   } else {
     score -= 0.25;
   }
-  // 大片平坦区域是截图/文档的典型特征。
-  if (flatAreaFraction < 0.15) {
+  // 大片**明亮**的平坦区域是截图/文档的典型特征（夜空也会平坦，但它是暗的）。
+  if (brightFlatFraction < 0.15) {
     score += 0.25;
-  } else if (flatAreaFraction > 0.5) {
+  } else if (brightFlatFraction > 0.5) {
     score -= 0.35;
   }
   final clamped = score.clamp(0.0, 1.0).toDouble();
@@ -970,6 +1168,7 @@ List<String> _buildDiagnostics({
   required double saturatedFraction,
   required double fwhm,
   required bool usedRelaxedThreshold,
+  required int suppressedText,
 }) {
   final diagnostics = <String>[];
   final compact = stars.where((star) => !star.isElongated).toList();
@@ -998,6 +1197,12 @@ List<String> _buildDiagnostics({
   }
   if (lineRegions > 0) {
     diagnostics.add('已屏蔽 $lineRegions 处直线结构（可能是表格边框、电缆或栏杆）。');
+  }
+  if (suppressedText > 0) {
+    diagnostics.add(
+      '已忽略 $suppressedText 个疑似文字或图标的亮点：它们大小相近、亮度一致、'
+      '还排成整齐的一行，是印刷品的特征，不是星空。',
+    );
   }
   if (trails.isNotEmpty) {
     diagnostics.add(
@@ -1087,7 +1292,7 @@ Uint8List _renderProcessedPreview(
   return Uint8List.fromList(imglib.encodeJpg(output, quality: 88));
 }
 
-double _medianSorted(Float32List sorted) {
+double _medianSorted(List<double> sorted) {
   if (sorted.isEmpty) return 0;
   final middle = sorted.length ~/ 2;
   return sorted.length.isOdd
