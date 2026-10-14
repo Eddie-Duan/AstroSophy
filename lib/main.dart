@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'analysis.dart';
+import 'demo.dart';
 import 'model.dart';
 import 'models.dart';
 import 'pipeline.dart';
@@ -156,15 +157,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       if (file == null) return;
       final bytes = await file.readAsBytes();
       if (!mounted) return;
-      setState(() {
-        _bytes = bytes;
-        _filename = file.name;
-        _analysis = null;
-        _solve = null;
-        _explanation = null;
-        _error = null;
-        _warnings = const [];
-      });
+      _setImage(bytes, file.name);
     } catch (error) {
       _showError('读取图片失败：$error');
     }
@@ -185,17 +178,81 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       final bytes = file.bytes;
       if (bytes == null) throw StateError('没有读取到图片内容。');
       if (!mounted) return;
-      setState(() {
-        _bytes = bytes;
-        _filename = file.name;
-        _analysis = null;
-        _solve = null;
-        _explanation = null;
-        _error = null;
-        _warnings = const [];
-      });
+      _setImage(bytes, file.name);
     } catch (error) {
       _showError('读取图片失败：$error');
+    }
+  }
+
+  /// 选中一张新图。三个入口（相册、相机、演示图）共用这一处清理逻辑：
+  /// 换图就等于把上一张的解析结果全部作废，漏清一项就会出现「这张图的
+  /// 坐标配着那张图的星点」这种最难查的错。
+  void _setImage(Uint8List bytes, String name) {
+    setState(() {
+      _bytes = bytes;
+      _filename = name;
+      _analysis = null;
+      _solve = null;
+      _explanation = null;
+      _error = null;
+      _warnings = const [];
+    });
+  }
+
+  /// 用自带的演示图。给第一次打开、手里还没有照片的人一条能走通的路。
+  Future<void> _pickDemoImage() async {
+    final choice = await showModalBottomSheet<DemoImage>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+              child: Text(
+                '试一张演示星图',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Text(
+                '三张都是真实拍摄的星空照片，可以直接走完整的解析流程。',
+                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              ),
+            ),
+            for (final image in demoImages)
+              ListTile(
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset(
+                    image.asset,
+                    width: 46,
+                    height: 46,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                title: Text(image.title),
+                subtitle: Text(
+                  image.subtitle,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                onTap: () => Navigator.of(context).pop(image),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null) return;
+    try {
+      final bytes = await loadDemoImage(choice);
+      if (!mounted) return;
+      _setImage(bytes, '${choice.title}.jpg');
+    } catch (error) {
+      _showError('读取演示图片失败：$error');
     }
   }
 
@@ -569,11 +626,27 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
               ),
+              const SizedBox(width: 8),
+              // 比旁边两个小一号：演示图是「先随便试一张」的入口，
+              // 不是主要路径，但它必须自己说出用途——第一次打开的人
+              // 手里通常没有星空照片，看不到这个入口就只会对着一张空页。
+              TextButton.icon(
+                onPressed: _pickDemoImage,
+                icon: const Icon(Icons.auto_awesome, size: 16),
+                label: const Text('演示图', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(0, 50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
           const Text(
-            'JPG / PNG / TIFF · 支持尝试读取相机 RAW 内嵌预览',
+            'JPG / PNG / TIFF · 支持尝试读取相机 RAW 内嵌预览 · 没有照片就点「演示图」',
             style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
           ),
         ],
