@@ -65,6 +65,17 @@ SolveResult solveOf() => const SolveResult(
       source: SolveSource.local,
       fieldOfViewDegrees: 9.1,
       constellations: ['猎户座'],
+      constellationFigures: [
+        ConstellationFigure(
+          name: '猎户座',
+          segments: [
+            [100.0, 200.0, 300.0, 400.0],
+            [300.0, 400.0, 500.0, 380.0],
+          ],
+          labelX: 300,
+          labelY: 370,
+        ),
+      ],
       matchedCount: 27,
     );
 
@@ -114,6 +125,16 @@ void main() {
       final solve = entry.solve!;
       expect(solve.centerRa, closeTo(83.8, 1e-9));
       expect(solve.constellations, ['猎户座']);
+      // 连线是嵌套的浮点数组，JSON 往返最容易在这里掉精度或掉层，所以
+      // 逐段比一遍：从历史里打开的那张图，星座连线也得原样画出来。
+      expect(solve.constellationFigures, hasLength(1));
+      expect(solve.constellationFigures.single.name, '猎户座');
+      expect(solve.constellationFigures.single.segments, [
+        [100.0, 200.0, 300.0, 400.0],
+        [300.0, 400.0, 500.0, 380.0],
+      ]);
+      expect(solve.constellationFigures.single.labelX, closeTo(300, 1e-9));
+      expect(solve.constellationFigures.single.labelY, closeTo(370, 1e-9));
       expect(solve.magnitudeZeroPoint, closeTo(14.2, 1e-9));
       expect(solve.source, SolveSource.local);
       expect(solve.namedStars.single.name, '参宿四');
@@ -241,6 +262,71 @@ void main() {
       final decoded = jsonDecode(json) as Map<String, Object?>;
       expect((decoded['analysis']! as Map).containsKey('preview'), isFalse);
       expect(decoded['summary'], isA<Map>());
+    });
+  });
+
+  group('HistoryStore 重命名', () {
+    test('改名只动 JSON 里的 name，图片和 id 都不变', () async {
+      final saved = await store.save(
+        name: 'IMG_2043.jpg',
+        analysis: analysisOf(),
+        solve: solveOf(),
+        explanation: '一段解读。',
+      );
+
+      final renamed = await store.rename(saved, '猎户座大星云');
+      expect(renamed.name, '猎户座大星云');
+      expect(renamed.id, saved.id);
+      // 为了一个名字去搬图片不值得：id 一变两个图片文件名都得跟着变，
+      // 中途失败还会留下半搬完的状态。
+      expect(renamed.imageFile.path, saved.imageFile.path);
+      expect(renamed.imageFile.existsSync(), isTrue);
+      expect(renamed.processedFile.existsSync(), isTrue);
+
+      // 列表是从 JSON 读的，所以重开一遍确认改的是文件而不是内存里的对象。
+      final entry = (await store.list()).single;
+      expect(entry.name, '猎户座大星云');
+      expect(entry.constellation, '猎户座');
+      expect(entry.explanation, '一段解读。');
+      // 测量结果和解算结果一个字都不能少。
+      expect(entry.solve!.centerRa, closeTo(83.8, 1e-9));
+      expect((await entry.readAnalysis()).stars.length, 3);
+      expect(await store.totalBytes(), greaterThan(0));
+    });
+
+    test('首尾空白会被去掉', () async {
+      final saved = await store.save(
+        name: '旧名字',
+        analysis: analysisOf(),
+        solve: null,
+        explanation: null,
+      );
+      final renamed = await store.rename(saved, '  夏天的银河  ');
+      expect(renamed.name, '夏天的银河');
+      expect((await store.list()).single.name, '夏天的银河');
+    });
+
+    test('空名字不算改名，不写盘', () async {
+      final saved = await store.save(
+        name: '别弄丢我',
+        analysis: analysisOf(),
+        solve: null,
+        explanation: null,
+      );
+      // 一条无名的记录在列表里认不出来，所以宁可什么都不做。
+      expect(identical(await store.rename(saved, '   '), saved), isTrue);
+      expect(identical(await store.rename(saved, ''), saved), isTrue);
+      expect((await store.list()).single.name, '别弄丢我');
+    });
+
+    test('名字没变时也不写盘', () async {
+      final saved = await store.save(
+        name: '原样',
+        analysis: analysisOf(),
+        solve: null,
+        explanation: null,
+      );
+      expect(identical(await store.rename(saved, '原样'), saved), isTrue);
     });
   });
 

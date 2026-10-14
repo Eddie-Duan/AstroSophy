@@ -302,6 +302,93 @@ void main() {
       expect(solver.solve(garbage), isNull);
     });
   });
+
+  group('星座连线叠加', () {
+    test('本机解算带回的连线全部裁在图像范围内', () {
+      final analysis = synthesiseField(
+        catalog: catalog,
+        centerRa: _orionRa,
+        centerDec: _orionDec,
+        degreesPerPixel: 0.008,
+      );
+      final result = solver.solve(analysis);
+      expect(result, isNotNull);
+
+      final figures = result!.constellationFigures;
+      expect(figures, isNotEmpty, reason: '猎户座这片天区必须画出连线来');
+      expect(
+        figures.map((figure) => figure.name),
+        contains('猎户座'),
+        reason: '指标条上写着猎户座，图上就得能找到猎户座',
+      );
+
+      for (final figure in figures) {
+        expect(figure.segments, isNotEmpty);
+        for (final segment in figure.segments) {
+          expect(segment, hasLength(4));
+          for (final value in segment) {
+            expect(value.isFinite, isTrue, reason: '${figure.name} 的端点不是有限数');
+          }
+          // 裁剪的容差按浮点给一个极小的余量：算 t 的时候会有一两次
+          // 舍入，端点可能落在框外半个 1e-13。
+          for (final x in [segment[0], segment[2]]) {
+            expect(x, inInclusiveRange(-1e-6, analysis.width + 1e-6),
+                reason: '${figure.name} 的线段画到图像外了');
+          }
+          for (final y in [segment[1], segment[3]]) {
+            expect(y, inInclusiveRange(-1e-6, analysis.height + 1e-6),
+                reason: '${figure.name} 的线段画到图像外了');
+          }
+        }
+        // 名字是各段中点的均值，各段都在框内，它自然也在。
+        expect(figure.labelX, inInclusiveRange(0, analysis.width.toDouble()));
+        expect(figure.labelY, inInclusiveRange(0, analysis.height.toDouble()));
+      }
+    });
+
+    test('在线解算的结果也能补出星座名与连线', () {
+      final wcs = Wcs.fromPixels(
+        width: 1024,
+        height: 768,
+        centerRa: _orionRa,
+        centerDec: _orionDec,
+        degreesPerPixel: 0.008,
+      );
+      // 在线路径拿回来的东西只有 WCS 和坐标，星座一定是空的——视场窄的
+      // 望远镜照片多半解不出来、正好都走这条路。
+      final online = SolveResult(
+        centerRa: wcs.imageCenter.$1,
+        centerDec: wcs.imageCenter.$2,
+        arcsecPerPixel: wcs.arcsecPerPixel,
+        namedStars: const [],
+        deepSkyObjects: const [],
+        matchedStars: const [],
+        magnitudeZeroPoint: null,
+        magnitudeScatter: null,
+        catalogWarning: null,
+        fieldOfViewDegrees: wcs.fieldOfViewDegrees,
+        wcs: wcs,
+      );
+      expect(online.constellations, isEmpty);
+      expect(online.constellationFigures, isEmpty);
+
+      final decorated = solver.decorateSolve(online);
+      expect(decorated.constellations, contains('猎户座'));
+      expect(decorated.constellationFigures, isNotEmpty);
+
+      // 补的只是星座，解算本身的结果一个字段都不能动。
+      expect(decorated.centerRa, online.centerRa);
+      expect(decorated.centerDec, online.centerDec);
+      expect(decorated.arcsecPerPixel, online.arcsecPerPixel);
+      expect(decorated.source, SolveSource.online);
+      expect(decorated.fieldOfViewDegrees, online.fieldOfViewDegrees);
+      expect(decorated.wcs, same(wcs));
+    });
+
+    test('没有 WCS 就无从投影，原样返回', () {
+      expect(solver.decorateSolve(SolveResult.empty), same(SolveResult.empty));
+    });
+  });
 }
 
 const _cassiopeiaRa = 12.0;

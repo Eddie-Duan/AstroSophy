@@ -170,7 +170,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     Positioned(
                       right: 6,
                       top: 6,
-                      child: _deleteButton(entry),
+                      child: Row(
+                        children: [
+                          _roundButton(
+                            Icons.edit_outlined,
+                            '重命名',
+                            () => _rename(entry),
+                          ),
+                          const SizedBox(width: 6),
+                          _roundButton(
+                            Icons.delete_outline,
+                            '删除',
+                            () => _confirmDelete(entry),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -209,15 +223,71 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
 
-  Widget _deleteButton(SavedAnalysis entry) => Material(
-        color: Colors.black54,
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: () => _confirmDelete(entry),
-          child: const Padding(
-            padding: EdgeInsets.all(5),
-            child: Icon(Icons.delete_outline, size: 17),
+  /// 改名。
+  ///
+  /// 用 [TextFormField] 的 `initialValue` 而不是自己拿一个 `TextEditingController`：
+  /// 对话框的退场动画还没跑完时控件仍然挂在树上，这时候 dispose 掉控制器
+  /// 会踩到「用了已释放的控制器」。让 FormField 自己管自己的状态就没这回事。
+  Future<void> _rename(SavedAnalysis entry) async {
+    var draft = entry.name;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('重命名'),
+        content: TextFormField(
+          initialValue: entry.name,
+          autofocus: true,
+          maxLength: 40,
+          onChanged: (value) => draft = value,
+          onFieldSubmitted: (value) => Navigator.of(context).pop(value),
+          decoration: const InputDecoration(
+            labelText: '记录名称',
+            counterText: '',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(draft),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    try {
+      await widget.store.rename(entry, name);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已改名为「${name.trim()}」')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('重命名失败：$error')),
+      );
+    }
+  }
+
+  /// 卡片右上角那排圆形小按钮：改名、删除。共用一套样式，免得两处各写一份
+  /// 半透明的黑底圆。
+  Widget _roundButton(IconData icon, String tooltip, VoidCallback onTap) =>
+      Tooltip(
+        message: tooltip,
+        child: Material(
+          color: Colors.black54,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(5),
+              child: Icon(icon, size: 17),
+            ),
           ),
         ),
       );

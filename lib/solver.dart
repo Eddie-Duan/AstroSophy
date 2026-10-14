@@ -556,23 +556,7 @@ class PlateSolver {
       scatter = 1.4826 * _median(deviations);
     }
 
-    // 星座名称直接用目录里的中文名：「你拍到了猎户座」比「Ori」有用得多。
-    final constellations = <String>[];
-    final seen = <String>{};
-    // 视场中心所在星座排第一，它才是「这张照片拍的是哪个星座」的答案。
-    final centreConstellation = catalog.constellationAt(centreRa, centreDec);
-    if (centreConstellation != null && !centreConstellation.isEmpty) {
-      seen.add(centreConstellation.abbreviation);
-      constellations.add(centreConstellation.displayName);
-    }
-    for (final star in catalogStars) {
-      if (star.vMagnitude > 5.5) continue;
-      final constellation = catalog.constellationOf(star);
-      if (constellation == null || constellation.isEmpty) continue;
-      if (seen.add(constellation.abbreviation)) {
-        constellations.add(constellation.displayName);
-      }
-    }
+    final decoration = _decorate(wcs, centreRa, centreDec, catalogStars);
 
     return SolveResult(
       centerRa: centreRa,
@@ -596,10 +580,175 @@ class PlateSolver {
       catalogWarning: null,
       source: SolveSource.local,
       fieldOfViewDegrees: wcs.fieldOfViewDegrees,
-      constellations: constellations,
+      constellations: decoration.constellations,
+      constellationFigures: decoration.figures,
       wcs: wcs,
       rotationDegrees: _rotationDegrees(wcs),
       matchedCount: fit.inliers.length,
+    );
+  }
+
+  /// 星座名与星座连线。
+  ///
+  /// 名字回答「这张照片拍的是哪片天」，连线让人在图上直接认出星座的轮廓——
+  /// 这两样 astrometry.net 的标注图上都有，这里用内置目录自己算一份。
+  ///
+  /// 投影必须在这里做：连线数据存的是 HIP 星对，只存在于后台 isolate 的
+  /// 星表里，界面拿不到也没必要拿。把投影后的像素线段随结果带出去，界面
+  /// 就只负责画。
+  _Decoration _decorate(
+    Wcs wcs,
+    double centreRa,
+    double centreDec,
+    List<CatalogStar> catalogStars,
+  ) {
+    // 视场中心所在星座排第一，它才是「这张照片拍的是哪个星座」的答案。
+    final centreConstellation = catalog.constellationAt(centreRa, centreDec);
+    final centreAbbreviation = centreConstellation?.isEmpty ?? true
+        ? ''
+        : centreConstellation!.abbreviation;
+
+    final names = <String>[];
+    final seen = <String>{};
+    if (centreAbbreviation.isNotEmpty) {
+      seen.add(centreAbbreviation);
+      names.add(centreConstellation!.displayName);
+    }
+    for (final star in catalogStars) {
+      if (star.vMagnitude > 5.5) continue;
+      final constellation = catalog.constellationOf(star);
+      if (constellation == null || constellation.isEmpty) continue;
+      if (seen.add(constellation.abbreviation)) {
+        names.add(constellation.displayName);
+      }
+    }
+
+    // 连线本身走全天 88 个星座，而不是只走视场里那几颗星所属的星座：星座
+    // 边界划分的是恒星归属，而连线画的是图形轮廓，两者在边界附近并不重合。
+    final figures = <ConstellationFigure>[];
+    for (final constellation in catalog.constellations) {
+      if (constellation.isEmpty) continue;
+      final segments = <List<double>>[];
+      var sumX = 0.0;
+      var sumY = 0.0;
+      for (final (hipA, hipB) in constellation.lines) {
+        final first = catalog.byHip[hipA];
+        final second = catalog.byHip[hipB];
+        if (first == null || second == null) continue;
+        final (ax, ay) = wcs.worldToPixel(first.ra, first.dec);
+        final (bx, by) = wcs.worldToPixel(second.ra, second.dec);
+        final clipped = _clipToImage(ax, ay, bx, by, wcs.width, wcs.height);
+        if (clipped == null) continue;
+        segments.add(clipped);
+        sumX += (clipped[0] + clipped[2]) / 2;
+        sumY += (clipped[1] + clipped[3]) / 2;
+      }
+      if (segments.isEmpty) continue;
+      figures.add(
+        ConstellationFigure(
+          name: constellation.displayName,
+          segments: segments,
+          labelX: sumX / segments.length,
+          labelY: sumY / segments.length,
+        ),
+      );
+    }
+
+    // 视场大到几十度时能框进十几个星座，全画出来只剩一团线，反而看不出
+    // 哪个是哪个。中心星座钉在最前——指标条上写着「星座：猎户座」，图上
+    // 就必须能找到猎户座。
+    figures.sort((a, b) {
+      final first = a.name == centreConstellation?.displayName ? 1 : 0;
+      final second = b.name == centreConstellation?.displayName ? 1 : 0;
+      if (first != second) return second - first;
+      return b.segments.length.compareTo(a.segments.length);
+    });
+    if (figures.length > _maxFigures) {
+      figures.removeRange(_maxFigures, figures.length);
+    }
+
+    return _Decoration(names, figures);
+  }
+
+  /// 视场里最多画几个星座的连线。
+  static const _maxFigures = 8;
+
+  /// 把一条线段裁到图像矩形内；整条都在框外时返回 null。
+  ///
+  /// 视场边缘的星座线往往只有一个端点在画面里，不裁的话会在标注图上拉出
+  /// 几条飞到画面外的长线。用 Liang–Barsky 按参数裁剪，只留框内那一段。
+  static List<double>? _clipToImage(
+    double x1,
+    double y1,
+    double x2,
+    double y2,
+    int width,
+    int height,
+  ) {
+    // worldToPixel 对落在切平面背后的点返回 ±1e9 这种哨兵值，带着它做参数
+    // 运算会算出 NaN，所以先按量级剔掉。图像本身只有几千像素，这个上限
+    // 不可能误伤真实坐标。
+    if (!_isSane(x1) || !_isSane(y1) || !_isSane(x2) || !_isSane(y2)) {
+      return null;
+    }
+
+    final dx = x2 - x1;
+    final dy = y2 - y1;
+    var enter = 0.0;
+    var leave = 1.0;
+    final edges = [-dx, dx, -dy, dy];
+    final offsets = [
+      x1,
+      width - x1,
+      y1,
+      height - y1,
+    ];
+    for (var edge = 0; edge < 4; edge++) {
+      final normal = edges[edge];
+      final offset = offsets[edge];
+      if (normal == 0) {
+        // 平行于这条边：只要在边内侧就整条保留，在外侧就整条丢掉。
+        if (offset < 0) return null;
+        continue;
+      }
+      final ratio = offset / normal;
+      if (normal < 0) {
+        if (ratio > leave) return null;
+        if (ratio > enter) enter = ratio;
+      } else {
+        if (ratio < enter) return null;
+        if (ratio < leave) leave = ratio;
+      }
+    }
+    return [
+      x1 + enter * dx,
+      y1 + enter * dy,
+      x1 + leave * dx,
+      y1 + leave * dy,
+    ];
+  }
+
+  static bool _isSane(double value) => value.isFinite && value.abs() < 1e6;
+
+  /// 给只带 WCS 的结果补上星座名与连线。
+  ///
+  /// 在线解算返回的结果里这两个字段都是空的——星座归属是本机拿内置目录算的。
+  /// 而视场窄的望远镜照片多半本机解不出来、正好都走这条在线路径，所以这里
+  /// 必须补上，只照顾本机解算那一支的话用户撞上的恰好是缺口。
+  SolveResult decorateSolve(SolveResult result) {
+    final wcs = result.wcs;
+    if (wcs == null) return result;
+    final (centreRa, centreDec) = wcs.imageCenter;
+    final radius = math.max(wcs.fieldOfViewDegrees / 2 + 0.3, 0.05);
+    final decoration = _decorate(
+      wcs,
+      centreRa,
+      centreDec,
+      catalog.starsNear(centreRa, centreDec, radius),
+    );
+    return result.withConstellationDecoration(
+      decoration.constellations,
+      decoration.figures,
     );
   }
 
@@ -622,6 +771,14 @@ class PlateSolver {
         ? sorted[middle]
         : (sorted[middle - 1] + sorted[middle]) / 2;
   }
+}
+
+/// 一次解算算出来的星座信息：名字给指标条，连线给标注图。
+class _Decoration {
+  const _Decoration(this.constellations, this.figures);
+
+  final List<String> constellations;
+  final List<ConstellationFigure> figures;
 }
 
 /// 目录三角形索引。

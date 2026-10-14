@@ -137,6 +137,15 @@ class SkyPipeline {
       } catch (error) {
         warnings.add('在线解算未能完成：$error');
       }
+      // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
+      // 失败了只记一条提示，不把已经拿到手的解算结果丢掉。
+      if (solve != null) {
+        try {
+          solve = await worker.decorate(solve);
+        } catch (error) {
+          warnings.add('星座标注未能完成：$error');
+        }
+      }
     } else if (solve == null) {
       warnings.add(
         allowUpload
@@ -312,6 +321,13 @@ class SkyWorker {
   }) async =>
       await _request('solve', analysis, onProgress) as SolveResult?;
 
+  /// 给在线解算拿回来的结果补上星座名与连线。
+  ///
+  /// 走后台 isolate 是因为要查内置目录，而目录只在那边；顺带也让这次查询
+  /// 不占用主 isolate——虽然它比解算本身快得多。
+  Future<SolveResult> decorate(SolveResult solve) async =>
+      await _request('decorate', solve, null) as SolveResult;
+
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -362,6 +378,14 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
             ),
           );
           boot.reply.send(_WorkerReply(message.id, 'done', result));
+        case 'decorate':
+          boot.reply.send(
+            _WorkerReply(
+              message.id,
+              'done',
+              solver.decorateSolve(message.payload! as SolveResult),
+            ),
+          );
         default:
           boot.reply.send(
             _WorkerReply(message.id, 'error', '未知的后台请求：${message.kind}'),

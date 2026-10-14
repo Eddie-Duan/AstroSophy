@@ -181,6 +181,45 @@ class HistoryStore {
     );
   }
 
+  /// 改一条记录的名字。
+  ///
+  /// 只动 JSON 里的 `name` 字段，图片和 id 一概不碰。改名是「我想把它叫成
+  /// 什么」，不是「换一条记录」：id 一变，两个图片文件名都得跟着搬，为了
+  /// 一个名字去挪几十兆的图，还可能在中途失败时留下半搬完的状态。
+  ///
+  /// 名字去掉首尾空白后为空就是没改（一条无名的记录在列表里认不出来），
+  /// 这时按原样返回，不写盘。
+  Future<SavedAnalysis> rename(SavedAnalysis entry, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed == entry.name) return entry;
+
+    final jsonFile = File(p.join(directory.path, '${entry.id}.json'));
+    final decoded = jsonDecode(await jsonFile.readAsString());
+    if (decoded is! Map) throw const FormatException('记录文件格式不对。');
+    final json = Map<String, Object?>.from(decoded);
+    json['name'] = trimmed;
+    // 用和保存时同一个编码器写回：缩进一致，键的顺序也不变，用户拿文件
+    // 对比时不会看到一堆无意义的改动。
+    await jsonFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(json),
+      flush: true,
+    );
+
+    return SavedAnalysis(
+      id: entry.id,
+      name: trimmed,
+      savedAt: entry.savedAt,
+      quality: entry.quality,
+      starCount: entry.starCount,
+      constellation: entry.constellation,
+      solve: entry.solve,
+      explanation: entry.explanation,
+      imageFile: entry.imageFile,
+      processedFile: entry.processedFile,
+      rawAnalysis: entry._rawAnalysis,
+    );
+  }
+
   /// 删除一条记录。图片和 JSON 一起删——只删 JSON 会留下没人认领的图片，
   /// 用户看着「历史空了但存储还是满的」，找不到原因。
   Future<void> delete(SavedAnalysis entry) async {

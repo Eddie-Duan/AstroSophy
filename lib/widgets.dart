@@ -196,6 +196,7 @@ class DetectedStarsPainter extends CustomPainter {
     required this.analysis,
     required this.namedStars,
     required this.objects,
+    this.figures = const [],
     this.selected,
     this.numbers = true,
   });
@@ -203,6 +204,9 @@ class DetectedStarsPainter extends CustomPainter {
   final SkyAnalysis analysis;
   final List<SkyObject> namedStars;
   final List<SkyObject> objects;
+
+  /// 星座连线，像素坐标已经由解算侧算好（见 `ConstellationFigure`）。
+  final List<ConstellationFigure> figures;
 
   /// 当前在下方列表里选中的那一项（`numberedTargets` 的下标）。图上会把它
   /// 单独框出来——点列表第 10 项和图上的 ⑩ 必须是同一颗星，否则这套编号
@@ -242,6 +246,38 @@ class DetectedStarsPainter extends CustomPainter {
       fontWeight: FontWeight.w600,
       shadows: [Shadow(color: Colors.black, blurRadius: 5)],
     );
+
+    // 星座连线先画，压在最底下。它是背景参考，不能盖住用户真正要看的
+    // 星点和编号——那两样才是这个面板要回答的问题。
+    final figurePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1
+      ..color = const Color(0x66FFDE77);
+    final figureLabelStyle = TextStyle(
+      color: const Color(0xFFFFDE77).withValues(alpha: 0.62),
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      shadows: const [Shadow(color: Colors.black, blurRadius: 5)],
+    );
+    for (final figure in figures) {
+      for (final segment in figure.segments) {
+        if (segment.length != 4) continue;
+        canvas.drawLine(
+          toCanvas(segment[0], segment[1]),
+          toCanvas(segment[2], segment[3]),
+          figurePaint,
+        );
+      }
+      final label = TextPainter(
+        text: TextSpan(text: figure.name, style: figureLabelStyle),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: destination.width * 0.6);
+      final anchor = toCanvas(figure.labelX, figure.labelY);
+      label.paint(
+        canvas,
+        anchor - Offset(label.width / 2, label.height / 2),
+      );
+    }
 
     final targets = analysis.numberedTargets;
     for (var index = 0; index < targets.length; index++) {
@@ -346,6 +382,7 @@ class DetectedStarsPainter extends CustomPainter {
       !identical(analysis, oldDelegate.analysis) ||
       !identical(namedStars, oldDelegate.namedStars) ||
       !identical(objects, oldDelegate.objects) ||
+      !identical(figures, oldDelegate.figures) ||
       oldDelegate.selected != selected ||
       oldDelegate.numbers != numbers;
 }
@@ -442,6 +479,187 @@ Offset? containPointToImage({
     (local.dx - destination.left) * imageSize.width / destination.width,
     (local.dy - destination.top) * imageSize.height / destination.height,
   );
+}
+
+/// 全天星图（finder chart）。
+///
+/// 回答的是「这张照片拍的是天上哪一块」。光有 RA/Dec 两个数字，除了老手没人
+/// 能立刻在脑子里定位；一张全天图上的一个十字，比一串坐标有用得多。
+///
+/// 投影用等距圆柱：横轴赤经、纵轴赤纬，度和像素成正比。严格说这东西在极区
+/// 变形得厉害，但它的用途是「一眼看出大概在哪儿」，不是测量——真要看细节
+/// 有上面那张标注图。用等距圆柱是因为它简单到不会出错，而且星空爱好者熟悉
+/// 的星图（星图软件里的全天视图）基本都长这样。
+///
+/// 赤经向左增大：天球上东在左，星图里把赤经反过来摆，看到的图案才是「抬头
+/// 望天」的样子，而不是镜像的。这是星图的老规矩。
+class AllSkyFinder extends StatelessWidget {
+  const AllSkyFinder({
+    super.key,
+    required this.centerRa,
+    required this.centerDec,
+    this.fieldOfViewDegrees = 0,
+    this.height = 176,
+  });
+
+  /// 视场中心赤经（度）。
+  final double centerRa;
+
+  /// 视场中心赤纬（度）。
+  final double centerDec;
+
+  /// 视场对角线尺度（度）；为 0 时不画视场圈。
+  final double fieldOfViewDegrees;
+
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: height,
+        width: double.infinity,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: CustomPaint(
+            painter: _AllSkyFinderPainter(
+              centerRa: centerRa,
+              centerDec: centerDec,
+              fieldOfViewDegrees: fieldOfViewDegrees,
+            ),
+          ),
+        ),
+      );
+}
+
+class _AllSkyFinderPainter extends CustomPainter {
+  const _AllSkyFinderPainter({
+    required this.centerRa,
+    required this.centerDec,
+    required this.fieldOfViewDegrees,
+  });
+
+  final double centerRa;
+  final double centerDec;
+  final double fieldOfViewDegrees;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width < 60 || size.height < 40) return;
+
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFF0A1421),
+    );
+
+    // 赤经向左增大：0h 在最右，12h 在正中。
+    double toX(double ra) {
+      final wrapped = ra % 360;
+      return size.width *
+          (1 - (wrapped < 0 ? wrapped + 360 : wrapped) / 360);
+    }
+
+    double toY(double dec) =>
+        size.height * (90 - dec.clamp(-90.0, 90.0)) / 180;
+
+    final grid = Paint()
+      ..color = const Color(0xFF22334A)
+      ..strokeWidth = 0.8;
+    final equator = Paint()
+      ..color = const Color(0xFF2E8C7A)
+      ..strokeWidth = 1.2;
+
+    for (var dec = -60; dec <= 60; dec += 30) {
+      final y = toY(dec.toDouble());
+      canvas.drawLine(Offset(0, y), Offset(size.width, y),
+          dec == 0 ? equator : grid);
+    }
+    for (var hour = 0; hour < 24; hour += 2) {
+      final x = toX(hour * 15.0);
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+    }
+
+    final labelStyle = const TextStyle(
+      color: Color(0xFF8192A8),
+      fontSize: 9,
+    );
+    for (var hour = 0; hour < 24; hour += 6) {
+      // 0h 正好落在右边缘上，居中画会有一半跑到框外，所以往回收一点。
+      final x = toX(hour * 15.0).clamp(12.0, size.width - 12);
+      _label(canvas, '${hour}h', Offset(x, size.height - 12), labelStyle);
+    }
+    // 赤纬刻度钉在左边缘，那是图上唯一一条不随视场变化的竖直参考线。
+    for (final dec in const [-60, -30, 0, 30, 60]) {
+      _label(
+        canvas,
+        dec > 0 ? '+$dec°' : '$dec°',
+        Offset(4, toY(dec.toDouble()) - 11),
+        labelStyle,
+        alignLeft: true,
+      );
+    }
+
+    final x = toX(centerRa);
+    final y = toY(centerDec);
+
+    // 视场圈。窄视场算出来不到一个像素，给个下限让用户至少看得见「在这儿」；
+    // 具体多大上面那行字写着，这里只是示意。
+    if (fieldOfViewDegrees > 0) {
+      final half = fieldOfViewDegrees / 2;
+      final radiusY = math.max(half * size.height / 180, 3.0);
+      // 同样的张角，在赤经方向上要摊开更多「赤经度」，越靠近天极越明显。
+      final shrink = math.max(math.cos(centerDec * math.pi / 180).abs(), 0.08);
+      final radiusX =
+          math.min(math.max(half * size.width / 360 / shrink, 3.0), size.width / 2);
+      canvas.drawOval(
+        Rect.fromCenter(center: Offset(x, y), width: radiusX * 2, height: radiusY * 2),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = const Color(0x99FFDE77),
+      );
+    }
+
+    final marker = Paint()..color = kMint;
+    final markerLine = Paint()
+      ..color = kMint
+      ..strokeWidth = 1.4;
+    canvas.drawLine(Offset(x - 7, y), Offset(x + 7, y), markerLine);
+    canvas.drawLine(Offset(x, y - 7), Offset(x, y + 7), markerLine);
+    canvas.drawCircle(Offset(x, y), 2.8, marker);
+    canvas.drawCircle(
+      Offset(x, y),
+      11,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = kMint.withValues(alpha: 0.55),
+    );
+  }
+
+  void _label(
+    Canvas canvas,
+    String text,
+    Offset anchor,
+    TextStyle style, {
+    bool alignLeft = false,
+  }) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    painter.paint(
+      canvas,
+      Offset(
+        alignLeft ? anchor.dx : anchor.dx - painter.width / 2,
+        anchor.dy,
+      ),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AllSkyFinderPainter oldDelegate) =>
+      oldDelegate.centerRa != centerRa ||
+      oldDelegate.centerDec != centerDec ||
+      oldDelegate.fieldOfViewDegrees != fieldOfViewDegrees;
 }
 
 /// 星等分布直方图。

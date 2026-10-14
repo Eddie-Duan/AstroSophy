@@ -97,6 +97,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 看图区显示的是处理图还是原图。默认原图——处理图是加工过的。
   bool _showProcessed = false;
 
+  /// 是否在图上叠加星座连线。默认开——这是「我到底拍到了什么」最直观的
+  /// 一层答案；但连线和用户关心的星点编号画在同一张图上，有时候需要关掉
+  /// 让画面干净一点。
+  bool _showConstellations = true;
+
   /// 后台解算 isolate。第一次用到时才起，之后一直留着——索引建一次要一秒
   /// 上下，起一次就够。
   Future<SkyWorker>? _worker;
@@ -230,6 +235,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       // 号位置高亮一颗跟用户完全无关的星。
       _selectedTarget = null;
       _showProcessed = false;
+      _showConstellations = true;
     });
   }
   Future<void> _pickDemoImage() async {
@@ -554,6 +560,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _savedId = null;
       _selectedTarget = null;
       _showProcessed = false;
+      _showConstellations = true;
     });
   }
 
@@ -582,6 +589,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _savedId = entry.id;
         _selectedTarget = null;
         _showProcessed = false;
+        _showConstellations = true;
       });
     } catch (error) {
       _showError('打开历史记录失败：$error');
@@ -703,6 +711,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   _diagnosticsCard(analysis),
                   const SizedBox(height: 12),
                   _solveCard(solve),
+                  if (solve != null) ...[
+                    const SizedBox(height: 12),
+                    _finderCard(solve),
+                  ],
                   const SizedBox(height: 12),
                   _photometryCard(analysis, solve),
                   if (solve != null && solve.deepSkyObjects.isNotEmpty) ...[
@@ -991,6 +1003,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       analysis: analysis,
                       namedStars: solve?.namedStars ?? const [],
                       objects: solve?.deepSkyObjects ?? const [],
+                      // 关掉连线时传空表而不是把 painter 换一个：换 painter
+                      // 会让整张图重画，而这里只是少画几条线。
+                      figures: _showConstellations
+                          ? solve?.constellationFigures ?? const []
+                          : const [],
                       selected: _selectedTarget,
                     ),
                   ),
@@ -999,6 +1016,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ),
           ),
           Positioned(left: 8, top: 8, child: _imageModeToggle()),
+          Positioned(right: 8, top: 8, child: _constellationToggle(solve)),
           Positioned(
             left: 8,
             right: 8,
@@ -1030,6 +1048,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 11)),
         ),
       );
+
+  /// 星座连线的开关。
+  ///
+  /// 没解算出星座时整个按钮不出现——一个按下去什么也不会发生的开关比没有
+  /// 开关更让人困惑。
+  Widget _constellationToggle(SolveResult? solve) {
+    if (solve == null || solve.constellationFigures.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: () => setState(() => _showConstellations = !_showConstellations),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            _showConstellations ? Icons.polyline : Icons.polyline_outlined,
+            size: 17,
+            color: _showConstellations ? kMint : const Color(0xFF8192A8),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// 图下方那一小块说明：现在选中的是第几号，或者提示这套编号怎么用。
   Widget _selectionHint(SkyAnalysis analysis, SolveResult? solve) {
@@ -1345,6 +1389,43 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   double _relativeMagnitude(DetectedStar star, DetectedStar brightest) =>
       star.instrumentalMagnitude - brightest.instrumentalMagnitude;
+
+  /// 全天星图卡：把中心坐标放到一张全天图上。
+  ///
+  /// 「RA 05h 35m / Dec −05°」这种写法，熟的人一看就知道是猎户座大星云，
+  /// 不熟的人完全没概念。全天图上的一个十字能把这件事一步讲完，而且它是
+  /// 纯几何，本机解算和在线解算都能画。
+  Widget _finderCard(SolveResult solve) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SectionTitle('这片天在哪儿', Icons.travel_explore),
+              const SizedBox(height: 12),
+              AllSkyFinder(
+                centerRa: solve.centerRa,
+                centerDec: solve.centerDec,
+                fieldOfViewDegrees: solve.fieldOfViewDegrees,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '十字是这张照片的中心：${formatRa(solve.centerRa)} · '
+                '${formatDec(solve.centerDec)}',
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                solve.fieldOfViewDegrees > 0
+                    ? '黄圈示意视场大小（对角 ${formatFieldOfView(solve.fieldOfViewDegrees)}）。'
+                        '横轴赤经向左增大，绿线是天赤道。'
+                    : '横轴赤经向左增大，绿线是天赤道。',
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _solveCard(SolveResult? solve) => Card(
         child: Padding(

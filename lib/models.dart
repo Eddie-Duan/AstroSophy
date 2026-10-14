@@ -193,6 +193,51 @@ class GaiaMatch {
       );
 }
 
+/// 一个星座在图像上的连线。
+///
+/// 连线本身是 HIP 星对，存在后台 isolate 的星表里；而画线要的是像素坐标。
+/// 所以投影放在解算侧做完，把已经能直接画的线段随 [SolveResult] 带回界面，
+/// 界面不必再持有星表，也不必知道天球坐标怎么换算。
+class ConstellationFigure {
+  const ConstellationFigure({
+    required this.name,
+    required this.segments,
+    required this.labelX,
+    required this.labelY,
+  });
+
+  /// 星座名，用中文名，和「星座」指标条上的写法一致。
+  final String name;
+
+  /// 线段的图像像素坐标，每条是 `[x1, y1, x2, y2]`。已经裁到图像范围内，
+  /// 所以画的时候不用再管越界。
+  final List<List<double>> segments;
+
+  /// 星座名标在哪里。取各段中点的平均而不是包围盒中心：连线分布往往是
+  /// 一条弯曲的折线，包围盒中心容易落在没有任何线的空白处。
+  final double labelX;
+  final double labelY;
+
+  Map<String, Object?> toJson() => {
+        'name': name,
+        'segments': segments,
+        'label_x': labelX,
+        'label_y': labelY,
+      };
+
+  static ConstellationFigure fromJson(Map<String, Object?> json) =>
+      ConstellationFigure(
+        name: json['name'] as String? ?? '',
+        segments: (json['segments'] as List<Object?>? ?? const [])
+            .whereType<List<Object?>>()
+            .map((row) => row.whereType<num>().map((v) => v.toDouble()).toList())
+            .where((row) => row.length == 4)
+            .toList(growable: false),
+        labelX: _number(json['label_x']),
+        labelY: _number(json['label_y']),
+      );
+}
+
 /// 天球投影（World Coordinate System），同时被在线解算和本地解算产出。
 class Wcs {
   const Wcs({
@@ -419,6 +464,7 @@ class SolveResult {
     this.source = SolveSource.online,
     this.fieldOfViewDegrees = 0,
     this.constellations = const [],
+    this.constellationFigures = const [],
     this.wcs,
     this.rotationDegrees = 0,
     this.matchedCount = 0,
@@ -442,6 +488,9 @@ class SolveResult {
 
   /// 视场内出现的星座名称（按视场内亮星数量排序）。
   final List<String> constellations;
+
+  /// 视场内星座连线的像素坐标，已经过 WCS 投影和裁剪，可以直接画。
+  final List<ConstellationFigure> constellationFigures;
 
   /// 保留原始 WCS，供叠加星座连线、画方向指示和比例尺使用。
   final Wcs? wcs;
@@ -485,11 +534,39 @@ class SolveResult {
       source: source,
       fieldOfViewDegrees: fieldOfViewDegrees,
       constellations: constellations,
+      constellationFigures: constellationFigures,
       wcs: wcs,
       rotationDegrees: rotationDegrees,
       matchedCount: matchedCount,
     );
   }
+
+  /// 补上星座信息。
+  ///
+  /// 在线解算只带回 WCS，星座名和连线是本机用目录算的，所以拿到结果之后
+  /// 还要再装饰一道。不带 WCS 的结果原样返回——没有坐标就无从投影。
+  SolveResult withConstellationDecoration(
+    List<String> names,
+    List<ConstellationFigure> figures,
+  ) =>
+      SolveResult(
+        centerRa: centerRa,
+        centerDec: centerDec,
+        arcsecPerPixel: arcsecPerPixel,
+        namedStars: namedStars,
+        deepSkyObjects: deepSkyObjects,
+        matchedStars: matchedStars,
+        magnitudeZeroPoint: magnitudeZeroPoint,
+        magnitudeScatter: magnitudeScatter,
+        catalogWarning: catalogWarning,
+        source: source,
+        fieldOfViewDegrees: fieldOfViewDegrees,
+        constellations: names,
+        constellationFigures: figures,
+        wcs: wcs,
+        rotationDegrees: rotationDegrees,
+        matchedCount: matchedCount,
+      );
 
   Map<String, Object?> toJson() => {
         'center_ra_deg': centerRa,
@@ -504,6 +581,8 @@ class SolveResult {
         'source': source.name,
         'field_of_view_degrees': fieldOfViewDegrees,
         'constellations': constellations,
+        'constellation_figures':
+            constellationFigures.map((figure) => figure.toJson()).toList(),
         'wcs': wcs?.toJson(),
         'rotation_degrees': rotationDegrees,
         'matched_count': matchedCount,
@@ -528,6 +607,10 @@ class SolveResult {
         constellations: (json['constellations'] as List<Object?>? ?? const [])
             .whereType<String>()
             .toList(),
+        constellationFigures: _objectList(
+          json['constellation_figures'],
+          ConstellationFigure.fromJson,
+        ),
         wcs: json['wcs'] is Map
             ? Wcs.fromJson(Map<String, Object?>.from(json['wcs']! as Map))
             : null,
