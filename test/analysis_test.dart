@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
-import 'package:astrosophy/main.dart';
+import 'package:astrosophy/analysis.dart';
+import 'package:astrosophy/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as imglib;
 
@@ -22,7 +23,7 @@ void main() {
         imglib.fillCircle(image, x: x, y: y, radius: 2, color: imglib.ColorRgb8(245, 238, 226));
       }
 
-      final result = await SkyAnalysis.analyze(
+      final result = SkyAnalysis.analyze(
         Uint8List.fromList(imglib.encodePng(image)),
       );
 
@@ -41,14 +42,14 @@ void main() {
         }
       }
 
-      final result = await SkyAnalysis.analyze(
+      final result = SkyAnalysis.analyze(
         Uint8List.fromList(imglib.encodePng(image)),
       );
 
       expect(result.streakCandidates, isNotEmpty);
       expect(result.compactSources, isEmpty);
       expect(
-        result.diagnostics.any((message) => message.contains('不能据此确认卫星或飞机')),
+        result.diagnostics.any((message) => message.contains('单张照片不能据此确认')),
         isTrue,
       );
     });
@@ -57,7 +58,7 @@ void main() {
       final image = imglib.Image(width: 64, height: 48);
       imglib.fill(image, color: imglib.ColorRgb8(0, 0, 0));
 
-      final result = await SkyAnalysis.analyze(
+      final result = SkyAnalysis.analyze(
         Uint8List.fromList(imglib.encodePng(image)),
       );
 
@@ -67,8 +68,9 @@ void main() {
     });
 
     test('rejects undecodable source image with an actionable error', () async {
-      await expectLater(
-        SkyAnalysis.analyze(Uint8List.fromList([1, 2, 3, 4])),
+      // 分析是同步的：坏字节当场抛错，调用方直接在 try/catch 里接住。
+      expect(
+        () => SkyAnalysis.analyze(Uint8List.fromList([1, 2, 3, 4])),
         throwsA(isA<FormatException>()),
       );
     });
