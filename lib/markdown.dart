@@ -12,8 +12,9 @@ import 'theme.dart';
 /// 只有模型实际会用的那几种。一个几百行的转换器，比一个长期没人管的依赖更好
 /// 交代，也和这个项目「图表全部自绘、不引图表库」的选择一致。
 ///
-/// 支持的范围：`#` 标题、`**粗体**`、`*斜体*`、`` `行内代码` ``、围栏代码块、
-/// `-` / `1.` 列表（含缩进）、`>` 引用、`---` 分隔线、`[文字](链接)`。
+/// 支持的范围：`#` 标题、`**粗体**`、`*斜体*`、`` `行内代码` ``、`==高亮==`、
+/// 围栏代码块、`-` / `1.` 列表（含缩进）、`>` 引用、`---` 分隔线、
+/// `[文字](链接)`。
 ///
 /// 链接只显示文字，不做跳转：这个 APP 没有打开浏览器的能力，也不该因为一段
 /// 模型输出就把用户切走。真正需要点的地方（Astrometry.net 之类）在别处有按钮。
@@ -504,6 +505,7 @@ List<InlineSpan> inlineSpans(String text, TextStyle base) {
   const markers = <(String, String)>[
     ('**', '**'),
     ('__', '__'),
+    ('==', '=='),
     ('`', '`'),
     ('*', '*'),
     ('_', '_'),
@@ -566,6 +568,12 @@ List<InlineSpan> inlineSpans(String text, TextStyle base) {
 
 TextStyle _styleFor(String marker, TextStyle base) => switch (marker) {
       '**' || '__' => base.copyWith(fontWeight: FontWeight.w700),
+      // 高亮：天体名用它标出来。
+      //
+      // 不借用行内代码（`` ` ``）来达到同样效果：那是等宽加底色，用来写字段名
+      // 的；把一个中文星名塞进去，看着像出错信息。这个记号在 Markdown 的
+      // 各种方言里就是「高亮」，语义对得上。
+      '==' => base.copyWith(color: kMint, fontWeight: FontWeight.w600),
       '`' => base.copyWith(
           fontFamily: 'monospace',
           fontSize: (base.fontSize ?? 14) - 1.5,

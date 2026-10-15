@@ -277,6 +277,32 @@ class DetectedStarsPainter extends CustomPainter {
       shadows: [Shadow(color: Colors.black, blurRadius: 5)],
     );
 
+    // 所有标注都排完位置再统一画。
+    //
+    // 原来是「画到谁就顺手把它的字画上去」，于是同一块地方有两颗星、两条
+    // 深空天体、再加一个星座名，四段文字就会压成一团——那种图不是信息多，
+    // 是信息没了。改成先收集、再统一排版，冲突时挪位置。
+    final placer = LabelPlacer(destination);
+    final pending = <_PendingLabel>[];
+
+    void queue(
+      TextPainter painter,
+      Offset anchor, {
+      required int priority,
+      required Offset preferred,
+      bool force = false,
+    }) {
+      pending.add(
+        _PendingLabel(
+          painter: painter,
+          anchor: anchor,
+          priority: priority,
+          preferred: preferred,
+          force: force,
+        ),
+      );
+    }
+
     // 月面圈。
     //
     // 月球照走的是另一条链路，画面上一个编号都不会有——这个圈就是唯一能告诉
@@ -306,9 +332,14 @@ class DetectedStarsPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      caption.paint(
-        canvas,
-        Offset(center.dx - caption.width / 2, center.dy + moonRadius + 4),
+      queue(
+        caption,
+        center,
+        priority: 1,
+        preferred: Offset(-caption.width / 2, moonRadius + 4),
+        // 月面照片上只有这一个标，没有别的东西和它抢位置。真排不下时宁可
+        // 压上去也要画出来——把唯一的结论藏掉，比叠一行字糟糕得多。
+        force: true,
       );
     }
 
@@ -338,9 +369,13 @@ class DetectedStarsPainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.6);
       final anchor = toCanvas(figure.labelX, figure.labelY);
-      label.paint(
-        canvas,
-        anchor - Offset(label.width / 2, label.height / 2),
+      queue(
+        label,
+        anchor,
+        // 星座名排在最后：它是个背景参照，而编号和天体名才是这张图要回答
+        // 的问题。位置不够时该让路的是它。
+        priority: 6,
+        preferred: Offset(-label.width / 2, -label.height / 2),
       );
     }
 
@@ -411,7 +446,7 @@ class DetectedStarsPainter extends CustomPainter {
           ),
           textDirection: TextDirection.ltr,
         )..layout();
-        label.paint(canvas, point + const Offset(5, -12));
+        queue(label, point, priority: 5, preferred: const Offset(5, -12));
       }
     }
 
@@ -421,7 +456,9 @@ class DetectedStarsPainter extends CustomPainter {
         text: TextSpan(text: named.name, style: labelStyle),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.55);
-      label.paint(canvas, point + const Offset(6, 4));
+      // 星名排在编号前面：编号只说「第 10 号」，星名说的是「这是参宿四」。
+      // 位置不够时，宁可少一个编号——编号在下面的列表里查得到，名字不在。
+      queue(label, point, priority: 3, preferred: const Offset(6, 4));
     }
 
     // 深空天体和星点分开画：星点是个位置，深空天体是**一块面积**。所以这里的
@@ -457,7 +494,7 @@ class DetectedStarsPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.55);
-      label.paint(canvas, point + const Offset(10, -7));
+      queue(label, point, priority: 4, preferred: const Offset(10, -7));
     }
 
     // 疑似运动天体最后画，压在最上面：它是这张图上最稀有、也最该被先看到的
@@ -516,8 +553,59 @@ class DetectedStarsPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.55);
-      label.paint(canvas, found + const Offset(14, -20));
+      // 最高优先级：「疑似行星」是这张图上最稀有的结论，别的标注给它让路。
+      queue(
+        label,
+        found,
+        priority: 0,
+        preferred: const Offset(14, -20),
+        force: true,
+      );
     }
+
+    // 排位置，然后按排好的位置画。
+    //
+    // 顺序就是优先级：先排的占好位置，后来的绕开。同一段文字永远落在同一个
+    // 位置（没有随机数），所以同一张图前后两次画出来的标注完全一样。
+    for (final label in pending..sort((a, b) => a.priority.compareTo(b.priority))) {
+      final slot = placer.place(
+        label.anchor,
+        Size(label.painter.width, label.painter.height),
+        preferred: label.preferred,
+        force: label.force,
+      );
+      if (slot == null) continue;
+      if (slot.displaced) {
+        // 挪过位置的标注拉一条细线回到它的标记点。
+        //
+        // 没有这条线，一个被挪开的星名就只是「飘在那儿的一段字」，用户没法
+        // 判断它指的是哪颗星——那还不如让它压着别人。
+        canvas.drawLine(
+          label.anchor,
+          _edgePoint(slot.rect, label.anchor),
+          _leaderPaint,
+        );
+      }
+      label.painter.paint(canvas, slot.rect.topLeft);
+    }
+  }
+
+  /// 从矩形边界上离 [target] 最近的那个点。引线画到边界为止，不穿过文字。
+  static Offset _edgePoint(Rect rect, Offset target) {
+    final halfWidth = math.max(rect.width / 2, 0.001);
+    final halfHeight = math.max(rect.height / 2, 0.001);
+    final dx = (target.dx - rect.center.dx).abs() / halfWidth;
+    final dy = (target.dy - rect.center.dy).abs() / halfHeight;
+    if (dx > dy) {
+      return Offset(
+        target.dx < rect.center.dx ? rect.left : rect.right,
+        rect.center.dy,
+      );
+    }
+    return Offset(
+      rect.center.dx,
+      target.dy < rect.center.dy ? rect.top : rect.bottom,
+    );
   }
 
   /// 星历位置画到画布上的点。没有坐标映射、或者投影算不出有限值时返回 null。
@@ -573,6 +661,134 @@ class DetectedStarsPainter extends CustomPainter {
       oldDelegate.selectedObjectName != selectedObjectName ||
       oldDelegate.numbers != numbers ||
       oldDelegate.arcsecPerPixel != arcsecPerPixel;
+}
+
+/// 引线。压得很淡：它是「这段字指的是那颗星」的补充说明，不该比标注本身
+/// 显眼。
+final _leaderPaint = Paint()
+  ..strokeWidth = 0.9
+  ..color = const Color(0x59A6B5C8);
+
+/// 一个等着排位置的标注。
+class _PendingLabel {
+  _PendingLabel({
+    required this.painter,
+    required this.anchor,
+    required this.priority,
+    required this.preferred,
+    this.force = false,
+  });
+
+  /// 已经 layout 好的文字。
+  final TextPainter painter;
+
+  /// 它指的是图上那一点（画布坐标）。
+  final Offset anchor;
+
+  /// 小的先排、先占位置。
+  final int priority;
+
+  /// 不和别人冲突时用的偏移（相对 [anchor]）——就是改版前的老位置。
+  final Offset preferred;
+
+  /// 排不下时是否仍然要画出来。
+  ///
+  /// 只有「这张图上唯一的那个结论」配得上这个待遇：月面圈和疑似行星。它们
+  /// 被挤掉就等于这次分析白做了。编号、深空天体这种少一个不影响大局——
+  /// 下面列表里都在。
+  final bool force;
+}
+
+/// 排好位置的标注：该占的矩形，以及它是不是被挪开过（挪过就要拉引线）。
+typedef LabelSlot = ({Rect rect, bool displaced});
+
+/// 给图上的文字标注排位置，让它们不互相压住。
+///
+/// 做法是「先来后到 ＋ 就近挪位」：按优先级依次给每个标注找空位，首选原来
+/// 那个偏移（所以没有冲突时画面和改版前完全一样），被占了就按左、上、下、
+/// 四个斜角的顺序试。都不行就不给位置。
+///
+/// 不给位置是刻意的：两段压在彼此身上的文字哪一段都读不出来，少一段至少
+/// 还能读另一段。而且每个标注在下面的列表里都有一行，图上没标出来不等于
+/// 丢了这个对象，只说明这一处太挤。
+///
+/// 全程没有随机数，所以同一张图前后两次排出来的位置完全一致——这一点很
+/// 重要，否则用户每滚一次屏，图上的字就会跳一次。
+///
+/// 公开出来是为了能单独测排版结果，不必为了断言「这两段字压住了没有」去
+/// 搭一棵 widget 树再截图。
+class LabelPlacer {
+  LabelPlacer(this.bounds);
+
+  /// 文字要落在这个范围里。出了边界会被卡片裁掉，等于没画。
+  final Rect bounds;
+
+  final List<Rect> _taken = [];
+
+  /// 两个标注之间至少留的空隙。
+  static const _gap = 1.5;
+
+  /// 排一个标注；实在没地方并且 [force] 为假时返回 null。
+  LabelSlot? place(
+    Offset anchor,
+    Size size, {
+    Offset preferred = Offset.zero,
+    bool force = false,
+  }) {
+    for (final offset in _candidates(preferred, size)) {
+      final rect = _clamp(_shift(anchor, offset, size));
+      if (_overlapsAnything(rect)) continue;
+      _taken.add(rect);
+      return (rect: rect, displaced: offset != preferred);
+    }
+    if (!force) return null;
+    final rect = _clamp(_shift(anchor, preferred, size));
+    _taken.add(rect);
+    return (rect: rect, displaced: false);
+  }
+
+  Rect _shift(Offset anchor, Offset offset, Size size) => Rect.fromLTWH(
+        anchor.dx + offset.dx,
+        anchor.dy + offset.dy,
+        size.width,
+        size.height,
+      );
+
+  bool _overlapsAnything(Rect rect) {
+    final padded = rect.inflate(_gap);
+    for (final taken in _taken) {
+      if (taken.overlaps(padded)) return true;
+    }
+    return false;
+  }
+
+  /// 候选位置，按尝试顺序。第一个是原来的偏移，所以不挤的时候画面不变。
+  List<Offset> _candidates(Offset preferred, Size size) {
+    const gap = 5.0;
+    return [
+      preferred,
+      Offset(-size.width - gap, preferred.dy), // 左
+      Offset(preferred.dx, -size.height - gap), // 上
+      Offset(preferred.dx, size.height + gap), // 下
+      Offset(-size.width - gap, -size.height - gap), // 左上
+      Offset(gap, -size.height - gap), // 右上
+      Offset(-size.width - gap, gap), // 左下
+      const Offset(gap, gap), // 右下
+    ];
+  }
+
+  /// 把矩形挪回画面里。贴着边的时候只能挪回来——被裁掉的文字比压着的文字
+  /// 更没用。
+  Rect _clamp(Rect rect) {
+    final maxLeft = math.max(bounds.left, bounds.right - rect.width);
+    final maxTop = math.max(bounds.top, bounds.bottom - rect.height);
+    return Rect.fromLTWH(
+      rect.left.clamp(bounds.left, maxLeft).toDouble(),
+      rect.top.clamp(bounds.top, maxTop).toDouble(),
+      rect.width,
+      rect.height,
+    );
+  }
 }
 
 /// 一键解析的进度条。

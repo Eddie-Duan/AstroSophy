@@ -13,6 +13,7 @@ import 'analysis.dart';
 import 'astrometry.dart';
 import 'demo.dart';
 import 'exif.dart';
+import 'export.dart';
 import 'history.dart';
 import 'history_screen.dart';
 import 'markdown.dart';
@@ -81,12 +82,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 是否允许把预览图上传到 Astrometry.net。默认不允许，且要用户在设置里
   /// 明确勾选过才为真——上传照片是不可逆的动作，不能靠一次性的弹窗确认。
   bool _uploadAllowed = false;
-
-  /// 模型是不是配好了。没配就不在链路里排「生成解读」这一步，进度条也
-  /// 不会为它留格子。
-  bool _aiConfigured = false;
-
-  bool _astrometryConfigured = false;
 
   PipelineProgress? _progress;
 
@@ -225,13 +220,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Future<void> _reloadSettings() async {
     try {
       final upload = await _storage.read(key: 'allowUpload');
-      final astrometry = await _storage.read(key: 'astrometryKey') ?? '';
-      final settings = await _readModelSettings();
       if (!mounted) return;
       setState(() {
         _uploadAllowed = upload == 'true';
-        _astrometryConfigured = astrometry.trim().isNotEmpty;
-        _aiConfigured = settings.hasAnyModel;
       });
     } on Exception catch (error) {
       _showError('无法读取设置：$error');
@@ -347,50 +338,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     });
   }
   Future<void> _pickDemoImage() async {
+    // 这张列表必须能滚（见 [DemoPickerSheet]）：条目一多，固定高度的列就会
+    // 超出底部卡片的高度，Flutter 在下面画一条黄黑斜纹的溢出条——那就是
+    // 用户看到的「黑黄的条带报错」。
+    //
+    // 高度上限按屏幕给，仍然留出上方一段能看见背景，用户一眼就知道这是个
+    // 可以下滑关掉的卡片。
     final choice = await showModalBottomSheet<DemoImage>(
       context: context,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
-              child: Text(
-                '试一张演示星图',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Text(
-                '四张都是真实拍摄的星空照片，可以直接走完整的解析流程。',
-                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
-              ),
-            ),
-            for (final image in demoImages)
-              ListTile(
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset(
-                    image.asset,
-                    width: 46,
-                    height: 46,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                title: Text(image.title),
-                subtitle: Text(
-                  image.subtitle,
-                  style: const TextStyle(fontSize: 12),
-                ),
-                onTap: () => Navigator.of(context).pop(image),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.8,
       ),
+      builder: (context) => const DemoPickerSheet(),
     );
     if (choice == null) return;
     try {
@@ -891,12 +852,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        Text(
-          _runHint,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
-        ),
-        const SizedBox(height: 12),
         _actionRow(analysis: _analysis),
       ],
     );
@@ -1031,24 +986,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     } catch (error) {
       _showError('打开历史记录失败：$error');
     }
-  }
-
-  /// 按钮下面那行小字：这一次点下去到底会跑哪几步。
-  ///
-  /// 「配了几个 Key、分别管什么用」是这个 APP 里最容易搞混的事。与其让用户
-  /// 自己回忆，不如每次都写清楚，尤其是哪一步会把照片发出去。
-  String get _runHint {
-    final sharesUpload = _astrometryConfigured && _uploadAllowed;
-    final steps = <String>[
-      '本机分析',
-      '本机解算天区',
-      if (sharesUpload) '必要时在线解算',
-      if (_aiConfigured) 'AI 解读',
-    ];
-    final tail = sharesUpload
-        ? '；只有本机解算不出来时才会把预览图上传到 Astrometry.net'
-        : '；全程不上传图片';
-    return '将执行：${steps.join(' → ')}$tail。';
   }
 
   void _showError(String message) {
@@ -1426,7 +1363,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          subtitle: const Text('解析结果见下方', style: TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -1593,9 +1529,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
                         // 关掉连线时传空表而不是把 painter 换一个：换 painter
                         // 会让整张图重画，而这里只是少画几条线。
-                        figures: _showConstellations
-                            ? solve?.constellationFigures ?? const []
-                            : const [],
+                        figures: _visibleConstellationFigures(solve),
                         hidden: _hiddenIndices(analysis, solve),
                         selected: _selectedTarget,
                         selectedObjectName: _selectedDeepSkyName,
@@ -1608,7 +1542,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           ),
           Positioned(left: 8, top: 8, child: _imageModeToggle()),
           Positioned(right: 8, top: 8, child: _constellationToggle(solve)),
-          Positioned(right: 8, top: 44, child: _zoomReset()),
+          Positioned(right: 8, top: 44, child: _fullscreenButton(analysis, solve)),
+          Positioned(right: 8, top: 80, child: _zoomReset()),
           Positioned(
             left: 8,
             right: 8,
@@ -1618,6 +1553,85 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ],
       ),
     );
+  }
+
+  List<ConstellationFigure> _visibleConstellationFigures(SolveResult? solve) =>
+      _showConstellations ? solve?.constellationFigures ?? const [] : const [];
+
+  /// 全屏看图。
+  ///
+  /// 半屏那块图能放的像素就那么多：视场里几十颗星时，编号和名字挤在一起，
+  /// 想看清一颗星到底标的哪儿，只能靠捏合放大——而捏合是「看得到但存不下」
+  /// 的：想让别人也看到，就得把这张图导出去。
+  ///
+  /// 所以全屏里配了两件事：整屏看图（自己一套缩放控制器，不影响半屏那块），
+  /// 以及导出这张带标注的图。
+  Widget _fullscreenButton(SkyAnalysis analysis, SolveResult? solve) => Material(
+        color: Colors.black54,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => _openFullscreen(analysis, solve),
+          child: const Padding(
+            padding: EdgeInsets.all(6),
+            child: Icon(Icons.fullscreen, size: 17, color: kMint),
+          ),
+        ),
+      );
+
+  Future<void> _openFullscreen(SkyAnalysis analysis, SolveResult? solve) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => FullscreenImagePage(
+          bytes: _showProcessed ? analysis.processedPreview : analysis.preview,
+          painter: DetectedStarsPainter(
+            analysis: analysis,
+            namedStars: _visibleNamedStars(analysis, solve),
+            objects: _visibleDeepSkyObjects(solve),
+            bodies: solve?.movingBodies ?? const [],
+            wcs: solve?.wcs,
+            arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
+            figures: _visibleConstellationFigures(solve),
+            hidden: _hiddenIndices(analysis, solve),
+            selected: _selectedTarget,
+            selectedObjectName: _selectedDeepSkyName,
+          ),
+          onExport: () => _exportAnnotated(analysis, solve),
+        ),
+      ),
+    );
+  }
+
+  /// 导出这张带标注的图，交给系统分享面板。
+  ///
+  /// 半屏和全屏走的是同一套「当前勾选」：隐去的组、收起的星，导出的图里
+  /// 同样没有。用户在屏幕上看到什么，拿到的就是什么。
+  Future<void> _exportAnnotated(
+    SkyAnalysis analysis,
+    SolveResult? solve,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final png = await renderAnnotatedPng(
+        analysis: analysis,
+        baseImage: _showProcessed ? analysis.processedPreview : analysis.preview,
+        namedStars: _visibleNamedStars(analysis, solve),
+        objects: _visibleDeepSkyObjects(solve),
+        figures: _visibleConstellationFigures(solve),
+        bodies: solve?.movingBodies ?? const [],
+        hidden: _hiddenIndices(analysis, solve),
+        wcs: solve?.wcs,
+        arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
+      );
+      final name = _filename ?? 'astrosophy';
+      final file = await saveAnnotatedPng(
+        png,
+        fileName: '${name.replaceAll(RegExp(r'\.[A-Za-z0-9]+$'), '')}_标注.png',
+      );
+      await shareExportedFile(file, text: 'AstroSophy 标注图');
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('导出失败：$error')));
+    }
   }
 
   /// 回到整幅。
@@ -1688,7 +1702,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     );
   }
 
-  /// 图下方那一小块说明：现在选中的是第几号，或者提示这套编号怎么用。
+  /// 图下方那一小块说明：现在选中的是第几号。
+  ///
+  /// 没选中任何东西时整块不出现。原来这里放着一句「点图中的亮点，或点下方
+  /// 列表……」，那是在教一个不用教的动作——图上标着编号、列表紧贴在下面，
+  /// 谁都会去点。它占着图的下缘，却一句有效信息都没有。
+  /// 选中的读数则必须留：编号把列表和图对上，读数把「对上了什么」说出来。
   Widget _selectionHint(SkyAnalysis analysis, SolveResult? solve) {
     final targets = analysis.numberedTargets;
     final index = _selectedTarget;
@@ -1696,7 +1715,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     if (_selectedDeepSkyName != null) {
       text = '深空天体 · $_selectedDeepSkyName';
     } else if (index == null || index >= targets.length) {
-      text = '点图中的亮点，或点下方列表——两边编号一一对应；双指可放大';
+      return const SizedBox.shrink();
     } else {
       final star = targets[index];
       final position =
@@ -2741,9 +2760,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   /// 观星记录：一张照片的「成交报告」。
   ///
-  /// 用户拍完一张星空，最想知道的是「我拍到了什么、拍得怎么样、下次怎么
-  /// 更好」。这三件事分别对应这里的一段话、一排数字、一份建议清单。下面
-  /// 那些卡都是过程性的细节，只有这张是结论。
+  /// 用户拍完一张星空，最想知道的是「我拍到了什么」。所以这张卡的第一行
+  /// 就是答案：星座，加上画面里认得出的天体——亮星给中文星官名，星团星云
+  /// 给「编号 ＋ 中文昵称」。
+  ///
+  /// 那一段走 Markdown（`buildHeadlineMarkdown`），目的只有一个：让天体名
+  /// 有颜色。它是这一屏上唯一需要被「一眼扫到」的信息，而一色到底的文字里
+  /// 一行有六个名字，扫起来跟没有一样。
+  ///
+  /// 下面那排数字是「拍得怎么样」，再下面是各条细节卡。曾经这里还有一段
+  /// 总结和一份拍摄建议，都删了：总结和上面那段说的是同一件事，建议则总是
+  /// 那几条通用话——占着最好的位置，说的却不是用户此刻最想知道的。
   Widget _observationCard(SkyAnalysis analysis, SolveResult? solve) {
     final moon = moonFactsOf(analysis, _moment?.utc);
     final record = buildObservationRecord(analysis, solve, moon: moon);
@@ -2760,24 +2787,22 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 _HelpButton(
                   title: '观星记录怎么来的',
                   message:
-                      '所有数字都是从这张照片本身量出来的——包括天空背景、点源大小和星等。'
-                      '它们会随曝光、ISO、光圈和后期处理变化，换个晚上、换台机器就不一样，'
-                      '适合和「你自己过去拍的」比，不适合和别人的照片比。',
+                      '名字、编号、星座、视场这些是星表和解算给的，是事实；'
+                      '亮面占比、点源大小、星等这些是从这张照片本身量出来的，'
+                      '会随曝光、ISO、光圈和后期处理变化。换个晚上、换台机器就'
+                      '不一样，适合和「你自己过去拍的」比，不适合和别人的照片比。',
                 ),
               ],
             ),
             const SizedBox(height: 10),
-            SelectableText(
-              record.summary,
-              style: const TextStyle(height: 1.5),
+            MarkdownText(
+              buildHeadlineMarkdown(analysis, solve, moon: moon),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                if (record.constellation != null)
-                  MetricChip('拍到', record.constellation!),
                 MetricChip('画质', record.quality),
                 MetricChip('天空背景', record.skyBrightness),
                 // 月面照片不走星点链路，点源 FWHM、星表匹配这些数在这里没有
@@ -2802,28 +2827,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               _movingBodiesNotice(record.movingBodies),
             ],
             if (record.moon != null) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 12),
               _moonBlock(record.moon!),
             ],
-            const Divider(height: 26),
-            const Text('拍摄建议', style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            for (final item in record.advice)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6, right: 8),
-                      child: Icon(Icons.circle, size: 5, color: kMint),
-                    ),
-                    Expanded(
-                      child: Text(item, style: const TextStyle(height: 1.45, fontSize: 13)),
-                    ),
-                  ],
-                ),
-              ),
           ],
         ),
       ),
@@ -3195,6 +3201,184 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 ///
 /// 编号是 `numberedTargets` 的下标，不是组内序号——分组只改变显示顺序，不能
 /// 改变编号，否则图和列表就说不到一块去了。
+/// 「试一张演示星图」的底部卡片。
+///
+/// 内容列成可滚的 [ListView] 而不是固定高度的一摞 ListTile：条目数一多
+/// （这张表现在有五张，以后还会加），一摞固定高度的行就会超出底部卡片的
+/// 可用高度，Flutter 在下面画一条黄黑斜纹的溢出条。那不是「内容太多」的
+/// 提示，而是一块坏掉的界面。
+///
+/// 抽成独立的 widget 还有一个用处：它能被单独塞进一个矮框里测——溢出这种
+/// 事只有在高度真的不够时才复现，靠肉眼看截图是靠不住的。
+class DemoPickerSheet extends StatelessWidget {
+  const DemoPickerSheet({super.key});
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: ListView(
+          // 内容少的时候卡片跟着内容收，不要撑满整屏。
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+              child: Text(
+                '试一张演示星图',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Text(
+                '${demoImages.length} 张都是真实拍摄的照片，可以直接走完整的解析流程。',
+                style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              ),
+            ),
+            for (final image in demoImages)
+              ListTile(
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset(
+                    image.asset,
+                    width: 46,
+                    height: 46,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                title: Text(image.title),
+                subtitle: Text(
+                  image.subtitle,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                onTap: () => Navigator.of(context).pop(image),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+}
+
+/// 全屏看图：一块可以随便捏合的图，加两个出口。
+///
+/// 自己一套 [TransformationController]，和半屏那块互不影响——从全屏退出来时
+/// 半屏还停在用户离开时的位置，不用重新找。
+///
+/// 两个按钮：左上角退出全屏（「恢复」到半屏），右上角导出这张带标注的图。
+/// 退出按钮放在左上角而不是右上角，是因为右上角要留给导出——用户进全屏多半
+/// 就是为了看清一点东西、然后把它存下来，导出是这一屏的**目的**，退出去只是
+/// 离开；把按钮按「去哪里」和「干什么」分开摆，比两个挤在一起好认。
+class FullscreenImagePage extends StatefulWidget {
+  const FullscreenImagePage({
+    super.key,
+    required this.bytes,
+    required this.painter,
+    required this.onExport,
+  });
+
+  final Uint8List bytes;
+
+  /// 和半屏共用同一个 painter 构造：图上标出来的东西必须**一模一样**，
+  /// 否则用户在全屏里看到的是另一张图，导出的又是第三张。
+  final DetectedStarsPainter painter;
+
+  final Future<void> Function() onExport;
+
+  @override
+  State<FullscreenImagePage> createState() => _FullscreenImagePageState();
+}
+
+class _FullscreenImagePageState extends State<FullscreenImagePage> {
+  final _viewer = TransformationController();
+  bool _exporting = false;
+
+  @override
+  void dispose() {
+    _viewer.dispose();
+    super.dispose();
+  }
+
+  Future<void> _export() async {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    try {
+      await widget.onExport();
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            InteractiveViewer(
+              transformationController: _viewer,
+              minScale: 1,
+              // 全屏这块比半屏大得多，能放到 12 倍：这里要看清的是单个像素
+              // 上的星点，而不是「大概在哪」。
+              maxScale: 12,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (widget.bytes.isEmpty)
+                    const MissingImage()
+                  else
+                    Image.memory(
+                      widget.bytes,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) => const MissingImage(),
+                    ),
+                  CustomPaint(painter: widget.painter),
+                ],
+              ),
+            ),
+            Positioned(
+              left: 12,
+              top: 12,
+              child: SafeArea(child: _roundButton(
+                icon: Icons.close_fullscreen,
+                tooltip: '退出全屏',
+                onTap: () => Navigator.of(context).pop(),
+              )),
+            ),
+            Positioned(
+              right: 12,
+              top: 12,
+              child: SafeArea(child: _roundButton(
+                icon: _exporting ? Icons.hourglass_top : Icons.ios_share,
+                tooltip: '导出带标注的图',
+                onTap: _exporting ? null : _export,
+              )),
+            ),
+          ],
+        ),
+      );
+
+  Widget _roundButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) =>
+      Material(
+        color: Colors.black54,
+        shape: const CircleBorder(),
+        child: Tooltip(
+          message: tooltip,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(9),
+              child: Icon(icon, size: 22, color: kMint),
+            ),
+          ),
+        ),
+      );
+}
+
+/// 一个分组的编号项：在 [SkyAnalysis.numberedTargets] 里的下标，加上它属于哪一组。
 class _NumberedTarget {
   const _NumberedTarget(this.number, this.star);
 

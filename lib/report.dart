@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'analysis.dart';
+import 'deepsky_names.dart';
 import 'models.dart';
 import 'moon.dart';
 
@@ -199,6 +200,113 @@ MoonFacts? moonFactsOf(SkyAnalysis analysis, DateTime? utc) {
     waxing: phase?.waxing,
   );
 }
+
+/// 报告最上面那一段：用户真正想知道的事，句废话都不放。
+///
+/// 三条原则：
+///   1. **先说是什么**。星座、画面里认得出的天体，排在所有数字前面。
+///   2. **不写废话**。「解析结果见下方」这类不提供信息的句子一律不要。
+///   3. **名字要看得见**。天体名用 `==…==` 标出来（记号的定义见
+///      `lib/markdown.dart`），一屏文字里一眼就能挑出「我拍到了什么」。
+///
+/// 这段文字是**本地拼的**，不走模型：它全是星表查出来的事实——名字、编号、
+/// 星等、视场——编错一个字符就是错的事实。模型的活是解释这些事实，不是生产
+/// 它们，所以这里也不给它编的机会。模型拿到的是同一份事实（`buildAgentReport`），
+/// 它写的那段解读接在这后面。
+String buildHeadlineMarkdown(
+  SkyAnalysis analysis,
+  SolveResult? solve, {
+  MoonFacts? moon,
+}) {
+  final lines = <String>[];
+
+  if (moon != null) {
+    // 月面照片没有星场可报，「在哪个星座」对月亮没有意义——月亮几分钟就挪
+    // 出星座边界。它有自己的三件事：相、亮面占比、占多大。
+    lines.add('## ${moon.phaseName ?? '月亮'}');
+    lines.add('');
+    lines.add('- 亮面占比 ==${moon.measuredPercent}==（图上量的）');
+    if (moon.ephemerisPercent != null) {
+      lines.add('- 按拍摄时刻算 ==${moon.ephemerisPercent}==');
+    }
+    final disc = analysis.moonDisc!;
+    lines.add('- 月盘占画面 ==${(disc.discAreaFraction * 100).toStringAsFixed(2)}%==');
+    if (moon.caution != null) {
+      lines.add('');
+      lines.add('> ${moon.caution}');
+    }
+    return lines.join('\n');
+  }
+
+  final constellation =
+      solve != null && solve.constellations.isNotEmpty
+          ? solve.constellations.first
+          : null;
+  lines.add('## ${constellation ?? (solve == null ? '天区未识别' : '天区已解算')}');
+  lines.add('');
+
+  final bodies = buildMovingBodyEntries(solve);
+  for (final body in bodies) {
+    // 行星是这张图上最稀有、也最该被先看到的结论，排在第一条。
+    lines.add('- ==${body.name}==${
+        body.magnitude == null ? '' : '，星等约 ${body.magnitude!.toStringAsFixed(1)}'
+    }，${body.separationLabel}');
+  }
+
+  final named = _chineseNamedStars(solve);
+  if (named.isNotEmpty) {
+    lines.add('- 亮星 ${named.map((name) => '==$name==').join('、')}');
+  }
+
+  final deepSky = buildDeepSkyEntries(solve);
+  if (deepSky.isNotEmpty) {
+    lines.add(
+      '- 深空天体 ${deepSky.take(3).map((entry) {
+        final label = entry.label;
+        final coverage = entry.fieldFraction;
+        if (coverage == null || coverage < 0.05) return '==$label==';
+        return '==$label==（占像场 ${(coverage * 100).round()}%）';
+      }).join('、')}',
+    );
+  }
+
+  if (solve != null) {
+    lines.add(
+      '- 视场 ==${formatFieldOfView(solve.fieldOfViewDegrees)}== · '
+      '==${solve.arcsecPerPixel.toStringAsFixed(1)}″==/像素 · '
+      '星表匹配 ==${solve.matchedCount}== 颗',
+    );
+  } else if (analysis.compactSources.isNotEmpty) {
+    lines.add('- 检出 ==${analysis.compactSources.length}== 个紧凑点源，但没和星表对上');
+  }
+
+  return lines.join('\n');
+}
+
+/// 画面里最亮、且**有中文名**的几颗星。
+///
+/// 只要中文名。这条是有意的：报告顶部是给用户「一眼认出我拍到了什么」用的，
+/// 而「HIP 32349」认不出任何东西。在线解算回来的名字是 SIMBAD 的写法
+/// （`* alf CMa`），对不上内置表时就不列——列一个英文编号不如不列，它只
+/// 会让这一行变长。
+///
+/// 最多五颗：这一行是「哦，是猎户座」的量级信息，不是目录清单，清单在下面
+/// 的恒星表里。
+List<String> _chineseNamedStars(SolveResult? solve, {int limit = 5}) {
+  final stars = solve?.namedStars;
+  if (stars == null) return const [];
+  final chinese = <SkyObject>[
+    for (final star in stars)
+      if (_containsHan(star.name)) star,
+  ]..sort(
+      (a, b) => (a.magnitude ?? 99).compareTo(b.magnitude ?? 99),
+    );
+  return [for (final star in chinese.take(limit)) star.name];
+}
+
+final _hanPattern = RegExp(r'[\u4e00-\u9fff]');
+
+bool _containsHan(String text) => _hanPattern.hasMatch(text);
 
 /// 一张照片的「观星记录」：一屏能读完的关键数字，加一句人话总结。
 class ObservationRecord {
@@ -653,6 +761,13 @@ class DeepSkyEntry {
   });
 
   final String name;
+
+  /// 常见中文昵称（「昴星团」）；这张表只收最常被提到的那批目标，没有就是
+  /// null，此时只报编号，不硬译一个出来。
+  String? get nickname => chineseNicknameOf(name);
+
+  /// 报告里写这个名字：`M 45 昴星团`。
+  String get label => deepSkyLabel(name);
 
   /// 天球坐标。报告正文用不到，交给模型的摘要要用——模型可能想据此判断
   /// 这个目标当时的地平高度、或者属于哪个星座。
