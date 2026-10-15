@@ -2882,9 +2882,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           children: [
             const SectionTitle('视场内的恒星', Icons.table_chart_outlined),
             const SizedBox(height: 6),
-            Text(
+            const Text(
               '星名根据已匹配的恒星目录和解算位置标注。',
-              style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+              style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
             ),
             const SizedBox(height: 10),
             SingleChildScrollView(
