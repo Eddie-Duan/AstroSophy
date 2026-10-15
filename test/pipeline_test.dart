@@ -49,6 +49,29 @@ void main() {
       expect(analysis.stars.first.x, isPositive);
     }, timeout: const Timeout(Duration(minutes: 2)));
 
+    test('用户确认的图像遮罩可安全跨 isolate 应用', () async {
+      final image = nightSky(width: 420, height: 320, noise: 2);
+      drawStar(image, 100, 100, amplitude: 230);
+      drawStar(image, 300, 220, amplitude: 230);
+
+      final analysis = await worker.analyze(
+        encodePng(image),
+        exclusions: const [
+          ImageExclusion(x: 0.1, y: 0.2, width: 0.2, height: 0.2),
+        ],
+      );
+
+      expect(
+        analysis.stars.any((star) => (star.x - 100).abs() < 6),
+        isFalse,
+      );
+      expect(
+        analysis.stars.any((star) => (star.x - 300).abs() < 6),
+        isTrue,
+      );
+      expect(analysis.maskRegions, hasLength(1));
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
     test('本机解算在后台跑完，坐标和进度都传得回来', () async {
       // 用目录合成的真实天区，而不是渲染出来的照片：这条测试要验的是
       // 「解算结果能不能跨 isolate 传回来」，检测那一环归 analysis_test 管。

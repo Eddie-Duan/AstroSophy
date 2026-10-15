@@ -61,6 +61,22 @@ class MaskRegion {
       );
 }
 
+/// 用户确认后从图像分析中排除的归一化矩形。该矩形只作用于测量数据，
+/// 原图预览不会被裁剪或覆盖。
+class ImageExclusion {
+  const ImageExclusion({
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+}
+
 /// 一次本地分析的完整结果。
 class SkyAnalysis {
   const SkyAnalysis({
@@ -270,7 +286,10 @@ class SkyAnalysis {
       );
 
   /// 对外唯一入口：给一份图片字节，返回分析结果。
-  static SkyAnalysis analyze(Uint8List bytes) {
+  static SkyAnalysis analyze(
+    Uint8List bytes, {
+    List<ImageExclusion> exclusions = const [],
+  }) {
     final decoded = decodeImageOrRawPreview(bytes);
     if (decoded == null) {
       throw const FormatException(
@@ -282,6 +301,12 @@ class SkyAnalysis {
     final height = image.height;
 
     final gray = _toGrayscale(image);
+    final excludedRegions = _applyImageExclusions(
+      gray,
+      width,
+      height,
+      exclusions,
+    );
     var saturated = 0;
     for (var i = 0; i < gray.length; i++) {
       if (gray[i] >= 250 / 255) saturated++;
@@ -350,10 +375,11 @@ class SkyAnalysis {
         )
         .toList(growable: false);
 
+    final maskRegions = [...classified.regions, ...excludedRegions];
     final brightFlatFraction = _brightFlatFraction(gray, width, height);
     final starfield = _judgeStarfield(
       stars: stars,
-      maskRegions: classified.regions,
+      maskRegions: maskRegions,
       brightFlatFraction: brightFlatFraction,
       width: width,
       height: height,
@@ -362,7 +388,7 @@ class SkyAnalysis {
 
     // 被文字抑制掉的点也要从画面里抹掉，否则处理图上会留下文字残影。
     final mask = Uint8List(width * height);
-    for (final region in classified.regions) {
+    for (final region in maskRegions) {
       _fillMask(mask, width, height, region.x, region.y, region.width, region.height);
     }
     // 掩膜按笔画的实际大小铺：一像素宽、几十像素高的笔画用 8×8 的小方块
@@ -375,6 +401,24 @@ class SkyAnalysis {
     var maskedPixels = 0;
     for (var i = 0; i < mask.length; i++) {
       if (mask[i] != 0) maskedPixels++;
+    }
+
+    final diagnostics = _buildDiagnostics(
+      stars: stars,
+      regions: maskRegions,
+      starfield: starfield,
+      background: grid.globalBackground,
+      noise: grid.globalNoise,
+      saturatedFraction: saturatedFraction,
+      fwhm: fwhm,
+      usedRelaxedThreshold: usedRelaxedThreshold,
+      suppressedText: suppressed.length,
+    );
+    if (excludedRegions.isNotEmpty) {
+      diagnostics.add(
+        '已按用户确认的视觉建议排除 ${excludedRegions.length} 个非星空区域；'
+        '只影响测量，原图保持不变。',
+      );
     }
 
     return SkyAnalysis(
@@ -391,27 +435,107 @@ class SkyAnalysis {
       noise: grid.globalNoise,
       backgroundIndex: grid.globalBackground * 100,
       saturatedFraction: saturatedFraction,
-      diagnostics: _buildDiagnostics(
-        stars: stars,
-        regions: classified.regions,
-        starfield: starfield,
-        background: grid.globalBackground,
-        noise: grid.globalNoise,
-        saturatedFraction: saturatedFraction,
-        fwhm: fwhm,
-        usedRelaxedThreshold: usedRelaxedThreshold,
-        suppressedText: suppressed.length,
-      ),
+      diagnostics: diagnostics,
       preview: Uint8List.fromList(imglib.encodeJpg(image, quality: 92)),
       processedPreview: _renderProcessedPreview(gray, width, height, grid, mask),
       fwhm: fwhm,
       nonStarFraction: maskedPixels / mask.length,
-      maskRegions: classified.regions,
+      maskRegions: maskRegions,
       isLikelyStarfield: starfield.isStarfield,
       starfieldConfidence: starfield.confidence,
       brightFlatFraction: brightFlatFraction,
       solverExtras: solverExtras,
     );
+  }
+}
+
+List<MaskRegion> _applyImageExclusions(
+  Float32List gray,
+  int width,
+  int height,
+  List<ImageExclusion> exclusions,
+) {
+  if (exclusions.length > 8) {
+    throw const FormatException('一次最多只能排除 8 个图像区域。');
+  }
+  final regions = <MaskRegion>[];
+  var totalArea = 0.0;
+  for (final exclusion in exclusions) {
+    final values = [
+      exclusion.x,
+      exclusion.y,
+      exclusion.width,
+      exclusion.height,
+    ];
+    if (values.any((value) => !value.isFinite) ||
+        exclusion.x < 0 ||
+        exclusion.y < 0 ||
+        exclusion.width <= 0 ||
+        exclusion.height <= 0 ||
+        exclusion.x + exclusion.width > 1 ||
+        exclusion.y + exclusion.height > 1) {
+      throw const FormatException('图像排除区域的坐标无效。');
+    }
+    final region = MaskRegion(
+      x: exclusion.x * width,
+      y: exclusion.y * height,
+      width: exclusion.width * width,
+      height: exclusion.height * height,
+      kind: MaskKind.text,
+    );
+    if (region.width < 2 ||
+        region.height < 2 ||
+        region.area > width * height * 0.25) {
+      throw const FormatException('图像排除区域尺寸超出允许范围。');
+    }
+    if (regions.any(
+      (other) =>
+          region.x < other.x + other.width &&
+          region.x + region.width > other.x &&
+          region.y < other.y + other.height &&
+          region.y + region.height > other.y,
+    )) {
+      throw const FormatException('图像排除区域不能互相重叠。');
+    }
+    totalArea += region.area;
+    if (totalArea > width * height * 0.3) {
+      throw const FormatException('建议排除区域总面积过大，已拒绝应用。');
+    }
+    _replaceRegionWithBoundaryMedian(gray, width, height, region);
+    regions.add(region);
+  }
+  return regions;
+}
+
+void _replaceRegionWithBoundaryMedian(
+  Float32List gray,
+  int width,
+  int height,
+  MaskRegion region,
+) {
+  final x0 = region.x.floor().clamp(0, width);
+  final y0 = region.y.floor().clamp(0, height);
+  final x1 = (region.x + region.width).ceil().clamp(0, width);
+  final y1 = (region.y + region.height).ceil().clamp(0, height);
+  final samples = <double>[];
+  for (var y = math.max(0, y0 - 3); y < math.min(height, y1 + 3); y++) {
+    for (var x = math.max(0, x0 - 3); x < math.min(width, x1 + 3); x++) {
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
+      samples.add(gray[y * width + x]);
+    }
+  }
+  if (samples.isEmpty) {
+    throw const FormatException('无法为图像排除区域估计背景。');
+  }
+  samples.sort();
+  final middle = samples.length ~/ 2;
+  final background = samples.length.isOdd
+      ? samples[middle]
+      : (samples[middle - 1] + samples[middle]) / 2;
+  for (var y = y0; y < y1; y++) {
+    for (var x = x0; x < x1; x++) {
+      gray[y * width + x] = background;
+    }
   }
 }
 
@@ -436,8 +560,11 @@ void _fillMask(
 }
 
 /// 在 isolate 里跑分析用的入口，参数和返回值都必须是可跨 isolate 传递的类型。
-Future<SkyAnalysis> analyzeImageBytes(Uint8List bytes) async =>
-    SkyAnalysis.analyze(bytes);
+Future<SkyAnalysis> analyzeImageBytes(
+  Uint8List bytes, {
+  List<ImageExclusion> exclusions = const [],
+}) async =>
+    SkyAnalysis.analyze(bytes, exclusions: exclusions);
 
 // ---------------------------------------------------------------------------
 // 解码
@@ -1203,9 +1330,13 @@ _StarfieldVerdict _judgeStarfield({
   required int height,
 }) {
   final pixels = width * height;
-  var maskedArea = 0.0;
+  final mask = Uint8List(pixels);
   for (final region in maskRegions) {
-    maskedArea += region.area;
+    _fillMask(mask, width, height, region.x, region.y, region.width, region.height);
+  }
+  var maskedArea = 0;
+  for (final value in mask) {
+    if (value != 0) maskedArea++;
   }
   final maskedFraction = pixels == 0 ? 0.0 : maskedArea / pixels;
   final compact = stars.where((star) => !star.isElongated).length;

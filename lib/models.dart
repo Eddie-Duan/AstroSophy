@@ -786,6 +786,7 @@ class ModelSettings {
     required this.lightModel,
     required this.strongKey,
     required this.strongModel,
+    this.visionModel = '',
   });
 
   final String baseUrl;
@@ -793,6 +794,7 @@ class ModelSettings {
   final String lightModel;
   final String strongKey;
   final String strongModel;
+  final String visionModel;
 
   bool get hasAnyModel => lightKey.trim().isNotEmpty || strongKey.trim().isNotEmpty;
 }

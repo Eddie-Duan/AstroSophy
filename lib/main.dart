@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
@@ -7,7 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'agent_tools.dart';
 import 'analysis.dart';
+import 'astrometry.dart';
 import 'demo.dart';
 import 'exif.dart';
 import 'history.dart';
@@ -68,10 +71,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   SkyAnalysis? _analysis;
   SolveResult? _solve;
   String? _explanation;
+  List<String> _agentActivity = const [];
   String? _error;
   List<String> _warnings = const [];
   bool _running = false;
   bool _explaining = false;
+  int _imageGeneration = 0;
 
   /// 是否允许把预览图上传到 Astrometry.net。默认不允许，且要用户在设置里
   /// 明确勾选过才为真——上传照片是不可逆的动作，不能靠一次性的弹窗确认。
@@ -274,7 +279,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         maxWidth: 1600,
         maxHeight: 1600,
         imageQuality: 100,
-        requestFullMetadata: false,
+        // 一些相册提供方默认不给完整元数据，导致可读的拍摄时间被丢掉。
+        requestFullMetadata: true,
       );
       if (file == null) return;
       final bytes = await file.readAsBytes();
@@ -311,6 +317,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 坐标配着那张图的星点」这种最难查的错。
   void _setImage(Uint8List bytes, String name, {CaptureMoment? moment}) {
     setState(() {
+      _imageGeneration++;
       _bytes = bytes;
       _filename = name;
       // 拍摄时刻和图片绑在一起：换图就必须重读，否则会出现「这张照片的
@@ -320,8 +327,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _analysis = null;
       _solve = null;
       _explanation = null;
+      _agentActivity = const [];
       _error = null;
       _warnings = const [];
+      _explaining = false;
       _savedId = null;
       // 编号只在同一张图里有意义，换图必须把选中项清掉，否则新图会在第 10
       // 号位置高亮一颗跟用户完全无关的星。
@@ -446,7 +455,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Future<void> _explain() async {
     final analysis = _analysis;
     if (analysis == null) return;
+    final imageGeneration = _imageGeneration;
     final settings = await _readModelSettings();
+    if (!mounted || imageGeneration != _imageGeneration) return;
     if (!settings.hasAnyModel) {
       _showError('请先在设置中配置至少一个兼容 OpenAI 接口的模型 API Key。');
       return;
@@ -454,23 +465,335 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() {
       _explaining = true;
       _error = null;
+      _agentActivity = [];
     });
     try {
-      final text = await ModelService.explain(
+      final report = buildAgentReport(analysis, _solve);
+      final text = await ModelService.chatWithTools(
         baseUrl: settings.baseUrl,
         lightKey: settings.lightKey,
         lightModel: settings.lightModel,
         strongKey: settings.strongKey,
         strongModel: settings.strongModel,
-        report: buildAgentReport(analysis, _solve),
+        report: report,
         question: _questionController.text,
+        executeTool: AgentTools(
+          report: report,
+          loadHistory: () async => (await _ensureHistory()).list(),
+          handleAction: (name, arguments) =>
+              _executeAgentAction(name, arguments, analysis, report),
+        ).execute,
+        onToolCall: (name) {
+          if (!mounted || imageGeneration != _imageGeneration) return;
+          setState(() => _agentActivity = [
+                ..._agentActivity,
+                switch (name) {
+                  'get_current_report' => '读取当前分析报告',
+                  'find_catalog_object' => '查询当前视场天体',
+                  'list_observations' => '读取本机观测摘要',
+                  'save_current_observation' => '请求保存观测',
+                  'rename_observation' => '请求重命名观测',
+                  'delete_observation' => '请求删除观测',
+                  'request_online_solve' => '请求在线解算',
+                  'propose_non_sky_regions' => '请求视觉遮罩建议',
+                  _ => '调用工具：$name',
+                },
+              ]);
+        },
       );
-      if (mounted) setState(() => _explanation = text);
+      if (mounted && imageGeneration == _imageGeneration) {
+        setState(() => _explanation = text);
+      }
     } catch (error) {
-      _showError('模型解读失败：$error');
+      if (mounted && imageGeneration == _imageGeneration) {
+        _showError('模型解读失败：$error');
+      }
     } finally {
-      if (mounted) setState(() => _explaining = false);
+      if (mounted && imageGeneration == _imageGeneration) {
+        setState(() => _explaining = false);
+      }
     }
+  }
+
+  Future<Object?> _executeAgentAction(
+    String name,
+    Map<String, Object?> arguments,
+    SkyAnalysis analysis,
+    Map<String, Object?> report,
+  ) async {
+    if (!identical(_analysis, analysis)) {
+      throw StateError('当前照片已更换，请针对新照片重新发送请求。');
+    }
+    switch (name) {
+      case 'save_current_observation':
+        final rawName = arguments['name'];
+        if (rawName is! String || rawName.trim().isEmpty || rawName.length > 100) {
+          throw const FormatException('观测名称不能为空且不能超过 100 个字符。');
+        }
+        if (_savedId != null) {
+          return {'saved': true, 'already_saved': true, 'id': _savedId};
+        }
+        if (!await _confirmAgentAction(
+          '保存观测记录',
+          '将把当前测量结果和两张预览图保存到本机观测记录，名称为“${rawName.trim()}”。',
+        )) {
+          return {'saved': false, 'cancelled': true};
+        }
+        _ensureCurrentAnalysis(analysis);
+        final history = await _ensureHistory();
+        final saved = await history.save(
+          name: rawName.trim(),
+          analysis: analysis,
+          solve: _solve?.withoutRejected(analysis.stars),
+          explanation: _explanation,
+          capture: _moment?.toMetadata(),
+        );
+        if (mounted && identical(_analysis, analysis)) {
+          setState(() => _savedId = saved.id);
+        }
+        return {'saved': true, 'id': saved.id, 'name': saved.name};
+
+      case 'rename_observation':
+        final id = arguments['observation_id'];
+        final rawName = arguments['new_name'];
+        if (id is! String ||
+            !_isSafeObservationId(id) ||
+            rawName is! String ||
+            rawName.trim().isEmpty ||
+            rawName.length > 100) {
+          throw const FormatException('记录编号或新名称无效。');
+        }
+        final history = await _ensureHistory();
+        final entries = await history.list();
+        final entry = entries.where((item) => item.id == id).firstOrNull;
+        if (entry == null) throw StateError('找不到指定的本机观测记录。');
+        if (!await _confirmAgentAction(
+          '重命名观测记录',
+          '将把“${entry.name}”改名为“${rawName.trim()}”。',
+        )) {
+          return {'renamed': false, 'cancelled': true};
+        }
+        final renamed = await history.rename(entry, rawName.trim());
+        return {'renamed': true, 'id': renamed.id, 'name': renamed.name};
+
+      case 'delete_observation':
+        final id = arguments['observation_id'];
+        if (id is! String || !_isSafeObservationId(id)) {
+          throw const FormatException('记录编号无效。');
+        }
+        final history = await _ensureHistory();
+        final entries = await history.list();
+        final entry = entries.where((item) => item.id == id).firstOrNull;
+        if (entry == null) throw StateError('找不到指定的本机观测记录。');
+        if (!await _confirmAgentAction(
+          '删除观测记录',
+          '将永久删除“${entry.name}”的测量结果和本机预览图，无法恢复；相册里的原图不受影响。',
+        )) {
+          return {'deleted': false, 'cancelled': true};
+        }
+        await history.delete(entry);
+        if (mounted && _savedId == entry.id) setState(() => _savedId = null);
+        return {'deleted': true, 'id': entry.id, 'name': entry.name};
+
+      case 'request_online_solve':
+        if (_solve != null) {
+          return {'solved': true, 'message': '当前照片已经有天区解算结果。'};
+        }
+        final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
+        if (key.isEmpty) {
+          throw StateError('请先在本机 API 设置中填写 Astrometry.net Key。');
+        }
+        if (!await _confirmAgentAction(
+          '在线解算天区',
+          '将把当前照片的分析预览图上传到 Astrometry.net。第三方服务可能留存数据。',
+        )) {
+          return {'solved': false, 'cancelled': true};
+        }
+        _ensureCurrentAnalysis(analysis);
+        var solve = await AstrometryService.solve(
+          analysis: analysis,
+          apiKey: key,
+        );
+        solve = await (await _ensureWorker()).decorate(solve);
+        _ensureCurrentAnalysis(analysis);
+        if (mounted) setState(() => _solve = solve);
+        report.addAll(buildAgentReport(analysis, solve));
+        return buildAgentReport(analysis, solve);
+
+      case 'propose_non_sky_regions':
+        final settings = await _readModelSettings();
+        if (!settings.hasAnyModel) {
+          throw StateError('请先在本机 API 设置中填写视觉模型 API Key。');
+        }
+        if (!await _confirmAgentAction(
+          '向视觉模型发送照片',
+          '将把当前照片预览发送到你设置的模型服务：${settings.baseUrl}。'
+              '服务商会收到图像；模型只返回疑似文字/水印区域，不会修改原图。',
+        )) {
+          return {'inspected': false, 'cancelled': true};
+        }
+        _ensureCurrentAnalysis(analysis);
+        final regions = await ModelService.proposeNonSkyRegions(
+          baseUrl: settings.baseUrl,
+          apiKey: settings.lightKey.isNotEmpty
+              ? settings.lightKey
+              : settings.strongKey,
+          model: settings.lightKey.isNotEmpty
+              ? (settings.visionModel.trim().isNotEmpty
+                  ? settings.visionModel
+                  : settings.lightModel)
+              : (settings.visionModel.trim().isNotEmpty
+                  ? settings.visionModel
+                  : settings.strongModel),
+          imageBase64: base64Encode(analysis.preview),
+          imageWidth: analysis.width,
+          imageHeight: analysis.height,
+        );
+        _ensureCurrentAnalysis(analysis);
+        if (regions.isEmpty) {
+          return {
+            'inspected': true,
+            'regions': 0,
+            'message': '视觉模型未发现可明确识别的水印或文字覆盖区域。',
+          };
+        }
+        final boxes = regions
+            .map(
+              (region) =>
+                  '(${(region['x']! * 100).round()}%, ${(region['y']! * 100).round()}%)'
+                  ' ${((region['width']! * 100).round())}%×'
+                  '${((region['height']! * 100).round())}%',
+            )
+            .join('、');
+        if (!await _confirmMaskApplication(
+          analysis,
+          regions,
+          boxes,
+        )) {
+          return {'inspected': true, 'applied': false, 'cancelled': true};
+        }
+        _ensureCurrentAnalysis(analysis);
+        final exclusions = regions
+            .map(
+              (region) => ImageExclusion(
+                x: region['x']!,
+                y: region['y']!,
+                width: region['width']!,
+                height: region['height']!,
+              ),
+            )
+            .toList(growable: false);
+        final worker = await _ensureWorker();
+        final adjustedAnalysis = await worker.analyze(
+          analysis.preview,
+          exclusions: exclusions,
+        );
+        final adjustedSolve = await worker.solveLocal(adjustedAnalysis);
+        _ensureCurrentAnalysis(analysis);
+        if (mounted) {
+          setState(() {
+            _analysis = adjustedAnalysis;
+            _solve = adjustedSolve;
+            _explanation = null;
+            _savedId = null;
+            _resetPanelState();
+          });
+        }
+        final adjustedReport = buildAgentReport(adjustedAnalysis, adjustedSolve);
+        report
+          ..clear()
+          ..addAll(adjustedReport);
+        return {
+          'inspected': true,
+          'applied': true,
+          'regions': regions.length,
+          'analysis': adjustedReport,
+        };
+
+      default:
+        throw ArgumentError.value(name, 'name', '未知的 Agent 操作');
+    }
+  }
+
+  Future<bool> _confirmAgentAction(String title, String message) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('确认执行'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  void _ensureCurrentAnalysis(SkyAnalysis analysis) {
+    if (!mounted || !identical(_analysis, analysis)) {
+      throw StateError('当前照片已更换，请针对新照片重新发送请求。');
+    }
+  }
+
+  Future<bool> _confirmMaskApplication(
+    SkyAnalysis analysis,
+    List<Map<String, double>> regions,
+    String labels,
+  ) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('应用视觉遮罩建议'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '红框是模型建议排除的区域：$labels。确认后会重新运行本机分析与解算；'
+                  '原始照片不变。',
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: 320,
+                  height: 220,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.memory(analysis.preview, fit: BoxFit.contain),
+                      CustomPaint(
+                        painter: _MaskPreviewPainter(
+                          imageWidth: analysis.width,
+                          imageHeight: analysis.height,
+                          regions: regions,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('不应用'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('应用并重新分析'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<ModelSettings> _readModelSettings() async => ModelSettings(
@@ -482,6 +805,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         strongKey: (await _storage.read(key: 'strongKey')) ?? '',
         strongModel:
             (await _storage.read(key: 'strongModel')) ?? 'deepseek-reasoner',
+        visionModel: (await _storage.read(key: 'visionModel')) ?? '',
       );
 
   Future<void> _settings() async {
@@ -952,7 +1276,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 单开一张卡而不是藏进设置：它属于**这一张照片**，换一张图就重读一次，
   /// 用户得在解析之前就看明白这张图有没有时间可用。行星、彗星、小行星都在
   /// 天上走，没有时刻就无从判断画面上多出来的那个亮点是什么——所以读不到
-  /// EXIF 时间时，这里给出的是「填一个」，而不是「无法识别」。
+  /// EXIF 时间时，提示可以设置；读到时则允许直接修改。
   Widget _captureTimeCard() {
     final moment = _moment;
     final known = moment != null;
@@ -972,14 +1296,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    known ? _describeMoment(moment) : '这张照片里没有拍摄时间',
+                    known
+                        ? _describeMoment(moment)
+                        : '未能从照片读取拍摄时间',
                     style: const TextStyle(fontSize: 13.5),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     known
                         ? _momentNote(moment)
-                        : '行星、彗星和小行星的位置随时间变化，没有时间就不做这判断。',
+                        : '可以手动设置拍摄时间；行星、彗星和小行星的位置会随时间变化。',
                     style: const TextStyle(
                       color: Color(0xFF8192A8),
                       fontSize: 11,
@@ -990,7 +1316,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ),
             TextButton(
               onPressed: _pickCaptureTime,
-              child: Text(known ? '修改' : '填写'),
+              child: Text(known ? '修改时间' : '设置时间'),
             ),
           ],
         ),
@@ -1013,7 +1339,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     return '$source；没有时区信息，按本机当前时区算';
   }
 
-  /// 让用户填拍摄时间。
+  /// 让用户修改或设置拍摄时间。
   ///
   /// 日期和时刻分两次问：合成一个对话框要么自己做一套选择器，要么在
   /// Material 的两个标准弹窗之间跳，前者工作量大、后者反而更绕。
@@ -2501,6 +2827,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             children: [
               const SectionTitle('Agent 解读', Icons.chat_bubble_outline_rounded),
               const SizedBox(height: 10),
+              const Text(
+                '可查询当前报告、天体和本机记录；保存、改名、删除、在线解算或发送照片给视觉模型前会先征求确认。',
+                style: TextStyle(color: kMuted, fontSize: 12),
+              ),
+              const SizedBox(height: 10),
               TextField(
                 controller: _questionController,
                 decoration: const InputDecoration(
@@ -2513,9 +2844,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 width: double.infinity,
                 child: FilledButton.tonal(
                   onPressed: _explaining ? null : _explain,
-                  child: Text(_explaining ? '正在生成解读…' : '基于测量结果生成解读'),
+                  child: Text(_explaining ? 'Agent 正在处理…' : '发送给 Agent'),
                 ),
               ),
+              if (_agentActivity.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '本轮工具调用：${_agentActivity.join('、')}',
+                  style: const TextStyle(fontSize: 12, color: kMuted),
+                ),
+              ],
               if (_explanation != null) ...[
                 const SizedBox(height: 12),
                 // 模型返回的是 Markdown，交给渲染器排版。之前直接用
@@ -2607,6 +2945,7 @@ class _SettingsFormState extends State<SettingsForm> {
   late final _lightModel = TextEditingController(text: widget.current.lightModel);
   late final _strongKey = TextEditingController(text: widget.current.strongKey);
   late final _strongModel = TextEditingController(text: widget.current.strongModel);
+  late final _visionModel = TextEditingController(text: widget.current.visionModel);
   late final _astrometryKey = TextEditingController(text: widget.astrometryKey);
   bool _obscureLight = true;
   bool _obscureStrong = true;
@@ -2645,6 +2984,7 @@ class _SettingsFormState extends State<SettingsForm> {
       _baseUrl.text = template.baseUrl;
       _lightModel.text = template.lightModel;
       _strongModel.text = template.strongModel;
+      _visionModel.clear();
     });
   }
 
@@ -2664,6 +3004,7 @@ class _SettingsFormState extends State<SettingsForm> {
       'lightModel': _lightModel.text.trim(),
       'strongKey': _strongKey.text.trim(),
       'strongModel': _strongModel.text.trim(),
+      'visionModel': _visionModel.text.trim(),
       'astrometryKey': _astrometryKey.text.trim(),
     };
     try {
@@ -2716,6 +3057,7 @@ class _SettingsFormState extends State<SettingsForm> {
       _lightModel,
       _strongKey,
       _strongModel,
+      _visionModel,
       _astrometryKey,
     ]) {
       controller.dispose();
@@ -2783,6 +3125,14 @@ class _SettingsFormState extends State<SettingsForm> {
                 obscure: _obscureStrong,
                 toggle: () => setState(() => _obscureStrong = !_obscureStrong),
               ),
+              _field('视觉模型名称（可选）', _visionModel),
+              const Padding(
+                padding: EdgeInsets.only(bottom: 10),
+                child: Text(
+                  '用于图片水印/文字识别，需由服务商支持图像输入；留空时沿用当前可用模型。',
+                  style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+                ),
+              ),
               _field(
                 'Astrometry.net API Key',
                 _astrometryKey,
@@ -2803,7 +3153,7 @@ class _SettingsFormState extends State<SettingsForm> {
                 ),
               ),
               const Text(
-                '密钥保存在本机安全存储。模型只接收测量摘要。',
+                '密钥保存在本机安全存储。普通对话只发送测量摘要；视觉识别会先询问并发送预览图。',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 16),
@@ -2828,6 +3178,51 @@ class _AgentApiTemplate {
   final String strongModel;
 }
 
+class _MaskPreviewPainter extends CustomPainter {
+  const _MaskPreviewPainter({
+    required this.imageWidth,
+    required this.imageHeight,
+    required this.regions,
+  });
+
+  final int imageWidth;
+  final int imageHeight;
+  final List<Map<String, double>> regions;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = math.min(size.width / imageWidth, size.height / imageHeight);
+    final displayedWidth = imageWidth * scale;
+    final displayedHeight = imageHeight * scale;
+    final offsetX = (size.width - displayedWidth) / 2;
+    final offsetY = (size.height - displayedHeight) / 2;
+    final fill = Paint()
+      ..color = const Color(0x55FF526D)
+      ..style = PaintingStyle.fill;
+    final outline = Paint()
+      ..color = const Color(0xFFFF526D)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    for (final region in regions) {
+      final rect = Rect.fromLTWH(
+        offsetX + region['x']! * displayedWidth,
+        offsetY + region['y']! * displayedHeight,
+        region['width']! * displayedWidth,
+        region['height']! * displayedHeight,
+      );
+      canvas
+        ..drawRect(rect, fill)
+        ..drawRect(rect, outline);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_MaskPreviewPainter oldDelegate) =>
+      imageWidth != oldDelegate.imageWidth ||
+      imageHeight != oldDelegate.imageHeight ||
+      !identical(regions, oldDelegate.regions);
+}
+
 bool _isRawName(String filename) => const {
       'dng',
       'cr2',
@@ -2838,3 +3233,6 @@ bool _isRawName(String filename) => const {
       'orf',
       'rw2',
     }.contains(filename.toLowerCase().split('.').last);
+
+bool _isSafeObservationId(String id) =>
+    RegExp(r'^\d{8}-\d{6}-\d{3}(?:-\d+)?$').hasMatch(id);

@@ -55,6 +55,44 @@ void main() {
       );
     });
 
+    test('confirmed image exclusion removes overlay candidates from analysis', () {
+      final image = imglib.Image(width: 160, height: 120);
+      imglib.fill(image, color: imglib.ColorRgb8(9, 12, 18));
+      imglib.fillCircle(
+        image,
+        x: 80,
+        y: 90,
+        radius: 3,
+        color: imglib.ColorRgb8(245, 238, 226),
+      );
+      final bytes = Uint8List.fromList(imglib.encodePng(image));
+
+      final unmasked = SkyAnalysis.analyze(bytes);
+      final masked = SkyAnalysis.analyze(
+        bytes,
+        exclusions: const [
+          ImageExclusion(x: 0.4, y: 0.7, width: 0.2, height: 0.2),
+        ],
+      );
+
+      expect(unmasked.stars, isNotEmpty);
+      expect(masked.stars, isEmpty);
+      expect(masked.maskRegions, hasLength(1));
+      expect(
+        masked.diagnostics.any((message) => message.contains('视觉建议')),
+        isTrue,
+      );
+      expect(
+        () => SkyAnalysis.analyze(
+          bytes,
+          exclusions: const [
+            ImageExclusion(x: 0, y: 0, width: 0.8, height: 0.8),
+          ],
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('a dragged star stays out of the display list but enters solving',
         () async {
       // 拖尾的恒星：有明确核心（中心亮、边上暗），但形态是拉长的。展示上它

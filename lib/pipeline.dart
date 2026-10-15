@@ -356,8 +356,15 @@ class SkyWorker {
   }
 
   /// 本地分析与测光。
-  Future<SkyAnalysis> analyze(Uint8List bytes) async =>
-      await _request('analyze', bytes, null) as SkyAnalysis;
+  Future<SkyAnalysis> analyze(
+    Uint8List bytes, {
+    List<ImageExclusion> exclusions = const [],
+  }) async =>
+      await _request(
+        'analyze',
+        _AnalyzeRequest(bytes, exclusions),
+        null,
+      ) as SkyAnalysis;
 
   /// 本机离线解算。解不出来返回 null，由上层决定要不要回退在线服务。
   Future<SolveResult?> solveLocal(
@@ -411,6 +418,13 @@ class _MovingRequest {
   final DateTime? moment;
 }
 
+class _AnalyzeRequest {
+  const _AnalyzeRequest(this.bytes, this.exclusions);
+
+  final Uint8List bytes;
+  final List<ImageExclusion> exclusions;
+}
+
 /// 后台 isolate 的入口。`Isolate.spawn` 要一个顶层函数。
 Future<void> _skyWorkerMain(_WorkerBoot boot) async {
   final inbox = ReceivePort();
@@ -435,11 +449,15 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
     try {
       switch (message.kind) {
         case 'analyze':
+          final request = message.payload! as _AnalyzeRequest;
           boot.reply.send(
             _WorkerReply(
               message.id,
               'done',
-              await analyzeImageBytes(message.payload! as Uint8List),
+              await analyzeImageBytes(
+                request.bytes,
+                exclusions: request.exclusions,
+              ),
             ),
           );
         case 'solve':
