@@ -7,6 +7,7 @@ import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 import 'analysis.dart';
 import 'astrometry.dart';
 import 'catalog.dart';
+import 'deepsky.dart';
 import 'model.dart';
 import 'models.dart';
 import 'report.dart';
@@ -126,6 +127,7 @@ class SkyPipeline {
       warnings.add('本机解算未能完成：$error');
     }
 
+    String? onlineError;
     if (solve == null && _canUpload) {
       index++;
       try {
@@ -135,6 +137,7 @@ class SkyPipeline {
           onProgress: (local, stage) => report(index, local, stage),
         );
       } catch (error) {
+        onlineError = '$error';
         warnings.add('在线解算未能完成：$error');
       }
       // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
@@ -146,11 +149,18 @@ class SkyPipeline {
           warnings.add('星座标注未能完成：$error');
         }
       }
-    } else if (solve == null) {
-      warnings.add(
-        allowUpload
-            ? '本机没解出这片天区，也没有可用的 Astrometry.net API Key，已跳过在线解算。'
-            : '本机没解出这片天区。如需在线解算，请在设置里填写 Astrometry.net API Key 并授权上传。',
+    }
+    if (solve == null) {
+      // 「星点不足」这种话用户看完还是不知道该干什么，所以这里给的是能照着
+      // 做的动作：换焦段、改曝光、去设置里开在线解算。判断依据全部来自已经
+      // 量出来的结果，不猜。
+      warnings.addAll(
+        buildSolveFailureAdvice(
+          analysis,
+          uploadAllowed: allowUpload,
+          hasApiKey: astrometryKey.trim().isNotEmpty,
+          onlineError: onlineError,
+        ),
       );
     }
 
@@ -200,6 +210,8 @@ const _starsAsset = 'assets/catalog/stars.json';
 const _namesAsset = 'assets/catalog/names.json';
 const _constellationsAsset = 'assets/catalog/constellations.json';
 const _gridAsset = 'assets/catalog/constellation_grid.bin';
+const _deepSkyAsset = 'assets/catalog/deepsky.json';
+const _gaiaAsset = 'assets/catalog/gaia.bin';
 
 /// 常驻的后台解算 isolate。
 ///
@@ -236,12 +248,32 @@ class SkyWorker {
       gridData.offsetInBytes,
       gridData.lengthInBytes,
     );
+    // 深空目录缺失不该让整条链路起不来：它只影响标注，不影响解算本身。
+    final deepSky = await assets.loadString(_deepSkyAsset).catchError(
+          (Object _) => '[]',
+        );
+    // Gaia 补充层同理：缺了只是星点稀的天区回到从前的成败边界，不是坏掉。
+    final gaiaData = await assets.load(_gaiaAsset).catchError(
+          (Object _) => ByteData(0),
+        );
+    final gaia = gaiaData.buffer.asUint8List(
+      gaiaData.offsetInBytes,
+      gaiaData.lengthInBytes,
+    );
 
     final inbox = ReceivePort();
     final ready = Completer<SendPort>();
     final isolate = await Isolate.spawn(
       _skyWorkerMain,
-      _WorkerBoot(inbox.sendPort, stars, names, constellations, grid),
+      _WorkerBoot(
+        inbox.sendPort,
+        stars,
+        names,
+        constellations,
+        grid,
+        deepSky,
+        gaia,
+      ),
       debugName: 'astrosophy-solver',
     );
     final worker = SkyWorker._(isolate, inbox, ready);
@@ -353,8 +385,12 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
     namesJson: boot.names,
     constellationsJson: boot.constellations,
     constellationGrid: boot.grid,
+    gaiaBytes: boot.gaia,
   );
-  final solver = PlateSolver(catalog);
+  final solver = PlateSolver(
+    catalog,
+    deepSky: DeepSkyCatalog.parse(boot.deepSky),
+  );
   // 索引建一次就够，之后每张图都省下这一秒。用户还在挑图片的时候它就跑完了。
   solver.warmUp();
 
@@ -404,6 +440,8 @@ class _WorkerBoot {
     this.names,
     this.constellations,
     this.grid,
+    this.deepSky,
+    this.gaia,
   );
 
   final SendPort reply;
@@ -411,6 +449,8 @@ class _WorkerBoot {
   final String names;
   final String constellations;
   final Uint8List grid;
+  final String deepSky;
+  final Uint8List gaia;
 }
 
 class _WorkerRequest {

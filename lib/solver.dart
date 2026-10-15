@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'analysis.dart';
 import 'catalog.dart';
+import 'deepsky.dart';
 import 'models.dart';
 
 /// 本机离线天区解算（lost-in-space plate solving）。
@@ -29,51 +30,96 @@ import 'models.dart';
 /// **像素距离**算。两者在 TAN 投影下相差 O(θ²)（θ 是离切点的角距），对
 /// 几度的视场只有万分之几，远小于指纹容差。省掉投影让索引构建快得多。
 ///
-/// **适用视场**：目录到 V=8.0，全天 41394 颗。视场里大约要有 20 颗目录星
-/// 才能稳定解算，对应视场直径约 4.5° 以上。更窄的望远镜视场请走在线解算。
+/// **适用视场**：星表分两层用——浅层是 Hipparcos 到 V=8.0 的 41394 颗，
+/// 深层再补上 Gaia 的 13.7 万颗（G < 9.0）兜底，具体分工和实测见 [solve]。
+/// 视场里大约要有 20 颗目录星才能稳定解算，浅层对应视场直径约 4.5° 以上，
+/// 更窄的望远镜视场会落到深层。两层都解不出来时才该走在线解算。
 class PlateSolver {
   PlateSolver(
     this.catalog, {
-    this.maxIndexStars,
+    this.deepSky,
     this.neighbours = 6,
   });
 
   final StarCatalog catalog;
 
-  /// 建索引时只用最亮的多少颗星；null 表示整张目录。
-  ///
-  /// 目录到 V=8.0 是刻意全用的：视场里能检出多暗的星取决于曝光，而
-  /// 索引端漏掉的暗星会让两侧的近邻关系对不上，宁可多花十几 MB。
-  final int? maxIndexStars;
+  /// 内置深空目录。给了就在解算结果里带上「画面中的深空天体」，没给就只有
+  /// 恒星——本机解算本来也只需要恒星表，深空目录是纯粹多给的一层信息。
+  final DeepSkyCatalog? deepSky;
 
   /// 每颗星取多少近邻来组三角形。索引端和图内端必须用同一个值，
   /// 否则两边算出来的三角形不是同一批星，指纹对不上。
   final int neighbours;
 
   _TriangleIndex? _cachedIndex;
+  _TriangleIndex? _cachedDeepIndex;
 
+  /// 浅层索引：只用 Hipparcos（V ≤ 8）那批星。
+  ///
   /// 索引构建要一秒上下，第一次用完之后缓存住。
   _TriangleIndex get _index =>
       _cachedIndex ??= _TriangleIndex.build(
         catalog,
-        maxStars: maxIndexStars,
+        pool: _shallowPool,
         neighbours: neighbours,
       );
 
-  /// 提前把索引建好。
+  /// 深层索引：把 Gaia 补充层一起放进来。
+  ///
+  /// 只在浅层解不出来时才建，因为建它要好几秒、常驻几十 MB，而绝大多数
+  /// 照片根本用不上——星点稀到浅层凑不出三角形的天区才是它的用武之地。
+  _TriangleIndex get _deepIndex =>
+      _cachedDeepIndex ??= _TriangleIndex.build(
+        catalog,
+        pool: catalog.stars,
+        neighbours: _deepNeighbours,
+      );
+
+  /// 这一层的近邻取法要跟图内端一致，所以图内端组三角形时也得用同一个值。
+  ///
+  /// 深层取 4 而不是 6，是因为星数从四万涨到十七万，每颗星的三角形数
+  /// C(5,3)=10 对 C(7,3)=35——深层的索引因此小了一个量级，建得更快、
+  /// 常驻内存也压得住。星点稀的天区里星本来就少，10 个三角形足够。
+  static const _deepNeighbours = 4;
+
+  /// 有没有比浅层更深的星可用。Gaia 资产缺失时两层是同一批星，
+  /// 那就没必要再跑一遍。
+  bool get _hasDeeperLayer => catalog.stars.length > _shallowPool.length;
+
+  List<CatalogStar>? _cachedShallowPool;
+
+  /// 浅层用的星：目录里非 Gaia 的那些。目录本身按星等排好序，过滤之后
+  /// 顺序不变，所以这个池子仍然是「从亮到暗」的。
+  List<CatalogStar> get _shallowPool => _cachedShallowPool ??= [
+        for (final star in catalog.stars)
+          if (!star.isGaia) star,
+      ];
+
+  /// 提前把浅层索引建好。
   ///
   /// 建索引是纯 CPU 的同步活儿，会卡住调用它的那个 isolate。用户挑图片、
   /// 填 API Key 的时间里提前跑掉，点「一键解析」时就不会先愣一秒。
   void warmUp() => _index;
 
   /// 尝试解算。失败返回 null，由调用方决定要不要回退到在线服务。
+  ///
+  /// 先用浅层星表试，解不出来再换深层星表重试一遍。分成两趟是因为三角形
+  /// 指纹要求两侧用同一套近邻关系：图内端只拿最亮的 [PlateSolver._detectionStars]
+  /// 颗检出组三角形，一颗亮星的近邻必然还是亮星；目录端一旦掺进大量 8～9 等
+  /// 的暗星，同一颗亮星的近邻就换成了它旁边那些暗星，两侧枚举出来的根本不是
+  /// 同一批三角形——星多的天区会因此从「解得出」变成「解不出」。
+  ///
+  /// 实测过：把 Gaia 层直接并进唯一的那张星表，猎户座的合成图在 20″/px
+  /// 下失败、南天某天区也从 137ms 变成 60s 还不成功；而按两层走，这些天区
+  /// 在浅层就正常出结果，深层只服务那些浅层星数本来就不够的天区。
   SolveResult? solve(
     SkyAnalysis analysis, {
     void Function(double progress, String stage)? onProgress,
   }) {
-    final detections = analysis.stars
-        .where((star) => !star.isRejected && !star.isElongated)
-        .toList()
+    // 候选由分析层给：那边多收了一类「形似略拉长的亮源」。这里不再自己按
+    // `isElongated` 过滤——展示用的拉长候选和能拿来解算的候选不是一回事，
+    // 判据写在 `SkyAnalysis.solveCandidates` 上，只留一处。
+    final detections = analysis.solveCandidates.toList()
       ..sort((a, b) => b.flux.compareTo(a.flux));
     if (detections.length < _minimumDetections) return null;
 
@@ -88,8 +134,51 @@ class PlateSolver {
     final stars = detections
         .take(math.min(_detectionStars, detections.length))
         .toList(growable: false);
-    final imageTriangles = _imageTriangles(stars);
     final grid = _DetectionGrid(stars);
+
+    final shallow = _matchFrom(
+      analysis,
+      index,
+      stars,
+      grid,
+      neighbours: neighbours,
+      candidatesPerTriangle: _candidatesPerTriangle,
+      verificationBudget: _verificationBudget,
+      onProgress: onProgress,
+    );
+    if (shallow != null) return shallow;
+
+    // 浅层星表里这半天区根本没有几颗星，再往下就是唯一的路。
+    if (!_hasDeeperLayer) return null;
+    final deep = _deepIndex;
+    if (deep.triangleCount == 0) return null;
+    deep.frameWidth = analysis.width.toDouble();
+    deep.frameHeight = analysis.height.toDouble();
+    onProgress?.call(0.6, '正在加深星表再试一次');
+    return _matchFrom(
+      analysis,
+      deep,
+      stars,
+      grid,
+      neighbours: _deepNeighbours,
+      candidatesPerTriangle: _deepCandidatesPerTriangle,
+      verificationBudget: _deepVerificationBudget,
+      onProgress: onProgress,
+    );
+  }
+
+  /// 拿着某一层索引跑一遍完整的匹配、内点验证和坐标精修。
+  SolveResult? _matchFrom(
+    SkyAnalysis analysis,
+    _TriangleIndex index,
+    List<DetectedStar> stars,
+    _DetectionGrid grid, {
+    required int neighbours,
+    required int candidatesPerTriangle,
+    required int verificationBudget,
+    void Function(double progress, String stage)? onProgress,
+  }) {
+    final imageTriangles = _imageTriangles(stars, neighbours);
 
     _Fit? best;
     var verifications = 0;
@@ -98,9 +187,14 @@ class PlateSolver {
         triangle.r2,
         triangle.r3,
         ratioTolerance: triangle.ratioTolerance,
-        limit: _candidatesPerTriangle,
+        limit: candidatesPerTriangle,
+        vertexMagnitudes: [
+          stars[triangle.vertices.$1].instrumentalMagnitude,
+          stars[triangle.vertices.$2].instrumentalMagnitude,
+          stars[triangle.vertices.$3].instrumentalMagnitude,
+        ],
       )) {
-        if (verifications >= _verificationBudget) break;
+        if (verifications >= verificationBudget) break;
         verifications++;
         final fits = _fitsFromCorrespondence(index, stars, triangle, candidate);
         // 逐个验内点：等腰情形下错配的残差可能更小，但它投影不出足够多的
@@ -151,7 +245,19 @@ class PlateSolver {
   /// 命中的三角形排在最前面，验证预算花在刀刃上。
   static const _seedStars = 40;
 
-  static const _candidatesPerTriangle = 12;
+  /// 一个图内三角形最多往下送几个候选对应关系。
+  ///
+  /// 桶里按「比值最接近」排序，真的那个未必排第一：目录一密，和它比值几乎
+  /// 一样、其实在天上另一处的三角形就多，只取十来个会被挤出去，整个天区就
+  /// 这么解不出来了。取 24 是留出这个余量；反正真正封顶的是验证预算，
+  /// 多看几个候选只是把它们排进队里，不会让噪声图更贵。
+  static const _candidatesPerTriangle = 24;
+
+  /// 深层星表里的对应值。星密了四倍，同一个指纹上的假候选也多，所以要
+  /// 多看几个；验证预算跟着放大，不然真正的那个还没轮到、预算就先花光了。
+  /// 深层只在浅层失败后才跑，慢一点换的是「本来拿不到的结果」，值得。
+  static const _deepCandidatesPerTriangle = 48;
+  static const _deepVerificationBudget = 8000;
 
   /// 一次解算里最多验证多少个候选对应关系。每条验证都要投影一批目录星
   /// 再数内点，是整条链路里最贵的部分，必须封顶，否则一张噪声图能把
@@ -189,10 +295,13 @@ class PlateSolver {
   /// 图内三角形，构造方式和索引端严格一致：最亮的若干颗当种子，每颗连同
   /// 它最近邻的 [neighbours] 颗一共 [neighbours] + 1 颗，从中任取三颗。
   ///
+  /// [neighbours] 必须和这一趟用的索引层一致（浅层 6、深层 4），否则近邻
+  /// 关系对不上，枚举出来的不是同一批三角形。
+  ///
   /// 之所以不直接对「最亮的 N 颗」两两三点，是因为那样子三角形边长由
   /// 亮度分布决定，而索引端的边长由星间距离决定，广角照片下两者能差出
   /// 十几倍，比值指纹就再也对不上了。
-  List<_ImageTriangle> _imageTriangles(List<DetectedStar> stars) {
+  List<_ImageTriangle> _imageTriangles(List<DetectedStar> stars, int neighbours) {
     final triangles = <_ImageTriangle>[];
     final seeds = math.min(_seedStars, stars.length);
     final order = List<int>.generate(stars.length, (index) => index);
@@ -308,8 +417,22 @@ class PlateSolver {
         fits.add(fit);
       }
     }
+    if (fits.isEmpty) return const [];
     fits.sort((a, b) => a.residual.compareTo(b.residual));
-    return fits;
+    // 同一次对应关系的十二种次序里，只有残差和最好的那个相当的才值得数内点。
+    // 顶点接错了的拟合残差会大出一截，而「数内点」是整条链路最贵的一步——
+    // 目录一密，每条候选的花费就直接决定了验证预算能覆盖多少个候选。
+    //
+    // 下限取两个像素是为了等腰三角形：那时几种次序本来就分不开，残差都很小，
+    // 该留的都得留下，不能因为「最好的是零残差」就把它们一起丢掉。
+    final allowance = math.max(
+      fits.first.residual * 2,
+      _inlierTolerancePixels * 2 * fits.first.a.abs,
+    );
+    return [
+      for (final fit in fits)
+        if (fit.residual <= allowance) fit,
+    ];
   }
 
   /// 三个顶点的全部六种配对方式。
@@ -399,7 +522,13 @@ class PlateSolver {
 
     final inliers = <_Inlier>[];
     final used = <int>{};
+    var seen = 0;
     for (final vertex in candidates) {
+      seen++;
+      // 剩下的目录星全中也不够门槛，这一条候选已经没戏了。目录星按亮到暗
+      // 排，真的对应关系靠前，所以这一刀通常只砍在假候选上——而假候选是
+      // 绝大多数。
+      if (inliers.length + (candidates.length - seen) < _minimumInliers) break;
       final world = index.skyPointOf(vertex, fit.reference);
       final pixel = fit.invert(_Complex.from(world));
       if (!pixel.isFinite) continue;
@@ -518,6 +647,10 @@ class PlateSolver {
 
     final named = <SkyObject>[];
     for (final star in catalogStars) {
+      // Gaia 补充层只做背景，不起名字：它们没有中文名也没有拜耳编号，
+      // 硬标出来只能是「HIP -12345」这种编造的名字，而图上标注一个字都
+      // 错不得。它们照样参与解算和测光，只是不上图。
+      if (star.isGaia) continue;
       final (x, y) = wcs.worldToPixel(star.ra, star.dec);
       if (x < 0 || y < 0 || x >= analysis.width || y >= analysis.height) continue;
       final name = catalog.nameOf(star);
@@ -539,11 +672,16 @@ class PlateSolver {
     }
 
     // 星等零点：目录给真实 V 星等，图像给仪器星等，两者之差就是零点。
+    //
+    // 只拿 Hipparcos 那层算：Gaia 补充层装的是 G 星等，和 V 差着零点几等，
+    // 混进来会让整条零点跟着内点的成分漂移——同一天区换一张图，零点就可能
+    // 变一次，而用户看到的是一颗星报出的星等，那必须是个稳定的数。
     final offsets = <double>[];
     for (final inlier in fit.inliers) {
+      final star = index.starOf(inlier.catalogVertex);
+      if (star.isGaia) continue;
       offsets.add(
-        index.starOf(inlier.catalogVertex).vMagnitude -
-            stars[inlier.detectionIndex].instrumentalMagnitude,
+        star.vMagnitude - stars[inlier.detectionIndex].instrumentalMagnitude,
       );
     }
     double? zeroPoint;
@@ -563,7 +701,7 @@ class PlateSolver {
       centerDec: centreDec,
       arcsecPerPixel: wcs.arcsecPerPixel,
       namedStars: named,
-      deepSkyObjects: const [],
+      deepSkyObjects: _deepSkyObjects(wcs, analysis, centreRa, centreDec, radius),
       matchedStars: [
         for (final inlier in fit.inliers)
           GaiaMatch(
@@ -587,6 +725,34 @@ class PlateSolver {
       matchedCount: fit.inliers.length,
     );
   }
+
+  /// 画面里落进了哪些深空天体，坐标已经投影成像素。
+  ///
+  /// 判定条件是「中心落在画面内」，和星表恒星一样：圆圈本身比目标大得多
+  /// （M31 的 178′ 能铺满整幅），按圆圈是否压到画面来判会带进一堆只有
+  /// 边缘擦过去的邻居。中心在画面里，用户就确实拍到了它。
+  List<SkyObject> _deepSkyObjects(
+    Wcs wcs,
+    SkyAnalysis analysis,
+    double centreRa,
+    double centreDec,
+    double radius,
+  ) {
+    final catalog = deepSky;
+    if (catalog == null) return const [];
+    final objects = <SkyObject>[];
+    for (final object in catalog.near(centreRa, centreDec, radius)) {
+      final (x, y) = wcs.worldToPixel(object.ra, object.dec);
+      if (x < 0 || y < 0 || x >= analysis.width || y >= analysis.height) continue;
+      objects.add(object.toSkyObject(x, y));
+      // 和在线路径同一个上限。广角照片里两三千条目录天体能有一两百个落进
+      // 画面，全标出来会把星点、星座线一起淹掉。
+      if (objects.length >= _maxDeepSkyObjects) break;
+    }
+    return objects;
+  }
+
+  static const _maxDeepSkyObjects = 30;
 
   /// 星座名与星座连线。
   ///
@@ -749,8 +915,43 @@ class PlateSolver {
     return result.withConstellationDecoration(
       decoration.constellations,
       decoration.figures,
+      deepSkyObjects: _sizedDeepSky(result.deepSkyObjects),
     );
   }
+
+  /// 给在线解算带回来的深空天体补上角尺寸。
+  ///
+  /// SIMBAD 只给名字和类型，不给尺寸，所以在线路径的「占了画面多大」那一段
+  /// 本来是空的。本机目录里有尺寸，按坐标对一下就能补——对不上就留空，
+  /// 报告里写「尺寸未知」，不拿一个近邻的数凑上去。
+  List<SkyObject> _sizedDeepSky(List<SkyObject> objects) {
+    final catalog = deepSky;
+    if (catalog == null || objects.isEmpty) return objects;
+    return [
+      for (final object in objects)
+        if (object.angularSizeArcmin != null)
+          object
+        else
+          _withAngularSize(
+            object,
+            catalog.angularSizeNear(object.ra, object.dec),
+          ),
+    ];
+  }
+
+  static SkyObject _withAngularSize(SkyObject object, double? size) =>
+      SkyObject(
+        object.name,
+        object.ra,
+        object.dec,
+        object.category,
+        magnitude: object.magnitude,
+        magnitudeBand: object.magnitudeBand,
+        x: object.x,
+        y: object.y,
+        isLocal: object.isLocal,
+        angularSizeArcmin: size,
+      );
 
   /// 图像旋转角（度），0 表示正北朝上。
   static double _rotationDegrees(Wcs wcs) {
@@ -849,14 +1050,17 @@ class _TriangleIndex {
     return (normalized * r3Steps).round().clamp(0, r3Steps - 1);
   }
 
+  /// 建一层索引。
+  ///
+  /// [pool] 是这一层允许拿来组三角形的星，也是近邻查询的取值域——池外的星
+  /// 就算比池内某颗更近也不能算近邻，否则图内端（只看得到最亮的若干颗检出）
+  /// 和目录端枚举出来的就不是同一批三角形。调用方按星表分层给：[PlateSolver]
+  /// 浅层给非 Gaia 的那些，深层给整张表。
   static _TriangleIndex build(
     StarCatalog catalog, {
-    required int? maxStars,
+    required List<CatalogStar> pool,
     required int neighbours,
   }) {
-    final pool = maxStars == null || maxStars >= catalog.stars.length
-        ? catalog.stars
-        : catalog.stars.take(maxStars).toList(growable: false);
     if (pool.isEmpty) {
       return _TriangleIndex._(
         catalog: catalog,
@@ -867,8 +1071,16 @@ class _TriangleIndex {
         bucketStart: Int32List(bucketCount + 1),
       );
     }
-    // 索引里只用池内的星，池外更暗的星即便检出来也不会拿来组三角形。
+    // 池里最暗的那颗。近邻查询先用它当星等上限缩小扫描范围，再按池的
+    // 成员资格精确过滤——同一个星等上限下，池外可能还混着别的层的星。
     final magnitudeLimit = pool.last.vMagnitude;
+    final wholeCatalog = pool.length >= catalog.stars.length;
+    final inPool = wholeCatalog ? null : <int>{for (final star in pool) star.hip};
+    // 多要一倍再筛：按星等上限取回来的近邻里，可能有一部分并不属于这一层
+    // （浅层尤其如此，8 等上下的 Gaia 星就卡在边上），筛掉之后还得凑够数。
+    // 池子就是整张表时不存在筛掉的可能，按需求量取就行——这一步每颗星都
+    // 要跑一遍，多取一倍等于建索引时间翻倍。
+    final scan = wholeCatalog ? neighbours + 1 : (neighbours + 1) * 2;
 
     // 存进索引的下标必须能直接索引 [StarCatalog.stars]。近邻查询返回的是
     // 星对象，它们在表里的位置和「在近邻列表里的位置」完全是两回事，
@@ -890,13 +1102,14 @@ class _TriangleIndex {
       final near = catalog.nearestStars(
         centre.ra,
         centre.dec,
-        neighbours + 1,
+        scan,
         magnitudeLimit: magnitudeLimit,
       );
       final group = <CatalogStar>[centre];
       final groupIndex = <int>[centreIndex];
       for (final star in near) {
         if (star.hip == centre.hip) continue;
+        if (inPool != null && !inPool.contains(star.hip)) continue;
         group.add(star);
         groupIndex.add(position[star.hip]!);
         if (group.length > neighbours) break;
@@ -1013,11 +1226,17 @@ class _TriangleIndex {
   ///
   /// 所以从最贴近目标的 r2 桶开始向两边走，桶内从最贴近目标的 r3 开始
   /// 向两边走。两边的「贴近」都只是排序，命中与否仍然由精确比较决定。
+  ///
+  /// 给了 [vertexMagnitudes]（图内端三个顶点、槽位与 [_CatalogTriangle] 一致
+  /// 的仪器星等）时，还会把「三个顶点的亮度次序也对得上」的候选提到前面。
+  /// 形状相符但亮度次序对不上的三角形几乎全是巧合——星表一深，这种巧合
+  /// 就把真正的那个挤到验证队列的末尾，代价是几千次白跑的内点投影。
   Iterable<_CatalogTriangle> lookup(
     double r2,
     double r3, {
     required double ratioTolerance,
     required int limit,
+    List<double>? vertexMagnitudes,
   }) sync* {
     final middle = _bucketOf(r2);
     final lowest = _bucketOf(r2 - ratioTolerance);
@@ -1032,7 +1251,14 @@ class _TriangleIndex {
     if (r3High > r3Steps - 1) r3High = r3Steps - 1;
     final r3Centre = _r3BucketOf(r3);
 
+    // 亮度次序可信的候选先收着，剩下的留作兜底。扫描范围比 [limit] 宽：
+    // 真正的那个未必落在最贴近的几个里，但一定在这条容差带里。
+    final preferred = vertexMagnitudes == null ? null : <int>[];
+    final fallback = preferred == null ? null : <int>[];
+    final scanLimit = preferred == null ? limit : limit * _lookupScanFactor;
+
     var produced = 0;
+    outer:
     for (var step = 0; step <= highest - lowest; step++) {
       for (var side = 0; side < (step == 0 ? 1 : 2); side++) {
         final bucket = step == 0 ? middle : middle + (side == 0 ? -step : step);
@@ -1053,16 +1279,68 @@ class _TriangleIndex {
             if (i < lowIndex || i >= highIndex) continue;
             final triangle = order[i];
             if ((r3Quantized[triangle] - r3Scaled).abs() > tolerance) continue;
-            final at = triangle * 3;
-            yield _CatalogTriangle(
-              (vertices[at], vertices[at + 1], vertices[at + 2]),
-            );
-            if (++produced >= limit) return;
+            if (preferred == null) {
+              final at = triangle * 3;
+              yield _CatalogTriangle(
+                (vertices[at], vertices[at + 1], vertices[at + 2]),
+              );
+              if (++produced >= limit) return;
+              continue;
+            }
+            if (_magnitudesAgree(triangle, vertexMagnitudes!)) {
+              preferred.add(triangle);
+            } else {
+              fallback!.add(triangle);
+            }
+            if (preferred.length + fallback!.length >= scanLimit) break outer;
           }
         }
       }
     }
+    if (preferred == null) return;
+
+    for (final list in [preferred, fallback!]) {
+      for (final triangle in list) {
+        final at = triangle * 3;
+        yield _CatalogTriangle(
+          (vertices[at], vertices[at + 1], vertices[at + 2]),
+        );
+        if (++produced >= limit) return;
+      }
+    }
   }
+
+  /// 候选三角形的亮度次序和图内端对得上吗。
+  ///
+  /// 只比次序，不比绝对值：仪器星等和目录星等之间差着一个未知的测光零点，
+  /// 而零点是个常数，不影响谁比谁亮。两边都差不到 [_magnitudeSlack] 等的
+  /// 那一对就不作数——图内端的仪器星等本来就有噪声，浅层的 V 和深层的 G
+  /// 波段之间还差着一个跟恒星颜色有关的系统项。留下这么大的余量之后，
+  /// 还能判出「次序反了」的，就基本可以确定是巧合而不是真对应。
+  bool _magnitudesAgree(int triangle, List<double> wanted) {
+    final at = triangle * 3;
+    final a = catalog.stars[vertices[at]].vMagnitude;
+    final b = catalog.stars[vertices[at + 1]].vMagnitude;
+    final c = catalog.stars[vertices[at + 2]].vMagnitude;
+    return _pairAgrees(a, b, wanted[0], wanted[1]) &&
+        _pairAgrees(b, c, wanted[1], wanted[2]) &&
+        _pairAgrees(a, c, wanted[0], wanted[2]);
+  }
+
+  static bool _pairAgrees(double x, double y, double u, double v) {
+    final sky = x - y;
+    final image = u - v;
+    if (sky.abs() < _magnitudeSlack || image.abs() < _magnitudeSlack) {
+      return true;
+    }
+    return sky.sign == image.sign;
+  }
+
+  /// 亮度次序过滤时要多看几倍的候选。
+  static const _lookupScanFactor = 6;
+
+  /// 亮度差小到这个程度就不拿来判次序，见 [_magnitudesAgree]。
+  static const _magnitudeSlack = 0.4;
 
   /// 在 [from, to) 里找第一个键不小于 [target] 的位置。
   int _lowerBound(int from, int to, int target) {

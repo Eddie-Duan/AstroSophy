@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 APP 内置的亮星目录、星座数据和星座网格。
+"""生成 APP 内置的亮星目录、深空目录、星座数据和星座网格。
 
 数据来源全部是可再分发的公开星表（通过 CDS VizieR 取数）：
 
@@ -8,6 +8,8 @@
   Bayer/Flamsteed 名称、B-V 色指数、光谱型。
 * ``VI/42/data``      Constellation boundaries（Roman 1987）：用于判断
   一颗星属于哪个星座。
+* ``VII/118/ngc2000`` NGC 2000.0（Sky Publishing, ed. Sinnott 1988）：
+  NGC/IC 天体的位置、类型、角尺寸和视星等。
 
 星座连线不是抄任何星图的现成画法，而是对每个星座最亮的若干成员跑一次
 最小生成树（按角距加权）自动生成，所以只依赖上面这些公开星表，没有引入
@@ -37,6 +39,18 @@ USER_AGENT = "AstroSophy-catalog-builder/1.0 (+https://github.com/Eddie-Duan/Ast
 # BSC 的位置是上世纪测的，而 Hipparcos 是 1991.25 历元；对高自行星（南门二
 # 一年走 3.7″）两者能差到一分多钟。90″ 足以覆盖，再靠星等一致做二次筛。
 MATCH_TOLERANCE_DEG = 90.0 / 3600.0
+
+# Gaia 那一层的来源。位置是 ICRS 的 2016.0 历元，和 Hipparcos 的 J2000 差在
+# 毫角秒量级，标注和解算都用不到这个精度，不另做归算。
+GAIA_SOURCE = "I/355/gaiadr3"
+GAIA_COLUMNS = "Source,RA_ICRS,DE_ICRS,Gmag"
+
+# Gaia 的星等到 Hipparcos 那层就算重复。两边的位置误差都在毫角秒量级，
+# 5″ 的容差足够宽到不会漏掉同一颗星，又远小于任何一片天区里的星间距。
+OVERLAP_DEG = 5.0 / 3600.0
+
+# 星等按 0.05 等一格编进一个字节，覆盖 0 ~ 12.75 等。
+GAIA_MAG_SCALE = 20.0
 
 # 88 个星座的中英文名。缩写用 IAU 三字母标准。
 CONSTELLATION_NAMES: dict[str, tuple[str, str]] = {
@@ -253,15 +267,24 @@ PROPER_STAR_NAMES = {
     "σ Oct": ("Polaris Australis", "南极星"),
 }
 
-def fetch(source: str, columns: str | None = None) -> str:
+def fetch(
+    source: str,
+    columns: str | None = None,
+    constraints: dict[str, str] | None = None,
+) -> str:
     """从 VizieR 取一张表的 TSV。
 
     必须显式带 ``-out.max=unlimited``：服务端默认只返回 50000 行，
     而 Hipparcos 主表有 118218 行，截断后 HIP 号大的那半个天区会整片丢失。
+    Gaia 主表有一亿八千万行，不设星等约束的话连下载都下不完，所以
+    [constraints] 是要紧的：``{"Gmag": "<9.0"}`` 由服务端筛，而不是拉下来
+    再自己丢。
     """
     params = {"-source": source, "-out.max": "unlimited"}
     if columns:
         params["-out"] = columns
+    if constraints:
+        params.update(constraints)
     url = f"{VIZIER}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=180) as response:
@@ -465,6 +488,201 @@ def format_designation(bsc_name: str) -> tuple[str, str] | None:
     return body, constellation
 
 
+MESSIER_TO_NGC: dict[int, str] = {
+    1: "1952", 2: "7089", 3: "5272", 4: "6121", 5: "5904", 6: "6405",
+    7: "6475", 8: "6523", 9: "6333", 10: "6254", 11: "6705", 12: "6218",
+    13: "6205", 14: "6402", 15: "7078", 16: "6611", 17: "6618", 18: "6613",
+    19: "6273", 20: "6514", 21: "6531", 22: "6656", 23: "6494", 25: "I4725",
+    26: "6694", 27: "6853", 28: "6626", 29: "6913", 30: "7099", 31: "224",
+    32: "221", 33: "598", 34: "1039", 35: "2168", 36: "1960", 37: "2099",
+    38: "1912", 39: "7092", 41: "2287", 42: "1976", 43: "1982", 44: "2632",
+    46: "2437", 47: "2422", 48: "2548", 49: "4472", 50: "2323", 51: "5194",
+    52: "7654", 53: "5024", 54: "6715", 55: "6809", 56: "6779", 57: "6720",
+    58: "4579", 59: "4621", 60: "4649", 61: "4303", 62: "6266", 63: "5055",
+    64: "4826", 65: "3623", 66: "3627", 67: "2682", 68: "4590", 69: "6637",
+    70: "6681", 71: "6838", 72: "6981", 73: "6994", 74: "628", 75: "6864",
+    76: "650", 77: "1068", 78: "2068", 79: "1904", 80: "6093", 81: "3031",
+    82: "3034", 83: "5236", 84: "4374", 85: "4382", 86: "4406", 87: "4486",
+    88: "4501", 89: "4552", 90: "4569", 91: "4548", 92: "6341", 93: "2447",
+    94: "4736", 95: "3351", 96: "3368", 97: "3587", 98: "4192", 99: "4254",
+    100: "4321", 101: "5457", 102: "5866", 103: "581", 104: "4594",
+    105: "3379", 106: "4258", 107: "6171", 108: "3556", 109: "3992",
+    110: "205",
+}
+
+# 不在 NGC 2000.0 里的四个 Messier 目标：编号 -> (RA 度, Dec 度, 类型, 角分, 星等)。
+#
+# M24 是银河里的一块星云（IC 4715），M40 是真正的双星 Winnecke 4，
+# M45 是昴星团，三者都不是「星云星团表」里的条目，查表查不到，只能写死。
+# M102 是有争议的编号，惯例按 NGC 5866（纺锤星系）处理，仍走上面的映射表。
+MESSIER_EXTRA: dict[int, tuple[float, float, str, float, float]] = {
+    24: (274.225, -18.483, "Ast", 90.0, 4.6),
+    40: (185.600, 58.083, "D*", 0.8, 8.9),
+    45: (56.850, 24.117, "OC", 110.0, 1.6),
+}
+
+# NGC 2000.0 的类型码。它自己的一套写法，和 SIMBAD 的 otype 不是一回事，
+# 所以不能和 `lib/astrometry.dart` 里那张表合并。中文翻译放在 Dart 侧——
+# 改措辞不该需要重新生成数据。
+DEEPSKY_TYPES = frozenset(
+    {"Gx", "OC", "Gb", "Pl", "Nb", "C+N", "SNR", "D*", "***", "Ast", "Kt", "PD", "?"}
+)
+
+NGC2000_COLUMNS = "Name,Type,RAB2000,DEB2000,size,mag,n_mag,Desc"
+
+
+def build_gaia_layer(
+    hip_positions: list[tuple[float, float]],
+    gaia_rows: list[dict[str, str]],
+    mag_limit: float,
+) -> tuple[bytes, int, int]:
+    """把 Gaia 里比 Hipparcos 更深的那批星编成定长二进制。
+
+    单独一层而不是并进 ``stars.json``，因为两层要的东西不一样：Hipparcos
+    那层带名字、星座和 V 星等（测光零点的基准），这一层只有位置和星等——
+    名字它本来也没有，而 JSON 的字段名和文本数字会让体积翻好几倍。定长
+    7 字节一条，十七万颗星 1.2 MB，同样的内容写成 JSON 要 8 MB 以上。
+
+    和 Hipparcos 重叠的丢掉：同一个位置放两颗星，解算器的近邻图里就多出
+    一对零距离的点，那不是观测到的东西。亮星留在 Hipparcos 那层——它们的
+    V 星等才是零点基准，Gaia 的 G 和它差着零点几个星等，混着用会把零点
+    整体拉偏。
+
+    返回 (二进制, 收录条数, 因重叠丢弃的条数)。
+    """
+    buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    for ra, dec in hip_positions:
+        buckets.setdefault(_cell(ra, dec), []).append((ra, dec))
+
+    packed = bytearray()
+    kept = 0
+    overlapped = 0
+    for row in gaia_rows:
+        ra = parse_number(row.get("RA_ICRS", ""))
+        dec = parse_number(row.get("DE_ICRS", ""))
+        magnitude = parse_number(row.get("Gmag", ""))
+        if ra is None or dec is None or magnitude is None:
+            continue
+        if magnitude > mag_limit:
+            continue
+        duplicate = False
+        for dra in (-1, 0, 1):
+            for ddec in (-1, 0, 1):
+                for other_ra, other_dec in buckets.get(_cell(ra + dra, dec + ddec), []):
+                    if angular_distance_deg(ra, dec, other_ra, other_dec) < OVERLAP_DEG:
+                        duplicate = True
+                        break
+                if duplicate:
+                    break
+            if duplicate:
+                break
+        if duplicate:
+            overlapped += 1
+            continue
+        packed += pack_gaia_star(ra, dec, magnitude)
+        kept += 1
+    return bytes(packed), kept, overlapped
+
+
+def pack_gaia_star(ra_deg: float, dec_deg: float, magnitude: float) -> bytes:
+    """一颗星 7 字节：赤经 3、赤纬 3、星等 1，全部大端定长。
+
+    三字节的赤经在全天上是 0.077″ 一格，赤纬 0.039″ 一格——比任何一张手机
+    照片的星点定位精度都高两个数量级，不值得为它多花一个字节。星等按 0.05
+    等一格，一字节覆盖到 12.75 等，够到星等上限还有富余；解算只拿它排序和
+    定暗星上限，不求测光。
+    """
+    ra_units = int(round((ra_deg % 360.0) / 360.0 * (1 << 24))) & 0xFFFFFF
+    dec_units = int(round((dec_deg + 90.0) / 180.0 * (1 << 24))) & 0xFFFFFF
+    mag_units = max(0, min(255, int(round(magnitude * GAIA_MAG_SCALE))))
+    return (
+        ra_units.to_bytes(3, "big")
+        + dec_units.to_bytes(3, "big")
+        + bytes([mag_units])
+    )
+
+
+def parse_ngc_name(raw: str) -> str | None:
+    """``  224`` -> ``NGC 224``；``I5370`` -> ``IC 5370``。
+
+    表里的名字是裸编号（IC 条目在前面加一个 ``I``），不给前缀的话用户在
+    别处根本搜不到。
+    """
+    name = raw.strip()
+    if not name:
+        return None
+    if name.startswith("I"):
+        body = name[1:].strip()
+        return f"IC {body}" if body.isdigit() else None
+    return f"NGC {name}" if name.isdigit() else None
+
+
+def build_deepsky_payload(
+    rows: list[dict[str, str]], mag_limit: float, size_min: float
+) -> tuple[list[list[object]], list[int]]:
+    """把 NGC 2000.0 裁成 APP 用的深空目录。
+
+    留下的有两类：全部 110 个 Messier 目标（爱好者真正会去拍的那批），
+    以及亮于 [mag_limit] 等且长轴大于 [size_min] 角分的 NGC/IC 成员。剩下
+    的一万多个条目全是十几等的暗星系，既拍不到，标出来也只会把画面糊满。
+
+    返回 (目录, 没找到的 Messier 编号)。后者正常应该是空的；非空说明映射表
+    或数据源变了，构建日志里要能看见。
+    """
+    by_name: dict[str, dict[str, str]] = {}
+    for row in rows:
+        name = parse_ngc_name(row.get("Name", ""))
+        if name:
+            by_name[name] = row
+
+    messier_of: dict[str, int] = {}
+    missing: list[int] = []
+    for number, identifier in sorted(MESSIER_TO_NGC.items()):
+        name = parse_ngc_name(identifier)
+        if name is None or name not in by_name:
+            missing.append(number)
+            continue
+        messier_of[name] = number
+
+    payload: list[list[object]] = []
+    for name, row in by_name.items():
+        ra = parse_ra(row.get("RAB2000", ""))
+        dec = parse_dec(row.get("DEB2000", ""))
+        if ra is None or dec is None:
+            continue
+        number = messier_of.get(name)
+        size = parse_number(row.get("size", ""))
+        magnitude = parse_number(row.get("mag", ""))
+        if number is None:
+            if magnitude is None or magnitude > mag_limit:
+                continue
+            if size is None or size < size_min:
+                continue
+        object_type = row.get("Type", "").strip()
+        if object_type not in DEEPSKY_TYPES:
+            object_type = ""
+        payload.append(
+            [
+                f"M {number}" if number else name,
+                round(ra, 5),
+                round(dec, 5),
+                object_type,
+                round(size, 1) if size is not None else None,
+                round(magnitude, 1) if magnitude is not None else None,
+            ]
+        )
+
+    for number, (ra, dec, object_type, size, magnitude) in MESSIER_EXTRA.items():
+        payload.append(
+            [f"M {number}", round(ra, 5), round(dec, 5), object_type,
+             round(size, 1), round(magnitude, 1)]
+        )
+
+    # 按赤经排序：文件本身就是给人翻的，按天区排比按星等排更好找。
+    payload.sort(key=lambda item: float(item[1]))
+    return payload, missing
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="assets/catalog", help="输出目录")
@@ -474,6 +692,16 @@ def main() -> int:
     parser.add_argument("--max-line-stars", type=int, default=12,
                         help="每个星座参与连线的最大星数")
     parser.add_argument("--cache", default="tools/.cache", help="原始星表缓存目录")
+    parser.add_argument("--deepsky-mag-limit", type=float, default=13.0,
+                        help="深空目录保留的极限视星等（Messier 不受此限）")
+    parser.add_argument("--deepsky-size-min", type=float, default=1.0,
+                        help="深空目录保留的最小长轴角分（Messier 不受此限）")
+    parser.add_argument("--skip-deepsky", action="store_true",
+                        help="不生成 deepsky.json（只更新恒星目录时用）")
+    parser.add_argument("--gaia-mag-limit", type=float, default=9.0,
+                        help="Gaia 补充层保留的极限 G 星等（每深一等，星数约涨三倍）")
+    parser.add_argument("--skip-gaia", action="store_true",
+                        help="不生成 gaia.bin（只更新名字或深空目录时用）")
     args = parser.parse_args()
 
     # Windows 控制台默认是 GBK，拜耳编号里的上标（α²）会让 print 抛
@@ -486,14 +714,19 @@ def main() -> int:
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(args.cache, exist_ok=True)
 
-    def cached_fetch(name: str, source: str, columns: str | None = None) -> list[dict[str, str]]:
+    def cached_fetch(
+        name: str,
+        source: str,
+        columns: str | None = None,
+        constraints: dict[str, str] | None = None,
+    ) -> list[dict[str, str]]:
         path = os.path.join(args.cache, f"{name}.tsv")
         if os.path.exists(path):
             with open(path, encoding="utf-8") as handle:
                 text = handle.read()
         else:
             print(f"下载 {source} …", file=sys.stderr)
-            text = fetch(source, columns=columns)
+            text = fetch(source, columns=columns, constraints=constraints)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(text)
         return parse_tsv(text)
@@ -679,6 +912,57 @@ def main() -> int:
     with open(os.path.join(args.out, "constellation_grid.bin"), "wb") as handle:
         handle.write(bytes(grid))
 
+    # ---- 7. 离线深空目录 ------------------------------------------------
+    # 在线解算能从 SIMBAD 拿到深空天体的名字，但那要联网。本机解算同样知道
+    # 自己指着哪片天，缺的只是一张表——把表带上，标名字这件事就不必联网，
+    # 还能顺带给出角尺寸（「它占了画面多大」，这是 SIMBAD 不给的）。
+    deepsky_payload: list[list[object]] = []
+    if not args.skip_deepsky:
+        ngc_rows = cached_fetch("ngc2000", "VII/118/ngc2000", NGC2000_COLUMNS)
+        deepsky_payload, missing_messier = build_deepsky_payload(
+            ngc_rows, args.deepsky_mag_limit, args.deepsky_size_min
+        )
+        write_json(os.path.join(args.out, "deepsky.json"), deepsky_payload)
+        if missing_messier:
+            print(
+                "注意：这些 Messier 编号在 NGC 2000.0 里没找到，"
+                f"深空目录会缺条目：{missing_messier}",
+                file=sys.stderr,
+            )
+
+    # ---- 8. Gaia 补充层 --------------------------------------------------
+    # Hipparcos 到 V=8.0 只有 41394 颗，全天平均每平方度一颗。视场 4° 上下
+    # 的照片，一片天区里就十来颗目录星——刚好卡在「解得出」和「解不出」的
+    # 边界上，所以猎户座大星云这类星点稀的天区总是时灵时不灵。往下再要
+    # 两个星等，天区里的目录星就有四倍，解算这才站得住。
+    #
+    # 这批星只做背景，不起名字：它们没有中文名、也没有拜耳编号，放进
+    # names.json 只会多出一堆「HIP -12345」。
+    gaia_count = 0
+    if not args.skip_gaia:
+        gaia_rows = cached_fetch(
+            f"gaia{args.gaia_mag_limit:g}".replace(".", "_"),
+            GAIA_SOURCE,
+            GAIA_COLUMNS,
+            constraints={"Gmag": f"<{args.gaia_mag_limit:g}"},
+        )
+        packed, gaia_count, overlapped = build_gaia_layer(
+            [(float(row[1]), float(row[2])) for row in stars_payload],
+            gaia_rows,
+            args.gaia_mag_limit,
+        )
+        with open(os.path.join(args.out, "gaia.bin"), "wb") as handle:
+            handle.write(packed)
+        print(
+            f"  写出 {os.path.join(args.out, 'gaia.bin')}"
+            f"（{len(packed) / 1024:.0f} KB，{gaia_count} 颗，"
+            f"与 Hipparcos 重叠丢弃 {overlapped} 颗）",
+            file=sys.stderr,
+        )
+        if gaia_count < 1000:
+            print("注意：Gaia 补充层几乎没有内容，V/8 等以下的暗天区仍然解不出来",
+                  file=sys.stderr)
+
     write_json(
         os.path.join(args.out, "catalog_meta.json"),
         {
@@ -686,10 +970,17 @@ def main() -> int:
             "line_mag_limit": args.line_mag_limit,
             "star_count": len(stars_payload),
             "constellation_order": abbreviations,
+            "gaia_mag_limit": None if args.skip_gaia else args.gaia_mag_limit,
+            "gaia_count": gaia_count,
+            "deepsky_mag_limit": None if args.skip_deepsky else args.deepsky_mag_limit,
+            "deepsky_size_min": None if args.skip_deepsky else args.deepsky_size_min,
+            "deepsky_count": len(deepsky_payload),
             "sources": [
                 "I/239/hip_main (ESA 1997, Hipparcos)",
                 "V/50/catalog (Hoffleit & Warren 1991, Bright Star Catalogue 5th ed.)",
                 "VI/42/data (Roman 1987, constellation boundaries)",
+                "VII/118/ngc2000 (Sky Publishing, ed. Sinnott 1988, NGC 2000.0)",
+                "I/355/gaiadr3 (Gaia Collaboration 2022, Gaia DR3)",
             ],
         },
     )
@@ -699,8 +990,10 @@ def main() -> int:
         for name in os.listdir(args.out)
     )
     print(
-        f"完成：{len(stars_payload)} 颗星，{len(names_payload)} 条名称，"
-        f"{len(constellation_payload)} 个星座，合计 {total / 1024:.0f} KB",
+        f"完成：{len(stars_payload)} 颗星 + {gaia_count} 颗 Gaia 背景星，"
+        f"{len(names_payload)} 条名称，"
+        f"{len(constellation_payload)} 个星座，"
+        f"{len(deepsky_payload)} 个深空天体，合计 {total / 1024:.0f} KB",
         file=sys.stderr,
     )
     unassigned = sum(1 for row in stars_payload if row[4] == 0)

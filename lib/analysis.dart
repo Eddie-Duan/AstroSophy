@@ -81,6 +81,7 @@ class SkyAnalysis {
     required this.isLikelyStarfield,
     required this.starfieldConfidence,
     required this.brightFlatFraction,
+    this.solverExtras = const [],
   });
 
   final int width;
@@ -120,6 +121,12 @@ class SkyAnalysis {
   /// 近乎平坦（没有噪声起伏）的像素占比。截图、纯色背景会非常高。
   final double brightFlatFraction;
 
+  /// 形态上是拉线候选、但允许进入解算的亮源（见 `analysis.dart` 的 `_classify`）。
+  ///
+  /// 它们**不在** [stars] 里：界面上的编号、列表、星等统计都只认 [stars]，
+  /// 否则用户会看到一堆分不清是星还是拖线的圆圈。这里只服务于解算。
+  final List<DetectedStar> solverExtras;
+
   /// 参与星表匹配和测光的紧凑点源（排除拉长候选和用户剔除项）。
   List<DetectedStar> get compactSources => stars
       .where((star) => !star.isElongated && !star.isRejected)
@@ -147,6 +154,28 @@ class SkyAnalysis {
   List<DetectedStar> _rank(List<DetectedStar> source) =>
       source.toList(growable: false)
         ..sort((a, b) => a.instrumentalMagnitude.compareTo(b.instrumentalMagnitude));
+
+  /// 本机解算的输入候选。
+  ///
+  /// 和展示用的 [compactSources] 是**两套判据**：解算这边多收一类「形似略
+  /// 拉长的亮源」（[solverExtras]）。多一个假点源只是多一个对不上的候选，
+  /// 内点验证自己会把它筛掉；而窄视场里少一颗真参考星，整张图就直接解不
+  /// 出来。展示那边则相反，宁缺毋滥——图上多一个圈，用户就得多费一次神。
+  ///
+  /// 用户手动剔除的拉线不进候选：他已经明确说过「这不是天体」。剔除是按
+  /// 坐标记在 [stars] 上的，而 [solverExtras] 是另一批对象，所以要按坐标比对。
+  List<DetectedStar> get solveCandidates {
+    final rejected = stars.where((star) => star.isRejected).toList();
+    if (rejected.isEmpty) {
+      return [...compactSources, ...solverExtras];
+    }
+    bool wasRejected(DetectedStar star) =>
+        rejected.any((item) => _sameSource(item, star));
+    return [
+      ...compactSources,
+      ...solverExtras.where((star) => !wasRejected(star)),
+    ];
+  }
 
   /// 标记/取消标记某个拉长候选，返回新结果（列表本身不可变）。
   SkyAnalysis withRejection(DetectedStar target, bool rejected) => copyWith(
@@ -177,6 +206,7 @@ class SkyAnalysis {
         isLikelyStarfield: isLikelyStarfield,
         starfieldConfidence: starfieldConfidence,
         brightFlatFraction: brightFlatFraction,
+        solverExtras: solverExtras,
       );
 
   static bool _sameSource(DetectedStar a, DetectedStar b) =>
@@ -198,6 +228,7 @@ class SkyAnalysis {
         'is_likely_starfield': isLikelyStarfield,
         'starfield_confidence': starfieldConfidence,
         'bright_flat_fraction': brightFlatFraction,
+        'solver_extras': solverExtras.map((star) => star.toJson()).toList(),
       };
 
   /// 历史记录里只存索引信息，图片从磁盘重新读，不在 JSON 里塞 base64。
@@ -232,6 +263,10 @@ class SkyAnalysis {
         isLikelyStarfield: json['is_likely_starfield'] != false,
         starfieldConfidence: _asDouble(json['starfield_confidence']),
         brightFlatFraction: _asDouble(json['bright_flat_fraction']),
+        solverExtras: ((json['solver_extras'] as List<Object?>?) ?? const [])
+            .whereType<Map<Object?, Object?>>()
+            .map((item) => DetectedStar.fromJson(Map<String, Object?>.from(item)))
+            .toList(growable: false),
       );
 
   /// 对外唯一入口：给一份图片字节，返回分析结果。
@@ -288,12 +323,32 @@ class SkyAnalysis {
     final streaks = <DetectedStar>[
       for (final component in classified.trails) _toStar(component, grid),
     ];
+    // 解算候选里的「拉线」不走近圆孔径：它们本来就不是圆的，套一个圆孔
+    // 只会把邻星的通量也算进来。通量在这里只用来排序，阈值连通域的和够用。
+    final solverOnly = <DetectedStar>[
+      for (final component in classified.solverExtras) _toStar(component, grid),
+    ];
 
     final suppressed = _suppressTextRows([...compact, ...streaks]);
     final stars = [...compact, ...streaks]
         .where((star) => !suppressed.contains(star))
         .toList(growable: false)
       ..sort((a, b) => a.instrumentalMagnitude.compareTo(b.instrumentalMagnitude));
+    // 被文字抑制律筛掉的对象不能进解算候选——一排排得整整齐齐的亮点是印刷
+    // 品，不是星空。抑制是按对象比对的，而上面那批和 [solverOnly] 是两次
+    // 构造出来的不同对象，所以这里按坐标再比一次。
+    final suppressedPositions = [
+      for (final star in suppressed) (star.x, star.y),
+    ];
+    final solverExtras = solverOnly
+        .where(
+          (star) => !suppressedPositions.any(
+            (position) =>
+                (position.$1 - star.x).abs() < 0.01 &&
+                (position.$2 - star.y).abs() < 0.01,
+          ),
+        )
+        .toList(growable: false);
 
     final brightFlatFraction = _brightFlatFraction(gray, width, height);
     final starfield = _judgeStarfield(
@@ -355,6 +410,7 @@ class SkyAnalysis {
       isLikelyStarfield: starfield.isStarfield,
       starfieldConfidence: starfield.confidence,
       brightFlatFraction: brightFlatFraction,
+      solverExtras: solverExtras,
     );
   }
 }
@@ -727,21 +783,52 @@ void _computeMoments(
 }
 
 class _ClassifiedField {
-  _ClassifiedField(this.stars, this.trails, this.regions);
+  _ClassifiedField(this.stars, this.trails, this.regions, this.solverExtras);
 
   final List<_Component> stars;
   final List<_Component> trails;
   final List<MaskRegion> regions;
+
+  /// 展示上算拉线候选、但允许进入解算的点源，见 [_classify] 里的说明。
+  final List<_Component> solverExtras;
 }
+
+/// 允许进入解算候选的最大轴比。
+///
+/// 比 [DetectedStar.isElongated] 的 2.2 宽：2.2 到 3.5 这一段里既有真的卫星
+/// 轨迹，也有被拖尾、被薄云压扁、或者赤道仪轻微抖动的恒星。前者对解算无害
+/// （质心落在没有目录星的地方，内点验证自然把它排除），后者却是实打实的
+/// 参考星——窄视场里少一颗就可能直接解不出来。再长的就不是「略拉长」了，
+/// 质心离开星的位置太远，放进来只会污染匹配。
+const _solverMaxAxisRatio = 3.5;
+
+/// 进入解算候选的最小短边像素数。
+///
+/// 卫星轨迹和衍射星芒都是一像素宽的细线，质心沿线的位置由阈值噪声决定，
+/// 精度只有几个像素，拿来当三角形顶点只会污染匹配。真星的短边至少两三
+/// 个像素，这一条把它们分开。
+const _solverMinThinness = 2.0;
 
 /// 形态分类：紧凑点源 → 星点；细长均匀 → 拉线候选；其余 → 非星空区域。
 ///
 /// 只做形态判断，不做测光——测光要等整帧的点扩散函数估出来之后统一做，
 /// 见 [_measureAperture]。
+///
+/// 分类结果里有**两套**判据，不能合成一套：
+///
+/// * 展示用（stars / trails / regions）——宁缺毋滥，画在图上、列进表里的
+///   东西用户要逐条看，误报会直接毁掉体验；
+/// * 解算用（stars + solverExtras）——宁滥勿缺，多一个假点源只是多一个对不
+///   上的候选，少一颗真星却可能让整张图解不出来。
+///
+/// 略拉长但有明确核心的亮源正好落在这两套判据的缝里：它形态上是拖线，本质
+/// 上多半是一颗恒星。所以它**同时**进 trails（展示上照旧当拉线候选，用户
+/// 能看、能剔）和 solverExtras（解算时当点源用）。
 _ClassifiedField _classify(List<_Component> components) {
   final stars = <_Component>[];
   final trails = <_Component>[];
   final regions = <MaskRegion>[];
+  final solverExtras = <_Component>[];
 
   for (final component in components) {
     if (component.area < 3 || component.flux <= 0) continue;
@@ -777,12 +864,21 @@ _ClassifiedField _classify(List<_Component> components) {
         component.fillRatio >= 0.5 &&
         component.thinness <= 6) {
       trails.add(component);
+      // 有核心、或者中心够集中的「拉线」多半是被拖尾的恒星：真轨迹亮度沿线
+      // 均匀，两个条件都够不着（见 [_Component.peakRatio] 与
+      // [_Component.concentration]）。判据故意比展示那边松——这里不需要
+      // 确认它是恒星，只要「不像卫星轨迹」就够了，剩下的交给内点验证。
+      if ((hasCore || compact) &&
+          component.axisRatio <= _solverMaxAxisRatio &&
+          component.thinness >= _solverMinThinness) {
+        solverExtras.add(component);
+      }
       continue;
     }
 
     regions.add(_regionOf(component, _kindOf(component)));
   }
-  return _ClassifiedField(stars, trails, regions);
+  return _ClassifiedField(stars, trails, regions, solverExtras);
 }
 
 /// 给一块非星空区域定个说得通的类型，UI 上据此换提示措辞。

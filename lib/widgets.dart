@@ -200,11 +200,16 @@ class DetectedStarsPainter extends CustomPainter {
     this.hidden = const {},
     this.selected,
     this.numbers = true,
+    this.arcsecPerPixel = 0,
   });
 
   final SkyAnalysis analysis;
   final List<SkyObject> namedStars;
   final List<SkyObject> objects;
+
+  /// 图像比例尺（角秒/像素），只用来把深空天体的角尺寸换成图上的圆。
+  /// 0 表示还没解算——那就退回到一个固定大小的标记。
+  final double arcsecPerPixel;
 
   /// 星座连线，像素坐标已经由解算侧算好（见 `ConstellationFigure`）。
   final List<ConstellationFigure> figures;
@@ -367,15 +372,30 @@ class DetectedStarsPainter extends CustomPainter {
       label.paint(canvas, point + const Offset(6, 4));
     }
 
+    // 深空天体和星点分开画：星点是个位置，深空天体是**一块面积**。所以这里的
+    // 标记大小跟着天体自身的角尺寸走——M31 用一个小圆圈住核心，会让人以为
+    // 那就是它的全部，其实整个星系比那个圈大十几倍。
     final objectPaint = Paint()
       ..color = const Color(0xFFFF7B8C)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     for (final object in objects) {
       final point = toCanvas(object.x, object.y);
-      canvas.drawCircle(point, 9, objectPaint);
+      final size = object.angularSizeArcmin;
+      if (size == null || size <= 0 || arcsecPerPixel <= 0) {
+        canvas.drawCircle(point, 9, objectPaint);
+      } else {
+        // 角尺寸换成图像像素要经过实际比例尺；画到画布上再乘一次缩放。
+        final radius = size * 60 / arcsecPerPixel / 2 * scale;
+        canvas.drawCircle(point, radius.clamp(6.0, 400.0), objectPaint);
+      }
       final label = TextPainter(
-        text: TextSpan(text: object.name, style: labelStyle),
+        text: TextSpan(
+          text: object.category.isEmpty
+              ? object.name
+              : '${object.name} · ${object.category}',
+          style: labelStyle,
+        ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.55);
       label.paint(canvas, point + const Offset(10, -7));
@@ -393,7 +413,8 @@ class DetectedStarsPainter extends CustomPainter {
       hidden.length != oldDelegate.hidden.length ||
       !hidden.containsAll(oldDelegate.hidden) ||
       oldDelegate.selected != selected ||
-      oldDelegate.numbers != numbers;
+      oldDelegate.numbers != numbers ||
+      oldDelegate.arcsecPerPixel != arcsecPerPixel;
 }
 
 /// 一键解析的进度条。

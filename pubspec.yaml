@@ -39,6 +39,11 @@ flutter:
     - assets/catalog/names.json
     - assets/catalog/constellations.json
     - assets/catalog/constellation_grid.bin
+    # Gaia DR3 补充层：Hipparcos 够不着的天区（星点稀、视场又不大）靠它凑够
+    # 目录星。定长 7 字节一条，见 tools/build_catalog.py 的 pack_gaia_star。
+    - assets/catalog/gaia.bin
+    # 内置深空目录（Messier 110 + 亮 NGC/IC），供本机解算标名字用。
+    - assets/catalog/deepsky.json
     # 自带的演示星图。原图底部的相机信息条（设备、时间、拍摄地点）已裁掉，
     # 见 lib/demo.dart。
     - assets/demo/demo_m31.jpg

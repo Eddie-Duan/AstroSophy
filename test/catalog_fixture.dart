@@ -4,13 +4,17 @@ import 'dart:typed_data';
 
 import 'package:astrosophy/analysis.dart';
 import 'package:astrosophy/catalog.dart';
+import 'package:astrosophy/deepsky.dart';
 import 'package:astrosophy/models.dart';
 
 /// 从仓库里的 assets 直接读星表。
 ///
 /// 绕开 Flutter 的 asset bundle 是刻意的：`flutter test` 的工作目录就是包
 /// 根目录，用 dart:io 读既简单，又不用先初始化 widget binding。
-StarCatalog loadTestCatalog() {
+///
+/// [withGaia] 给 false 时不读 Gaia 补充层，得到的就是只有 Hipparcos 的那张
+/// 主星表——解算器分两层用星表，对照测试两边都得能造出来。
+StarCatalog loadTestCatalog({bool withGaia = true}) {
   return StarCatalog.parse(
     starsJson: File('assets/catalog/stars.json').readAsStringSync(),
     namesJson: File('assets/catalog/names.json').readAsStringSync(),
@@ -18,8 +22,14 @@ StarCatalog loadTestCatalog() {
         File('assets/catalog/constellations.json').readAsStringSync(),
     constellationGrid:
         File('assets/catalog/constellation_grid.bin').readAsBytesSync(),
+    gaiaBytes:
+        withGaia ? File('assets/catalog/gaia.bin').readAsBytesSync() : null,
   );
 }
+
+/// 同样绕开 asset bundle，直接读仓库里的深空目录。
+DeepSkyCatalog loadTestDeepSky() =>
+    DeepSkyCatalog.parse(File('assets/catalog/deepsky.json').readAsStringSync());
 
 /// 造一张「理想星图」：把某片天区里的目录星按给定 WCS 投影成像素位置。
 ///

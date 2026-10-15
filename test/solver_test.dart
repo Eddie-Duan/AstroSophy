@@ -264,13 +264,14 @@ void main() {
     });
 
     test('视场窄到目录星不够时不硬凑结果', () {
-      // 1.5° 视场：目录只到 V=8.0，这片天区里凑不出可以互相验证的三角形。
-      // 这里必须老老实实返回 null 让上层回退在线解算，而不是给一个
-      // 看起来像模像样、实际上错得离谱的坐标。
+      // 银河北极：全天星最少的方向之一。连 Gaia 补充层算上，1.5° 视场里
+      // 也只有个位数的星，凑不出可以互相验证的三角形。这里必须老老实实
+      // 返回 null 让上层回退在线解算，而不是给一个看起来像模像样、
+      // 实际上错得离谱的坐标。
       final analysis = synthesiseField(
         catalog: catalog,
-        centerRa: _orionRa,
-        centerDec: _orionDec,
+        centerRa: 192.86,
+        centerDec: 27.13,
         degreesPerPixel: 0.0015,
       );
       expect(analysis.stars.length, lessThan(15));

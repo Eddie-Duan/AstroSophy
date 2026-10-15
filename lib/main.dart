@@ -116,6 +116,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 图上不画圆圈的分组。只是不画——测量、星表匹配和报告都不受它影响。
   final _hiddenGroups = <String>{..._secondaryGroups};
 
+  /// 单独隐去、单独显示的那些编号。
+  ///
+  /// 分组给的是「一进来先看什么」的默认值，而用户真正经常要做的事是
+  /// 「就这一颗挡着我看别的，把它收起来」。所以分组之外还得能一颗一颗来：
+  /// [_hiddenTargets] 按下某个编号，[_restoredTargets] 把它从所属分组的
+  /// 隐去里捞出来。两者都为空时，一颗星画不画完全由它所在的分组决定。
+  ///
+  /// 分组的 − / + 一按，这一组的逐项设定就作废：按钮的字面意思是「这一组
+  /// 全部」，按下去之后组里每一项就该是同一个状态，再留着上一轮的个别设定
+  /// 会和它打架。
+  final _hiddenTargets = <int>{};
+  final _restoredTargets = <int>{};
+
   /// 列表里被折叠起来的分组。默认只展开亮星，与圆圈的默认可见性一致。
   final _collapsedGroups = <String>{..._secondaryGroups};
 
@@ -156,8 +169,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   /// 换图时把看图区和列表的临时状态清干净。
   ///
-  /// 这些记的都是「这一张图上的」选择：缩放比例、哪几组圈画着、哪几组折起来、
-  /// 选中了第几号。留到下一张图上，用户会以为程序记住了他上回的动作。
+  /// 这些记的都是「这一张图上的」选择：缩放比例、哪几组圈画着、哪几颗单独
+  /// 收起来了、哪几组折起来、选中了第几号。留到下一张图上，用户会以为程序
+  /// 记住了他上回的动作。
   ///
   /// 调用点都在 `setState` 回调里，所以这里只管改值、不再自己 setState。
   void _resetPanelState() {
@@ -171,6 +185,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     _collapsedGroups
       ..clear()
       ..addAll(_secondaryGroups);
+    // 逐项设定记的是编号，而编号是「这张图上的第几号」。换一张图之后同一
+    // 个编号指的是另一颗星，留着就会莫名其妙地少画几个圈。
+    _hiddenTargets.clear();
+    _restoredTargets.clear();
   }
 
   /// 把设置里的开关读进内存。设置表单保存之后也要再读一次。
@@ -1069,12 +1087,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     CustomPaint(
                       painter: DetectedStarsPainter(
                         analysis: analysis,
-                        // 「亮星」那一组隐去时，连名字一起隐去：只剩名字没有圈，
-                        // 和「这块干净了」是两回事。
-                        namedStars: _circlesVisible('named')
-                            ? solve?.namedStars ?? const []
-                            : const [],
+                        namedStars: _visibleNamedStars(analysis, solve),
                         objects: solve?.deepSkyObjects ?? const [],
+                        arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
                         // 关掉连线时传空表而不是把 painter 换一个：换 painter
                         // 会让整张图重画，而这里只是少画几条线。
                         figures: _showConstellations
@@ -1248,6 +1263,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Widget _highlightsCard(SkyAnalysis analysis, SolveResult? solve) {
     final targets = analysis.numberedTargets;
     final groups = _categoriseTargets(targets, solve);
+    // 算一次，往下传：每行都要知道自己画不画，逐行去重算一遍就是 O(n²)，
+    // 而这一页的检出点源动辄上千个。
+    final hidden = _hiddenIndices(analysis, solve);
     return Card(
       margin: EdgeInsets.zero,
       child: Column(
@@ -1260,17 +1278,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const Expanded(
                   child: SectionTitle('图内亮点', Icons.blur_on_rounded),
                 ),
-                // 三个组的 − / + 各管一组，这两个一次管三组。
+                // 三个组的 − / + 各管一组，这两个一次管全部。
                 _batchButton(
                   Icons.remove_circle_outline,
                   '把图上所有的圆圈都隐去',
-                  _groupIds.any(_circlesVisible),
+                  hidden.length < targets.length,
                   () => _setAllCircles(true),
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
                   '把图上所有的圆圈都显示回来',
-                  _groupIds.any((id) => !_circlesVisible(id)),
+                  hidden.isNotEmpty,
                   () => _setAllCircles(false),
                 ),
                 const _HelpButton(
@@ -1278,8 +1296,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   message:
                       '编号与上图里的编号一一对应，点一行就能在图上定位到那一颗，'
                       '双指捏合可以把图放大。放大之后圆圈跟着一起放大。'
-                      '每组的 − 把那一组的圆圈从图上隐去，+ 显示回来；'
-                      '卡片标题右边这两个按钮一次管全部三组。'
+                      '每一行右边的 − 把那一颗的圆圈从图上隐去，+ 显示回来；'
+                      '组标题右边的 − / + 一次管整组，'
+                      '卡片标题右边这两个一次管全部。'
                       '隐去只是不画，测量结果、报告和星表匹配一个字都不变。'
                       '「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——'
                       '判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。'
@@ -1308,6 +1327,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         emptyHint: '没有和星表对上名字的星。',
                         targets: targets,
                         items: groups.named,
+                        hidden: hidden,
                         solve: solve,
                       ),
                       _targetGroup(
@@ -1317,6 +1337,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         emptyHint: '没有未命名的点源。',
                         targets: targets,
                         items: groups.unnamed,
+                        hidden: hidden,
                         solve: solve,
                       ),
                       _targetGroup(
@@ -1326,6 +1347,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         emptyHint: '没有发现拉长的亮点。',
                         targets: targets,
                         items: groups.streaks,
+                        hidden: hidden,
                         solve: solve,
                       ),
                     ],
@@ -1380,15 +1402,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     required String emptyHint,
     required List<DetectedStar> targets,
     required List<_NumberedTarget> items,
+    required Set<int> hidden,
     required SolveResult? solve,
   }) {
     final collapsed = _collapsedGroups.contains(id);
-    final visible = _circlesVisible(id);
+    // 一组里只要还剩一颗画着，这组就算「看得见」——用户可以按颗收起来，
+    // 收到只剩一颗时组标题不该再显示成整组都隐了。
+    final visible = items.any((item) => !hidden.contains(item.number));
     final rejected = items.where((item) => item.star.isRejected).length;
     // 隐去和显示互斥，所以两个按钮里永远只有一个能按。另一个变灰不是坏了，
     // 是「现在就在这个状态上」。
     final canHide = visible && items.isNotEmpty;
-    final canShow = !visible;
+    final canShow = items.any((item) => hidden.contains(item.number));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1446,13 +1471,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   Icons.remove_circle_outline,
                   '把这组的圆圈从图上隐去',
                   canHide,
-                  () => _setGroupCircles(id, false),
+                  () => _setGroupCircles(id, false, items),
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
                   '把这组的圆圈显示回来',
                   canShow,
-                  () => _setGroupCircles(id, true),
+                  () => _setGroupCircles(id, true, items),
                 ),
               ],
             ),
@@ -1469,57 +1494,138 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             )
           else
             for (final item in items)
-              _highlightRow(targets, item.number, solve, id),
+              _highlightRow(targets, item.number, solve, hidden),
         const Divider(height: 1),
       ],
     );
   }
 
-  /// 图上不画圆圈的分组。
-  bool _circlesVisible(String id) => !_hiddenGroups.contains(id);
-
   /// 图上不该画的编号。
   ///
-  /// 分组是显示上的事，而 painter 只认编号，所以这里把「哪几组隐着」翻译成
-  /// 「哪几个下标不画」。翻译走的是同一套 [_categoriseTargets]——要是另算一
-  /// 遍，就可能隐去一组、图上少画的却是另一组。
+  /// 分组是显示上的事，而 painter 只认编号，所以这里把「哪几组隐着」和
+  /// 「哪几颗单独动过」一起翻译成「哪几个下标不画」。翻译走的是同一套
+  /// [_categoriseTargets]——要是另算一遍，就可能隐去一组、图上少画的却是
+  /// 另一组。
+  ///
+  /// 逐项设定压在最上面：分组给的是默认，用户点过的那一颗由他说了算。
   Set<int> _hiddenIndices(SkyAnalysis analysis, SolveResult? solve) {
-    if (_hiddenGroups.isEmpty) return const <int>{};
-    final groups = _categoriseTargets(analysis.numberedTargets, solve);
-    return {
-      for (final id in _hiddenGroups)
-        for (final item in groups.of(id)) item.number,
+    final hidden = <int>{
+      if (_hiddenGroups.isNotEmpty)
+        for (final id in _hiddenGroups)
+          for (final item
+              in _categoriseTargets(analysis.numberedTargets, solve).of(id))
+            item.number,
     };
+    return hidden
+      ..addAll(_hiddenTargets)
+      ..removeAll(_restoredTargets);
   }
 
-  void _setGroupCircles(String id, bool visible) => setState(() {
+  /// 图上要画的那几个「亮星」名字。
+  ///
+  /// 名字和圆圈是一回事：逐颗收起一颗星时，它的名字一起收。图上留一个名字
+  /// 悬在空处、底下却没有点，比不画更让人费解——用户按那颗的减号，要的正
+  /// 是「这一处干净了」。整组收起时同样一个名字都不传，这一点没变。
+  ///
+  /// 配对用的是和 [_categoriseTargets] 同一套近邻判据，所以「这一颗算不算
+  /// 有名字」和「它的名字画不画」永远是同一个答案。
+  List<SkyObject> _visibleNamedStars(SkyAnalysis analysis, SolveResult? solve) {
+    final named = solve?.namedStars ?? const <SkyObject>[];
+    if (named.isEmpty) return const [];
+    final hidden = _hiddenIndices(analysis, solve);
+    if (hidden.isEmpty) return named;
+    final targets = analysis.numberedTargets;
+    return [
+      for (final object in named)
+        if (!_namedIsHidden(object, targets, hidden)) object,
+    ];
+  }
+
+  /// 这个带名字的天体，对应的那颗编号星点现在收起来了吗。
+  ///
+  /// 反查的是「离它最近的那颗非拉长目标」，和正着分组的判据一样；找不到
+  /// 对应编号项（比如排在编号上限之外）时返回 false——没有开关管着它，
+  /// 就不该跟着谁一起消失。
+  static bool _namedIsHidden(
+    SkyObject object,
+    List<DetectedStar> targets,
+    Set<int> hidden,
+  ) {
+    var nearest = -1;
+    var distance = 10.0;
+    for (var index = 0; index < targets.length; index++) {
+      final target = targets[index];
+      if (target.isElongated) continue;
+      final current = math.sqrt(
+        math.pow(target.x - object.x, 2) + math.pow(target.y - object.y, 2),
+      );
+      if (current < distance) {
+        distance = current;
+        nearest = index;
+      }
+    }
+    return nearest >= 0 && hidden.contains(nearest);
+  }
+
+  /// 整组隐去 / 整组显示。
+  ///
+  /// 顺带清掉这一组的逐项设定：按下去之后组里每一项都该是同一个状态。
+  void _setGroupCircles(String id, bool visible, List<_NumberedTarget> items) =>
+      setState(() {
         if (visible) {
           _hiddenGroups.remove(id);
         } else {
           _hiddenGroups.add(id);
         }
+        for (final item in items) {
+          _hiddenTargets.remove(item.number);
+          _restoredTargets.remove(item.number);
+        }
       });
 
-  /// 一次管三组。
+  /// 一次管全部：三个分组，外加之前按颗收起来或按颗放出来的那些。
   void _setAllCircles(bool hidden) => setState(() {
         _hiddenGroups
           ..clear()
           ..addAll(hidden ? _groupIds : const <String>[]);
+        // 留着逐项设定的话，「全部显示回来」就会漏掉用户之前单独收起来的那
+        // 几颗——按钮上是「所有」，那就得真的是所有。
+        _hiddenTargets.clear();
+        _restoredTargets.clear();
+      });
+
+  /// 单独隐去 / 单独显示一颗。
+  ///
+  /// 隐去记进 [_hiddenTargets]；显示记进 [_restoredTargets]——它可能正被所属
+  /// 分组压着，得有一个比分组更有力的记号才捞得出来。
+  void _setTargetCircle(int number, bool visible) => setState(() {
+        if (visible) {
+          _hiddenTargets.remove(number);
+          _restoredTargets.add(number);
+        } else {
+          _restoredTargets.remove(number);
+          _hiddenTargets.add(number);
+        }
       });
 
   Widget _batchButton(
     IconData icon,
     String tooltip,
     bool enabled,
-    VoidCallback onTap,
-  ) =>
+    VoidCallback onTap, {
+    bool dense = false,
+  }) =>
       IconButton(
         visualDensity: VisualDensity.compact,
+        // 行里的两个按钮要和星等文字、对错号挤在一行上，默认那圈内边距太宽。
+        padding: dense ? EdgeInsets.zero : null,
+        constraints:
+            dense ? const BoxConstraints(minWidth: 30, minHeight: 30) : null,
         // 图标小、又只出现一次，没有 tooltip 的话没人知道那个圆圈里的横杠
         // 是「把这一组圈隐去」，也没人分得清它和旁边的加号谁管什么。
         tooltip: tooltip,
         onPressed: enabled ? onTap : null,
-        icon: Icon(icon, size: 19),
+        icon: Icon(icon, size: dense ? 18 : 19),
         // 两个图标长得几乎一样，只靠默认那点灰度差别看不出哪个是按得动的：
         // 亮着的那个才是当前能按的。
         color: const Color(0xFFC3D2E4),
@@ -1530,9 +1636,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     List<DetectedStar> targets,
     int index,
     SolveResult? solve,
-    String group,
+    Set<int> hidden,
   ) {
     final star = targets[index];
+    final isHidden = hidden.contains(index);
+    // 图上没画圈的那些行要一眼看得出来，不然用户翻回图上去找，会以为是自己
+    // 看漏了。用的是和「已判非天体」同一套变淡处理：两件事都不是错误，只是
+    // 「这一行现在不在图上」。
+    final muted = star.isRejected || isHidden;
     final name = _nearestNamed(star, solve?.namedStars ?? const []);
     final zeroPoint = solve?.magnitudeZeroPoint;
     // 标定过就给真实星等，没标定就退回星表星等或图内相对亮度——三者不能混
@@ -1549,28 +1660,28 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       selectedTileColor: kMint.withValues(alpha: 0.10),
       onTap: () => setState(() {
         _selectedTarget = index;
-        // 点一行就是要看那一颗。它所在的组要是隐着，顺手把圆圈显示回来——
-        // 否则「点一行就能在图上定位到那一颗」这个承诺在隐去之后就是空的。
-        _hiddenGroups.remove(group);
+        // 点一行就是要看那一颗。它现在要是隐着的，顺手把这一颗的圆圈显示
+        // 回来——否则「点一行就能在图上定位到那一颗」这个承诺在隐去之后
+        // 就是空的。只动这一颗：分组是批量设定，而用户点的是单独一颗。
+        _hiddenTargets.remove(index);
+        _restoredTargets.add(index);
       }),
       leading: CircleAvatar(
         radius: 15,
-        backgroundColor: star.isRejected
+        backgroundColor: muted
             ? const Color(0x33FF7B8C)
             : kMint.withValues(alpha: 0.16),
         child: Text(
           '${index + 1}',
           style: TextStyle(
-            color: star.isRejected ? const Color(0xFFFF7B8C) : kMint,
+            color: muted ? const Color(0xFFFF7B8C) : kMint,
             fontSize: 12,
           ),
         ),
       ),
       title: Text(
         name?.name ?? (star.isElongated ? '拉长的亮点' : '图内亮点'),
-        style: TextStyle(
-          color: star.isRejected ? const Color(0xFF8192A8) : null,
-        ),
+        style: TextStyle(color: muted ? const Color(0xFF8192A8) : null),
       ),
       subtitle: Text(
         _highlightSubtitle(star, name),
@@ -1601,6 +1712,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               () => _setRejection(star, true),
             ),
           ],
+          // 和组标题上那两个是同一对意思，只是只管这一颗。
+          _batchButton(
+            Icons.remove_circle_outline,
+            '把这一颗的圆圈从图上隐去',
+            !isHidden,
+            () => _setTargetCircle(index, false),
+            dense: true,
+          ),
+          _batchButton(
+            Icons.add_circle_outline,
+            '把这一颗的圆圈显示回来',
+            isHidden,
+            () => _setTargetCircle(index, true),
+            dense: true,
+          ),
         ],
       ),
     );
@@ -2089,28 +2215,65 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     );
   }
 
-  Widget _deepSkyCard(SolveResult solve) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SectionTitle('视场中的深空天体', Icons.scatter_plot),
-              const SizedBox(height: 8),
-              ...solve.deepSkyObjects.map(
-                (object) => ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(object.name),
-                  subtitle: Text(object.category),
-                  trailing:
-                      const Icon(Icons.auto_awesome, color: Color(0xFFFF7B8C)),
+  /// 画面中的深空天体。
+  ///
+  /// 只写「M31」是没有用的——用户想知道的是「这是什么、拍得够不够大」。
+  /// 所以每条都带上类型、角尺寸和它占像场的比例：同一个星系，占画面 5% 和
+  /// 占 80% 是两张完全不同的照片，后者才是「这张是它的特写」。
+  Widget _deepSkyCard(SolveResult solve) {
+    final entries = buildDeepSkyEntries(solve);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                SectionTitle('画面中的深空天体', Icons.scatter_plot),
+                _HelpButton(
+                  title: '深空天体是怎么认出来的',
+                  message:
+                      '这些天体不在本机的亮星表里，是解算出天球坐标之后按目录'
+                      '位置标注的，所以位置可靠、亮度不可靠——延展的星云和星系'
+                      '没有「一个点」的星等。\n\n'
+                      '占像场的比例是天体长轴与像场对角线的比：接近或超过 100% '
+                      '说明画面只是它的一部分，这张属于特写；只有百分之几说明'
+                      '目标在这套器材下还偏小，可以再上更长的焦距。',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...entries.map(
+              (entry) => ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  entry.category.isEmpty
+                      ? entry.name
+                      : '${entry.name} · ${entry.category}',
+                ),
+                subtitle: Text(
+                  [
+                    entry.sizeLabel,
+                    if (entry.coverageLabel.isNotEmpty) entry.coverageLabel,
+                  ].join('　·　'),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                trailing: Icon(
+                  entry.isLarge
+                      ? Icons.center_focus_strong
+                      : Icons.center_focus_weak,
+                  color: const Color(0xFFFF7B8C),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 
   Widget _agentCard() => Card(
         child: Padding(

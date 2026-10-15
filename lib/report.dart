@@ -62,16 +62,19 @@ Map<String, Object?> buildAgentReport(SkyAnalysis analysis, SolveResult? solve) 
           },
         )
         .toList(),
-    'deep_sky_objects': solve?.deepSkyObjects
-        .map(
-          (object) => {
-            'name': object.name,
-            'catalog_type': object.category,
-            'ra_deg': object.ra,
-            'dec_deg': object.dec,
-          },
-        )
-        .toList(),
+    // 深空天体连同角尺寸一起给模型：只给名字的话，模型没法判断「这张照片
+    // 是拍全景还是特写」，也就没法评价构图和器材匹配度。
+    'deep_sky_objects': [
+      for (final entry in buildDeepSkyEntries(solve))
+        {
+          'name': entry.name,
+          'type': entry.category,
+          'ra_deg': entry.raDeg,
+          'dec_deg': entry.decDeg,
+          'angular_size_arcmin': entry.angularSizeArcmin,
+          'fraction_of_field_of_view': entry.fieldFraction,
+        },
+    ],
     'catalog_warning': solve?.catalogWarning,
     'magnitude_zero_point': solve?.magnitudeZeroPoint,
     'photometry_scatter_mag': solve?.magnitudeScatter,
@@ -106,6 +109,7 @@ class ObservationRecord {
     required this.skyBrightness,
     required this.advice,
     required this.magnitudes,
+    required this.deepSky,
   });
 
   /// 一段话讲清楚这张照片拍了什么、拍得怎么样。
@@ -135,6 +139,9 @@ class ObservationRecord {
 
   /// 已标定的星等列表，画直方图用。
   final List<double> magnitudes;
+
+  /// 画面中的深空天体，按占画面大小排序。
+  final List<DeepSkyEntry> deepSky;
 }
 
 ObservationRecord buildObservationRecord(
@@ -161,6 +168,7 @@ ObservationRecord buildObservationRecord(
     skyBrightness: describeSkyBrightness(analysis.backgroundIndex),
     advice: buildAdvice(analysis, solve),
     magnitudes: magnitudes,
+    deepSky: buildDeepSkyEntries(solve),
   );
 }
 
@@ -374,6 +382,24 @@ List<String> buildAdvice(SkyAnalysis analysis, SolveResult? solve) {
         '${analysis.backgroundIndex.toStringAsFixed(0)}/100），'
         '暗弱的天体会淹在背景里。换到远离城市灯光的位置，或者加一片光害滤镜。');
   }
+  // 拍深空目标的人最容易被「星点怎么这么少」劝退，以为是自己拍砸了。
+  // 画面里有深空天体时先把这句话说在前头：这是目标本身的性质，不是失败。
+  final deepSky = buildDeepSkyEntries(solve);
+  if (deepSky.isNotEmpty && analysis.compactSources.length < 40) {
+    final main = deepSky.first;
+    final what = main.category.isEmpty
+        ? main.name
+        : '${main.name}（${main.category}）';
+    final sizePart =
+        main.angularSizeArcmin == null ? '' : '（${main.sizeLabel}）';
+    final coveragePart =
+        main.coverageLabel.isEmpty ? '' : '，${main.coverageLabel}';
+    advice.add(
+      '这张照片拍的是深空目标 $what$sizePart$coveragePart。'
+      '这类目标本身就是一个延展的亮斑，'
+      '画面里的紧凑星点本来就比普通星场少，不是拍坏了，也不是对焦不准。',
+    );
+  }
   if (analysis.streakCandidates.isNotEmpty) {
     advice.add('检出 ${analysis.streakCandidates.length} 条拉长的亮点，'
         '很可能是卫星或飞机。单张照片没法确认是哪一种，'
@@ -390,6 +416,157 @@ List<String> buildAdvice(SkyAnalysis analysis, SolveResult? solve) {
     advice.add('这张照片的测量结果没有明显问题，可以直接作为观测记录留存。');
   }
   return advice;
+}
+
+/// 本机没解出天区时给用户的提示。
+///
+/// 「星点不足」这种话没有用——用户看完还是不知道该干什么。所以这里每一条都
+/// 要落到一个具体动作上：换焦段、改曝光、开在线解算、还是先确认拍的是不是
+/// 星空。判断依据全部来自已有的测量结果，不猜。
+///
+/// [uploadAllowed] / [hasApiKey] 决定「开在线解算」这条建议是能立刻照做，
+/// 还是得先去设置里配；[onlineError] 非空表示在线那一步已经试过并失败了。
+List<String> buildSolveFailureAdvice(
+  SkyAnalysis analysis, {
+  required bool uploadAllowed,
+  required bool hasApiKey,
+  String? onlineError,
+}) {
+  final advice = <String>[];
+  final compact = analysis.compactSources.length;
+
+  if (!analysis.isLikelyStarfield) {
+    advice.add(
+      '本机没能认出这片天区，而且这张图看起来就不是以星场为主的照片。'
+      '先在相册里裁掉文字、地面和建筑，只留星空再试一次。',
+    );
+  } else if (compact < 8) {
+    advice.add(
+      '本机没能认出这片天区：图上只检出 $compact 个紧凑点源，参考星太少。'
+      '把曝光时间加倍（或 ISO 提高一档）重拍一张，'
+      '或者把镜头拉到更广的焦段——视场越大，画面里的参考星越多。',
+    );
+  } else {
+    advice.add(
+      '本机没能认出这片天区。图上检出了 $compact 个紧凑点源，'
+      '所以不是星点太少，而是这些星点和本机星表对不上：'
+      '星表收录了 41394 颗 V=8.0 以内的亮星，另有一层 13.7 万颗 9 等以内的'
+      '背景星兜底（覆盖约 2.8 MB，全部内置在手机里）；'
+      '视场窄到 4° 以下、或者画面里大半「星点」其实是星系星云一类'
+      '并非点源的东西，就还是对不上。'
+      '换更广的焦段（或加 0.5× 减焦镜）是本机解算最容易成功的办法。',
+    );
+  }
+
+  if (uploadAllowed && hasApiKey) {
+    advice.add(
+      onlineError == null
+          ? '也可以交给在线解算：它用的是完整的星表，窄视场基本只有这条路能走通。'
+          : '在线解算这次也没成功（$onlineError）。'
+              '在线服务用的是完整星表，如果它也认不出来，'
+              '更可能是画面本身的问题——检查是否有云、拖线、严重失焦。',
+    );
+  } else {
+    advice.add(
+      uploadAllowed
+          ? '在线解算已经开着，但设置里还没有 Astrometry.net 的 API Key。'
+              '填上 Key 之后，窄视场就可以交给在线服务——它用的是完整的星表。'
+          : '如果这是一张长焦或望远镜拍的照片，本机解算多半解不出来。'
+              '到「设置」里填上 Astrometry.net 的 API Key 并授权上传，'
+              '就可以改走在线解算。',
+    );
+  }
+
+  if (analysis.fwhm > 8) {
+    advice.add(
+      '另外，点源半高全宽有 ${analysis.fwhm.toStringAsFixed(1)} 像素，'
+      '明显偏大：先重新手动对焦（实时取景放到最大找最锐的位置）再拍。',
+    );
+  } else if (analysis.streakCandidates.length > 30) {
+    advice.add(
+      '另外，画面里有 ${analysis.streakCandidates.length} 条拉长的亮点。'
+      '如果是星点拖线，说明曝光期间设备动了——缩短单张曝光时间会有帮助。',
+    );
+  }
+  return advice;
+}
+
+/// 画面里的一个深空天体，已经整理成能直接写进报告的形式。
+///
+/// 「画面中有 M31」只是一半的信息。用户真正想知道的还有两件事：它是什么，
+/// 以及**它占了画面多大**——同一个目标在 200mm 和 1000mm 下是两张完全不同
+/// 的照片，前者是全景，后者是特写。所以角尺寸和像场占比都要算出来。
+class DeepSkyEntry {
+  const DeepSkyEntry({
+    required this.name,
+    required this.category,
+    this.angularSizeArcmin,
+    this.fieldFraction,
+    this.raDeg = 0,
+    this.decDeg = 0,
+  });
+
+  final String name;
+
+  /// 天球坐标。报告正文用不到，交给模型的摘要要用——模型可能想据此判断
+  /// 这个目标当时的地平高度、或者属于哪个星座。
+  final double raDeg;
+  final double decDeg;
+
+  /// 天体类型，已经翻成中文（「旋涡星系」「疏散星团」）。
+  final String category;
+
+  /// 天体长轴角尺寸（角分）；目录里查不到时为 null。
+  final double? angularSizeArcmin;
+
+  /// 长轴占像场对角线的比例；没有角尺寸时同样为 null。
+  final double? fieldFraction;
+
+  bool get isLarge => (fieldFraction ?? 0) >= 0.35;
+
+  /// 「约 190′ 长」或「尺寸未知」。
+  String get sizeLabel {
+    final size = angularSizeArcmin;
+    if (size == null || size <= 0) return '尺寸未知';
+    if (size < 1) return '约 ${(size * 60).round()}″';
+    if (size < 60) return '约 ${size.toStringAsFixed(1)}′';
+    return '约 ${(size / 60).toStringAsFixed(2)}°';
+  }
+
+  /// 「占像场对角线的 13%」或「比像场还大」。
+  String get coverageLabel {
+    final fraction = fieldFraction;
+    if (fraction == null) return '';
+    if (fraction >= 1) return '比像场对角线还大，画面里只是它的一部分';
+    if (fraction >= 0.35) return '约占像场对角线的 ${(fraction * 100).round()}%，是这张照片的主体';
+    if (fraction >= 0.1) return '约占像场对角线的 ${(fraction * 100).round()}%';
+    return '只占像场对角线的 ${(fraction * 100).toStringAsFixed(1)}%，在这套器材上偏小';
+  }
+}
+
+/// 把解算结果里的深空天体整理成报告条目。
+///
+/// 排序按「占画面多大」而不是目录顺序：用户扫一眼报告，先看到大的那个才对，
+/// 那才是这张照片真正拍的东西。
+List<DeepSkyEntry> buildDeepSkyEntries(SolveResult? solve) {
+  if (solve == null) return const [];
+  final field = solve.fieldOfViewDegrees;
+  final entries = <DeepSkyEntry>[
+    for (final object in solve.deepSkyObjects)
+      DeepSkyEntry(
+        name: object.name,
+        category: object.category,
+        raDeg: object.ra,
+        decDeg: object.dec,
+        angularSizeArcmin: object.angularSizeArcmin,
+        fieldFraction: object.angularSizeArcmin == null ||
+                field <= 0
+            ? null
+            : (object.angularSizeArcmin! / 60) / field,
+      ),
+  ];
+  entries.sort((a, b) => (b.fieldFraction ?? -1).compareTo(a.fieldFraction ?? -1));
+  return entries;
 }
 
 /// 一段话的总结。给人看的，所以只讲结论，不讲算法。
@@ -428,6 +605,24 @@ String _summary(
     buffer.write(
       '能测到的最亮星等约 ${magnitudes.reduce((a, b) => a < b ? a : b).toStringAsFixed(1)}，'
       '最暗约 ${magnitudes.reduce((a, b) => a > b ? a : b).toStringAsFixed(1)}。',
+    );
+  }
+  // 画面里的深空天体比「拍到了哪颗星」更接近用户真正想拍的东西，所以放在
+  // 最后单说一句，而不是埋进星表里。
+  if (solve != null && solve.deepSkyObjects.isNotEmpty) {
+    final entries = buildDeepSkyEntries(solve);
+    final names = entries
+        .take(3)
+        .map((entry) => entry.category.isEmpty
+            ? entry.name
+            : '${entry.name}（${entry.category}）')
+        .join('、');
+    final main = entries.first;
+    final coverage =
+        main.coverageLabel.isEmpty ? '' : '，${main.coverageLabel}';
+    buffer.write(
+      '画面里有 ${solve.deepSkyObjects.length} 个深空天体，'
+      '其中最主要的是 $names——${main.sizeLabel}$coverage。',
     );
   }
   return buffer.toString();

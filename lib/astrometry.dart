@@ -333,10 +333,12 @@ class AstrometryService {
       if (x >= 0 && x < analysis.width && y >= 0 && y < analysis.height) {
         clusters.add(
           SkyObject(
-            object.mainId,
+            tidyCatalogName(object.mainId),
             object.ra,
             object.dec,
-            object.objectType,
+            // 类型翻成中文再送出去：报告和图上写的是「M31 · 星系」，
+            // 不是「M31 · G」——otype 是给机器看的代码。
+            describeObjectType(object.objectType),
             x: x,
             y: y,
           ),
@@ -460,6 +462,43 @@ class _CatalogObject {
       objectType.startsWith('HII') ||
       objectType.startsWith('SNR');
 }
+
+/// SIMBAD 的 `main_id` 带对齐用的连续空格（`M  31`、`NGC  224`），
+/// 直接显示会显得很松。压缩成单个空格即可，编号本身不动。
+String tidyCatalogName(String raw) =>
+    raw.trim().replaceAll(RegExp(r'\s+'), ' ');
+
+/// SIMBAD 的 `otype` 天体类型代码翻成中文。
+///
+/// 代码是给机器比对用的（`G`、`OpC`、`SNR`……），直接摆在报告里没人看得懂。
+/// 认不出来的代码原样返回——**不猜**：写一个错的中文类型比留一个代码糟糕，
+/// 用户会拿它当事实。
+String describeObjectType(String otype) {
+  final code = otype.trim();
+  for (final entry in _objectTypes) {
+    if (code.startsWith(entry.$1)) return entry.$2;
+  }
+  return code;
+}
+
+/// 前缀匹配，先长后短——`Cl*` 必须在 `Cl` 之前，否则永远轮不到它。
+const _objectTypes = <(String, String)>[
+  ('Cl*', '星团'),
+  ('ClG', '星系团'),
+  ('OpC', '疏散星团'),
+  ('GlC', '球状星团'),
+  ('SNR', '超新星遗迹'),
+  ('HII', '电离氢区'),
+  ('PN', '行星状星云'),
+  ('RNe', '反射星云'),
+  ('DNe', '暗星云'),
+  ('Neb', '星云'),
+  ('AGN', '活动星系核'),
+  ('QSO', '类星体'),
+  ('Sy1', '赛弗特星系'),
+  ('Sy2', '赛弗特星系'),
+  ('G', '星系'),
+];
 
 /// 解析一行 CSV，处理引号包裹和转义的双引号。
 List<String> parseCsvRow(String line) {

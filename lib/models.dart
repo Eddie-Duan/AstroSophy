@@ -105,6 +105,7 @@ class SkyObject {
     this.x = 0,
     this.y = 0,
     this.isLocal = false,
+    this.angularSizeArcmin,
   });
 
   final String name;
@@ -119,6 +120,10 @@ class SkyObject {
   /// 该名称来自 APP 内置亮星目录（离线得到），而不是在线星表。
   final bool isLocal;
 
+  /// 天体本身的角尺寸（长轴，角分）。恒星没有这个字段；深空天体有，
+  /// 报告里要拿它和像场尺寸比，说明「这个目标占画面多大」。
+  final double? angularSizeArcmin;
+
   SkyObject at(double x, double y) => SkyObject(
         name,
         ra,
@@ -129,6 +134,7 @@ class SkyObject {
         x: x,
         y: y,
         isLocal: isLocal,
+        angularSizeArcmin: angularSizeArcmin,
       );
 
   Map<String, Object?> toJson() => {
@@ -141,6 +147,7 @@ class SkyObject {
         'x': x,
         'y': y,
         'is_local': isLocal,
+        'angular_size_arcmin': angularSizeArcmin,
       };
 
   static SkyObject fromJson(Map<String, Object?> json) => SkyObject(
@@ -153,6 +160,7 @@ class SkyObject {
         x: _number(json['x']),
         y: _number(json['y']),
         isLocal: json['is_local'] == true,
+        angularSizeArcmin: _nullableNumber(json['angular_size_arcmin']),
       );
 }
 
@@ -541,20 +549,21 @@ class SolveResult {
     );
   }
 
-  /// 补上星座信息。
+  /// 补上星座信息（以及顺带补好的深空天体角尺寸）。
   ///
   /// 在线解算只带回 WCS，星座名和连线是本机用目录算的，所以拿到结果之后
   /// 还要再装饰一道。不带 WCS 的结果原样返回——没有坐标就无从投影。
   SolveResult withConstellationDecoration(
     List<String> names,
-    List<ConstellationFigure> figures,
-  ) =>
+    List<ConstellationFigure> figures, {
+    List<SkyObject>? deepSkyObjects,
+  }) =>
       SolveResult(
         centerRa: centerRa,
         centerDec: centerDec,
         arcsecPerPixel: arcsecPerPixel,
         namedStars: namedStars,
-        deepSkyObjects: deepSkyObjects,
+        deepSkyObjects: deepSkyObjects ?? this.deepSkyObjects,
         matchedStars: matchedStars,
         magnitudeZeroPoint: magnitudeZeroPoint,
         magnitudeScatter: magnitudeScatter,
