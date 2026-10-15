@@ -16,6 +16,31 @@ typedef SolveProgressCallback = void Function(double progress, String stage);
 class AstrometryService {
   static const _api = 'https://nova.astrometry.net/api';
 
+  /// 排队等作业被拆出来、以及作业本身求解，各自的上限。
+  static const _queueTimeout = Duration(minutes: 5);
+  static const _solveTimeout = Duration(minutes: 5);
+
+  /// 把在线返回的天球坐标对到本地预览这一帧上。
+  ///
+  /// 帧尺寸不一样不是错误：服务方可能是在缩小的副本上解的星，按比例换算到
+  /// 预览的像素坐标上就行。但**形状**（宽高比）不一样就说明这份坐标描述的
+  /// 根本不是这张图——换算成什么都对不上，只能停手：标下去的每个位置都会是
+  /// 错的，那比标不出来糟糕得多。
+  ///
+  /// 公开是为了让测试能钉住这道校验：它的两个分支（换算、拒绝）各自对应一种
+  /// 线上故障，而这条链路没法在测试里真的去连 astrometry.net。
+  static Wcs fitToPreview(Wcs wcs, SkyAnalysis analysis) {
+    final expected = analysis.width / analysis.height;
+    final actual = wcs.width / wcs.height;
+    if (expected <= 0 || (expected - actual).abs() / expected > 0.02) {
+      throw StateError(
+        '在线解算返回的坐标描述的是一张 ${wcs.width}×${wcs.height} 的图，'
+        '和上传的 ${analysis.width}×${analysis.height} 形状对不上，已停止坐标标注。',
+      );
+    }
+    return wcs.rescaledTo(analysis.width, analysis.height);
+  }
+
   static Future<SolveResult> solve({
     required SkyAnalysis analysis,
     required String apiKey,
@@ -40,6 +65,9 @@ class AstrometryService {
           'allow_commercial_use': 'n',
           'allow_modifications': 'n',
           'publicly_visible': 'n',
+          // 明确要求不解算缩小副本。缩小的副本认星更难，而且回来的坐标是
+          // 缩小那一帧的，还得再换算一次（见 [Wcs.rescaledTo]）。
+          'downsample_factor': 1,
         })
         ..files.add(http.MultipartFile.fromBytes('file', analysis.preview,
             filename: 'sky.jpg'));
@@ -49,10 +77,14 @@ class AstrometryService {
       if (subId == null) throw StateError('天文解算服务未接受图片。');
 
       // 排队：等服务方把提交拆成具体作业。这一段往往最久，进度条慢慢爬到 0.45。
-      final deadline = DateTime.now().add(const Duration(minutes: 4));
+      //
+      // 排队和求解**分开计时**。nova 是公开服务，前面排着别人的作业时，光是
+      // 轮到自己就能等上好几分钟；共用一个总时限的话，真正轮到的时候预算已经
+      // 花光，用户看到的是「明明交给在线服务了，却说超时」。
       String? jobId;
       final queuedAt = DateTime.now();
-      while (DateTime.now().isBefore(deadline) && jobId == null) {
+      final queueDeadline = queuedAt.add(_queueTimeout);
+      while (DateTime.now().isBefore(queueDeadline) && jobId == null) {
         await Future<void>.delayed(const Duration(seconds: 2));
         final elapsed = DateTime.now().difference(queuedAt).inMilliseconds;
         onProgress?.call(
@@ -73,10 +105,15 @@ class AstrometryService {
           }
         }
       }
-      if (jobId == null) throw TimeoutException('天区解算排队超时，请稍后再试。');
+      if (jobId == null) {
+        throw TimeoutException(
+          '在线解算排队超时（等了 ${_queueTimeout.inMinutes} 分钟还没轮到），请稍后再试。',
+        );
+      }
 
       final solvedAt = DateTime.now();
-      while (DateTime.now().isBefore(deadline)) {
+      final solveDeadline = solvedAt.add(_solveTimeout);
+      while (true) {
         await Future<void>.delayed(const Duration(seconds: 2));
         final elapsed = DateTime.now().difference(solvedAt).inMilliseconds;
         onProgress?.call(
@@ -92,14 +129,11 @@ class AstrometryService {
           throw StateError('星图解算失败：请检查星点数量、拖线和画面遮挡。');
         }
         if (status['status'] == 'success') break;
-      }
-      final finalStatus = _json(
-        await client.get(Uri.parse('$_api/jobs/$jobId')).timeout(
-              const Duration(seconds: 30),
-            ),
-      );
-      if (finalStatus['status'] != 'success') {
-        throw TimeoutException('星图解算超时，请稍后重试。');
+        if (DateTime.now().isAfter(solveDeadline)) {
+          throw TimeoutException(
+            '在线解算超时（等了 ${_solveTimeout.inMinutes} 分钟），请稍后重试。',
+          );
+        }
       }
 
       onProgress?.call(0.7, '正在读取天球坐标');
@@ -109,10 +143,10 @@ class AstrometryService {
       if (fitsResponse.statusCode != 200) {
         throw StateError('无法读取天球坐标解算结果。');
       }
-      final wcs = Wcs.parseFitsHeader(fitsResponse.bodyBytes);
-      if (wcs.width != analysis.width || wcs.height != analysis.height) {
-        throw StateError('解算图像尺寸与本地预览不一致，已停止坐标标注。');
-      }
+      final wcs = fitToPreview(
+        Wcs.parseFitsHeader(fitsResponse.bodyBytes),
+        analysis,
+      );
 
       onProgress?.call(0.8, '正在查询 Gaia DR3 星表');
       var gaia = <GaiaMatch>[];
@@ -188,7 +222,7 @@ class AstrometryService {
     if (response.statusCode != 200) {
       throw HttpException('Gaia DR3 星表查询返回 HTTP ${response.statusCode}。');
     }
-    final lines = const LineSplitter().convert(response.body);
+    final lines = csvLines(response.body);
     if (lines.length < 2) return [];
     final result = <GaiaMatch>[];
     for (final line in lines.skip(1)) {
@@ -238,7 +272,7 @@ class AstrometryService {
     if (response.statusCode != 200) {
       throw HttpException('SIMBAD 名称目录返回 HTTP ${response.statusCode}。');
     }
-    final lines = const LineSplitter().convert(response.body);
+    final lines = csvLines(response.body);
     if (lines.isEmpty || lines.first.toLowerCase().contains('error')) {
       throw const FormatException('SIMBAD 名称目录无法解析查询结果。');
     }
@@ -253,6 +287,16 @@ class AstrometryService {
     }
     return objects;
   }
+
+  /// TAP 服务返回的 CSV 行，去掉空行和 `#` 开头的注释行。
+  ///
+  /// SIMBAD 的同步查询会在表头前附一段 `#` 元信息，当成数据行去解析只会得到
+  /// 一堆读不出坐标的垃圾，最后表现为「在线解算回来了，但一个天体名都没有」。
+  /// 公开是为了让测试能钉住这一条。
+  static List<String> csvLines(String body) => const LineSplitter()
+      .convert(body)
+      .where((line) => line.trim().isNotEmpty && !line.trimLeft().startsWith('#'))
+      .toList(growable: false);
 
   /// 查询半径按视场对角线的一半再放宽，避免边缘天体漏掉。
   static double _queryRadiusDegrees(Wcs wcs, SkyAnalysis analysis) {
@@ -452,6 +496,8 @@ class _CatalogObject {
         'OH*',
       ].any(objectType.startsWith);
 
+  /// 行星状星云、反射星云、暗星云也要收：拍星云的人不少，只认星系和星团的
+  /// 话，这些照片的「画面中的深空天体」一段会莫名其妙地空着。
   bool get isDeepSky =>
       objectType == 'G' ||
       objectType.startsWith('Cl*') ||
@@ -459,6 +505,9 @@ class _CatalogObject {
       objectType.startsWith('OpC') ||
       objectType.startsWith('GlC') ||
       objectType.startsWith('Neb') ||
+      objectType.startsWith('PN') ||
+      objectType.startsWith('RNe') ||
+      objectType.startsWith('DNe') ||
       objectType.startsWith('HII') ||
       objectType.startsWith('SNR');
 }

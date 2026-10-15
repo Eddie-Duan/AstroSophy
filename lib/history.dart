@@ -28,6 +28,7 @@ class SavedAnalysis {
     required this.processedFile,
     required Map<String, Object?> rawAnalysis,
     this.isStarfield = true,
+    this.capture,
   }) : _rawAnalysis = rawAnalysis;
 
   final String id;
@@ -58,6 +59,11 @@ class SavedAnalysis {
   /// 老记录里没有这个字段（那时候还没存），缺省按「有星点就算星空」兜底，
   /// 见 [_decode]。
   final bool isStarfield;
+
+  /// 拍摄时间。存的是预览图，重新读 EXIF 读不出来，所以时间得跟着记录一起
+  /// 存——不然从历史里再打开一条记录，行星那一节的结论就没了。老记录里没
+  /// 有这个字段，读出来是 null。
+  final CaptureMetadata? capture;
 
   /// 这一条算得怎么样。历史列表据此给卡片描边，让用户一眼分出「这张解出来了」
   /// 和「这张什么都没算出来」。
@@ -165,6 +171,7 @@ class HistoryStore {
     required SkyAnalysis analysis,
     required SolveResult? solve,
     required String? explanation,
+    CaptureMetadata? capture,
     DateTime? savedAt,
   }) async {
     final at = savedAt ?? DateTime.now();
@@ -198,6 +205,7 @@ class HistoryStore {
         'analysis': rawAnalysis,
         'solve': solve?.toJson(),
         'explanation': explanation,
+        if (capture != null && !capture.isEmpty) 'capture': capture.toJson(),
       }),
       flush: true,
     );
@@ -215,6 +223,7 @@ class HistoryStore {
       processedFile: processedFile,
       rawAnalysis: rawAnalysis,
       isStarfield: analysis.isLikelyStarfield,
+      capture: capture != null && !capture.isEmpty ? capture : null,
     );
   }
 
@@ -331,6 +340,11 @@ class HistoryStore {
       // 这个字段是后加的，早先存下的记录里没有。缺省按「星点数为零才算不是
       // 星空」兜底：老记录里唯一确定的事实就是星点数。
       isStarfield: summary['starfield'] as bool? ?? starCount > 0,
+      capture: json['capture'] is Map
+          ? CaptureMetadata.fromJson(
+              Map<String, Object?>.from(json['capture']! as Map),
+            )
+          : null,
     );
   }
 }

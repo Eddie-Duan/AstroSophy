@@ -47,10 +47,7 @@ MASCOT_BACKDROP = (41, 65, 87)
 KEY_SPAN = 60.0
 
 TITLE = "AstroSophy"
-TAGLINE = "拍下星空，本机算出你拍到了哪片天"
-SUBTITLE = "无需联网 · 不上传照片 · 中文观测报告"
-TAGLINE_EN = "Local-first astronomy companion for astrophotography"
-CAPTION = "内置 41,394 颗亮星目录 · 视场 ≥ 4.5° 离线解算"
+TAGLINE = "Point. Shoot. Know your sky."
 
 SEED = 20261014
 
@@ -162,21 +159,15 @@ def compose(mascot_path, seed):
     draw = ImageDraw.Draw(canvas)
     windows = os.environ.get("WINDIR", r"C:\Windows")
     latin_bold = font(os.path.join(windows, "Fonts", "segoeuib.ttf"), 82 * SUPERSAMPLE)
-    latin = font(os.path.join(windows, "Fonts", "segoeui.ttf"), 20 * SUPERSAMPLE)
     han_bold = font(os.path.join(windows, "Fonts", "msyhbd.ttc"), 32 * SUPERSAMPLE)
-    han = font(os.path.join(windows, "Fonts", "msyh.ttc"), 23 * SUPERSAMPLE)
-    han_small = font(os.path.join(windows, "Fonts", "msyh.ttc"), 20 * SUPERSAMPLE)
 
     left = 84 * SUPERSAMPLE
     draw.rectangle(
-        (left, 150 * SUPERSAMPLE, left + 96 * SUPERSAMPLE, 155 * SUPERSAMPLE),
+        (left, 224 * SUPERSAMPLE, left + 96 * SUPERSAMPLE, 229 * SUPERSAMPLE),
         fill=MINT,
     )
-    draw_text(draw, (left, 176 * SUPERSAMPLE), TITLE, latin_bold, MINT)
-    draw_text(draw, (left, 296 * SUPERSAMPLE), TAGLINE, han_bold, CREAM)
-    draw_text(draw, (left, 348 * SUPERSAMPLE), SUBTITLE, han, MUTED)
-    draw_text(draw, (left, 390 * SUPERSAMPLE), TAGLINE_EN, latin, FAINT)
-    draw_text(draw, (left, 424 * SUPERSAMPLE), CAPTION, han_small, FAINT)
+    draw_text(draw, (left, 250 * SUPERSAMPLE), TITLE, latin_bold, MINT)
+    draw_text(draw, (left, 370 * SUPERSAMPLE), TAGLINE, han_bold, CREAM)
 
     return canvas.convert("RGB").resize((WIDTH, HEIGHT), Image.LANCZOS)
 

@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'analysis.dart';
 import 'demo.dart';
+import 'exif.dart';
 import 'history.dart';
 import 'history_screen.dart';
 import 'markdown.dart';
@@ -102,6 +103,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 一层答案；但连线和用户关心的星点编号画在同一张图上，有时候需要关掉
   /// 让画面干净一点。
   bool _showConstellations = true;
+
+  /// 这张照片的拍摄时刻。
+  ///
+  /// 选图时从 EXIF 读；读不到就是 null，界面上让用户自己填。行星、彗星、
+  /// 小行星的位置随日期变，没有时间就没法判断画面上多出来的那个亮点是什么，
+  /// 所以这条信息是「运动天体」那一节的前提，缺了只能不做判断。
+  CaptureMoment? _moment;
 
   /// 三组亮点在代码里的名字。数组顺序就是列表里的显示顺序。
   static const _groupIds = <String>['named', 'unnamed', 'streaks'];
@@ -290,10 +298,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 选中一张新图。三个入口（相册、相机、演示图）共用这一处清理逻辑：
   /// 换图就等于把上一张的解析结果全部作废，漏清一项就会出现「这张图的
   /// 坐标配着那张图的星点」这种最难查的错。
-  void _setImage(Uint8List bytes, String name) {
+  void _setImage(Uint8List bytes, String name, {CaptureMoment? moment}) {
     setState(() {
       _bytes = bytes;
       _filename = name;
+      // 拍摄时刻和图片绑在一起：换图就必须重读，否则会出现「这张照片的
+      // 时间配着那张照片的星点」，和坐标配错一样难查。历史记录里带回来的
+      // 时间由调用方传进来——存的是预览图，重新读 EXIF 是读不到的。
+      _moment = moment ?? readCaptureMoment(bytes);
       _analysis = null;
       _solve = null;
       _explanation = null;
@@ -600,6 +612,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         // `analysis.stars` 的 `isRejected` 一起存，重开还能改回来。
         solve: _solve?.withoutRejected(analysis.stars),
         explanation: _explanation,
+        capture: _moment?.toMetadata(),
       );
       _savedId = saved.id;
       if (!mounted) return;
@@ -621,6 +634,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() {
       _bytes = null;
       _filename = null;
+      _moment = null;
       _analysis = null;
       _solve = null;
       _explanation = null;
@@ -651,6 +665,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         // 缩小过的图。星点位置不受影响，能测到的最暗星等会差一点。
         _bytes = analysis.preview;
         _filename = entry.name;
+        // 预览图是重新编码过的，里面没有 EXIF；拍摄时间跟着记录一起存了。
+        _moment = captureMomentFromMetadata(entry.capture);
         _analysis = analysis;
         _solve = entry.solve;
         _explanation = entry.explanation;
@@ -739,6 +755,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 const SizedBox(height: 20),
                 if (_bytes == null) _emptyPicker() else _imagePreview(),
+                if (_bytes != null) ...[
+                  const SizedBox(height: 10),
+                  _captureTimeCard(),
+                ],
                 const SizedBox(height: 14),
                 if (_bytes != null) _runButton(),
                 if (_error != null) ...[
@@ -914,6 +934,132 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           ),
         ],
       );
+
+  /// 拍摄时间那一行。
+  ///
+  /// 单开一张卡而不是藏进设置：它属于**这一张照片**，换一张图就重读一次，
+  /// 用户得在解析之前就看明白这张图有没有时间可用。行星、彗星、小行星都在
+  /// 天上走，没有时刻就无从判断画面上多出来的那个亮点是什么——所以读不到
+  /// EXIF 时间时，这里给出的是「填一个」，而不是「无法识别」。
+  Widget _captureTimeCard() {
+    final moment = _moment;
+    final known = moment != null;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+        child: Row(
+          children: [
+            Icon(
+              Icons.schedule_rounded,
+              size: 18,
+              color: known ? kMint : Colors.orangeAccent,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    known ? _describeMoment(moment) : '这张照片里没有拍摄时间',
+                    style: const TextStyle(fontSize: 13.5),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    known
+                        ? _momentNote(moment)
+                        : '行星、彗星和小行星的位置随时间变化，没有时间就不做这判断。',
+                    style: const TextStyle(
+                      color: Color(0xFF8192A8),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: _pickCaptureTime,
+              child: Text(known ? '修改' : '填写'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _describeMoment(CaptureMoment moment) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    final local = moment.local;
+    return '拍摄时间  ${local.year}-${two(local.month)}-${two(local.day)} '
+        '${two(local.hour)}:${two(local.minute)}';
+  }
+
+  static String _momentNote(CaptureMoment moment) {
+    final source = moment.source.label;
+    if (moment.hasKnownOffset) return '$source，时区也读到了';
+    // 没读到时区就按本机时区算。手机照片基本就是设备本地时间拍的，这是能
+    // 拿到的最接近的假设；报告里会写明这一条是假设，不是读出的事实。
+    return '$source；没有时区信息，按本机当前时区算';
+  }
+
+  /// 让用户填拍摄时间。
+  ///
+  /// 日期和时刻分两次问：合成一个对话框要么自己做一套选择器，要么在
+  /// Material 的两个标准弹窗之间跳，前者工作量大、后者反而更绕。
+  Future<void> _pickCaptureTime() async {
+    final now = DateTime.now();
+    final current = _moment?.local ?? now;
+    final date = await showDatePicker(
+      context: context,
+      initialDate: current.isAfter(now) ? now : current,
+      firstDate: DateTime(1990),
+      lastDate: now.add(const Duration(days: 1)),
+      helpText: '这张照片是哪天拍的',
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(current),
+      helpText: '拍摄时刻（当地时间）',
+    );
+    if (time == null || !mounted) return;
+    final edited = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    if (_moment != null &&
+        _moment!.isManual &&
+        _moment!.local.isAtSameMomentAs(edited)) {
+      return;
+    }
+    setState(() {
+      _moment = CaptureMoment(
+        local: edited,
+        // 手填的是「当地时间」，时区仍然未知，和 EXIF 里只有时间没有偏移的
+        // 情形走同一条路。
+        offset: null,
+        source: CaptureTimeSource.manual,
+      );
+      // 解算结果里带着「那几个多出来的亮点是什么」的结论，而结论依赖时刻。
+      // 时间一改，旧结论就不成立了——留着比清掉更糟，用户会拿一份按旧时间
+      // 算出来的判断当事实。所以这里和换图一样作废，提示重新解析。
+      if (_analysis != null) {
+        _analysis = null;
+        _solve = null;
+        _explanation = null;
+        _warnings = const [];
+        _savedId = null;
+        _selectedTarget = null;
+      }
+    });
+    if (_bytes != null && !_running) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('拍摄时间已更新，重新解析后会用到它')),
+      );
+    }
+  }
 
   /// 选好图但还没解析时的那张预览卡。
   ///

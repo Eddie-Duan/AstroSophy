@@ -313,6 +313,34 @@ class Wcs {
     return angularSeparationDegrees(raLeft, decTop, raRight, decBottom);
   }
 
+  /// 把这份坐标换算到另一个像素尺寸的像面上。
+  ///
+  /// 在线解算要过这一步：astrometry.net 可能先把上传的图缩小再认星（上传时
+  /// 的 `downsample_factor`），回来的 NAXIS 和 CRPIX/CD 就都是缩小那一帧的。
+  /// 尺寸不一样**不是错误**——按比例换算过来即可。丢掉不换算的话，一次已经
+  /// 成功的在线解算会被整条丢弃，用户看到的就是「交给在线服务也算不出来」。
+  ///
+  /// 换算是按像素中心对齐的（FITS 的 CRPIX 是 1 基、以像素中心为原点），
+  /// 所以 CRPIX 走的是 `(c-0.5)·k+0.5`，不是直接乘 k。
+  Wcs rescaledTo(int targetWidth, int targetHeight) {
+    if (targetWidth == width && targetHeight == height) return this;
+    final scaleX = targetWidth / width;
+    final scaleY = targetHeight / height;
+    return Wcs(
+      width: targetWidth,
+      height: targetHeight,
+      crval1: crval1,
+      crval2: crval2,
+      crpix1: (crpix1 - 0.5) * scaleX + 0.5,
+      crpix2: (crpix2 - 0.5) * scaleY + 0.5,
+      // 像面变大，每个像素对应的天球角度就变小，所以是除不是乘。
+      cd11: cd11 / scaleX,
+      cd12: cd12 / scaleX,
+      cd21: cd21 / scaleY,
+      cd22: cd22 / scaleY,
+    );
+  }
+
   /// 在给定像素位置，天球北方向对应的图像方向（单位向量，y 轴向下）。
   /// 旋转过的照片用它来画 N 指示，不能假定北就是图像正上方。
   (double, double) northDirectionAt(double x, double y) {
@@ -658,9 +686,15 @@ class ModelSettings {
 }
 
 /// 拍摄元信息，尽量从图片里读出来；读不到时字段为空，不猜。
+///
+/// 目前真正用到、也真正会填的只有**时间**三件套（[timestamp]、
+/// [timestampOffsetMinutes]、[timestampSource]）——算行星位置需要它。其余字段
+/// 是预留的：读出来之前不填，也不为了让卡片好看而猜一个。
 class CaptureMetadata {
   const CaptureMetadata({
     this.timestamp,
+    this.timestampOffsetMinutes,
+    this.timestampSource,
     this.iso,
     this.exposure,
     this.fNumber,
@@ -668,7 +702,16 @@ class CaptureMetadata {
     this.device,
   });
 
+  /// 拍摄时间，ISO-8601，**不带时区**（`2026-10-15T21:34:07`）。
+  /// 时区单独放在 [timestampOffsetMinutes] 里，因为 EXIF 的时间本来就没有。
   final String? timestamp;
+
+  /// 上面那个时间相对 UTC 的偏移（分钟）。为空表示时区未知。
+  final int? timestampOffsetMinutes;
+
+  /// 时间是从哪儿来的，取值见 `CaptureTimeSource` 的名字。
+  final String? timestampSource;
+
   final String? iso;
   final String? exposure;
   final String? fNumber;
@@ -679,6 +722,8 @@ class CaptureMetadata {
 
   Map<String, Object?> toJson() => {
         'timestamp': timestamp,
+        'timestamp_offset_minutes': timestampOffsetMinutes,
+        'timestamp_source': timestampSource,
         'iso': iso,
         'exposure': exposure,
         'f_number': fNumber,
@@ -688,6 +733,9 @@ class CaptureMetadata {
 
   static CaptureMetadata fromJson(Map<String, Object?> json) => CaptureMetadata(
         timestamp: json['timestamp'] as String?,
+        timestampOffsetMinutes: (json['timestamp_offset_minutes'] as num?)
+            ?.toInt(),
+        timestampSource: json['timestamp_source'] as String?,
         iso: json['iso'] as String?,
         exposure: json['exposure'] as String?,
         fNumber: json['f_number'] as String?,

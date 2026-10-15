@@ -104,14 +104,16 @@ class PlateSolver {
   /// 尝试解算。失败返回 null，由调用方决定要不要回退到在线服务。
   ///
   /// 先用浅层星表试，解不出来再换深层星表重试一遍。分成两趟是因为三角形
-  /// 指纹要求两侧用同一套近邻关系：图内端只拿最亮的 [PlateSolver._detectionStars]
-  /// 颗检出组三角形，一颗亮星的近邻必然还是亮星；目录端一旦掺进大量 8～9 等
-  /// 的暗星，同一颗亮星的近邻就换成了它旁边那些暗星，两侧枚举出来的根本不是
-  /// 同一批三角形——星多的天区会因此从「解得出」变成「解不出」。
+  /// 指纹要求两侧用同一套近邻关系：图内端只拿最亮的若干颗检出组三角形，
+  /// 目录端一旦掺进大量 8～9 等的暗星，同一颗亮星的近邻就换成了它旁边那些
+  /// 暗星，两侧枚举出来的根本不是同一批三角形——星多的天区会因此从「解得出」
+  /// 变成「解不出」。
   ///
   /// 实测过：把 Gaia 层直接并进唯一的那张星表，猎户座的合成图在 20″/px
   /// 下失败、南天某天区也从 137ms 变成 60s 还不成功；而按两层走，这些天区
   /// 在浅层就正常出结果，深层只服务那些浅层星数本来就不够的天区。
+  ///
+  /// 同一层里还要再按「图内端取多少颗星」试几档，见 [_imageStarRungs]。
   SolveResult? solve(
     SkyAnalysis analysis, {
     void Function(double progress, String stage)? onProgress,
@@ -130,20 +132,16 @@ class PlateSolver {
     index.frameWidth = analysis.width.toDouble();
     index.frameHeight = analysis.height.toDouble();
 
-    onProgress?.call(0.25, '正在匹配星图三角形');
-    final stars = detections
-        .take(math.min(_detectionStars, detections.length))
-        .toList(growable: false);
-    final grid = _DetectionGrid(stars);
-
-    final shallow = _matchFrom(
+    final shallow = _matchWithRungs(
       analysis,
       index,
-      stars,
-      grid,
+      detections,
+      rungs: _imageStarRungs,
       neighbours: neighbours,
       candidatesPerTriangle: _candidatesPerTriangle,
       verificationBudget: _verificationBudget,
+      progressBase: 0.25,
+      progressSpan: 0.35,
       onProgress: onProgress,
     );
     if (shallow != null) return shallow;
@@ -155,16 +153,90 @@ class PlateSolver {
     deep.frameWidth = analysis.width.toDouble();
     deep.frameHeight = analysis.height.toDouble();
     onProgress?.call(0.6, '正在加深星表再试一次');
-    return _matchFrom(
+    return _matchWithRungs(
       analysis,
       deep,
-      stars,
-      grid,
+      detections,
+      rungs: _deepImageStarRungs,
       neighbours: _deepNeighbours,
       candidatesPerTriangle: _deepCandidatesPerTriangle,
       verificationBudget: _deepVerificationBudget,
+      progressBase: 0.6,
+      progressSpan: 0.1,
       onProgress: onProgress,
     );
+  }
+
+  /// 图内端参与组三角形的星数，从小到大试。
+  ///
+  /// 这一串刻度是量出来的，不是拍脑袋定的。三角形指纹认的是「最近的几颗
+  /// 邻居」，而两侧手里的星根本不是同一批：目录端只有星表里那几颗，图内端
+  /// 却有照片里所有检出。**图内端多出来的星会顶掉真邻居**，一个正确三角形
+  /// 都枚举不出来。
+  ///
+  /// 实测（三张演示图，同一台相机：视场 4.18°、10.68″/px）：
+  ///
+  /// | 图内端 | demo_m45 | demo_m31 | demo_vesta |
+  /// | --- | --- | --- | --- |
+  /// | 24 颗 | 解出 24 | 解出 18 | 解出 14 |
+  /// | 80 颗 | 解出 42 | 解出 30 | 失败 |
+  /// | 120 颗 | 解出 42 | 失败 | 失败 |
+  ///
+  /// 决定上限的是天区里目录星有多少：M45 那一带 128 颗（比 120 还多），
+  /// 120 颗图内星几乎全是目录星，怎么取都行；M31 只有 58 颗、Vesta 一带
+  /// 只有 33 颗，取 120 就等于往图内端塞了几十颗目录里没有的暗星。
+  ///
+  /// 所以从小到大试、第一个成立就收：小档又快又准（演示图上 0.06–1.6 秒），
+  /// 大档留给「图里最亮的星不是目录里最亮的星」的情形——画面里有大片星云、
+  /// 过曝的亮星盘，或者一颗亮行星杵在那里的时候。
+  ///
+  /// 中间不再多插几档：实测 24 和 48 要么一起成功、要么一起失败（M31 是
+  /// 24/48/80 都成、96 以上都不成；Vesta 是 32 以下都成、36 以上都不成），
+  /// 多一档只是多花一次验证预算，换不来新的天区。失败的那一档很贵——它要
+  /// 把预算跑满才肯认输。
+  static const _imageStarRungs = [24, 120];
+
+  /// 深层星表用的是同一组刻度：那一层的星多四倍，但「图内端比目录端多出
+  /// 多少颗」这件事和层数无关。
+  static const _deepImageStarRungs = [24, 120];
+
+  /// 同一层索引上，按 [rungs] 逐档重试图内三角形。
+  ///
+  /// 每档都要重新组图内三角形、重建检出网格——这两件事的代价都和那一档的
+  /// 星数同阶，真正贵的索引查询和验证不在其中。
+  SolveResult? _matchWithRungs(
+    SkyAnalysis analysis,
+    _TriangleIndex index,
+    List<DetectedStar> detections, {
+    required List<int> rungs,
+    required int neighbours,
+    required int candidatesPerTriangle,
+    required int verificationBudget,
+    required double progressBase,
+    required double progressSpan,
+    void Function(double progress, String stage)? onProgress,
+  }) {
+    for (var i = 0; i < rungs.length; i++) {
+      final count = math.min(rungs[i], detections.length);
+      if (count < _minimumDetections) continue;
+      final stars = detections.take(count).toList(growable: false);
+      onProgress?.call(
+        progressBase + progressSpan * i / rungs.length,
+        '正在匹配星图三角形',
+      );
+      final result = _matchFrom(
+        analysis,
+        index,
+        stars,
+        _DetectionGrid(stars),
+        neighbours: neighbours,
+        candidatesPerTriangle: candidatesPerTriangle,
+        verificationBudget: verificationBudget,
+        onProgress: onProgress,
+      );
+      if (result != null) return result;
+    }
+    return null;
   }
 
   /// 拿着某一层索引跑一遍完整的匹配、内点验证和坐标精修。
@@ -179,9 +251,8 @@ class PlateSolver {
     void Function(double progress, String stage)? onProgress,
   }) {
     final imageTriangles = _imageTriangles(stars, neighbours);
-
-    _Fit? best;
     var verifications = 0;
+    _Fit? best;
     for (final triangle in imageTriangles) {
       for (final candidate in index.lookup(
         triangle.r2,
@@ -237,12 +308,11 @@ class PlateSolver {
 
   static const _minimumDetections = 4;
 
-  /// 参与匹配的检出星点数量上限。取最亮的一批：暗星定位不准，通量也
-  /// 不可靠，混进来只会拖慢验证、拉低信噪比。
-  static const _detectionStars = 120;
-
   /// 从最亮的多少颗里选「种子」去组三角形。种子按亮度排序，所以最可能
   /// 命中的三角形排在最前面，验证预算花在刀刃上。
+  ///
+  /// 这是个上限，实际取多少由 [PlateSolver._imageStarRungs] 那一档决定：
+  /// 档位比它小的时候，能当种子的星也只有那么多。
   static const _seedStars = 40;
 
   /// 一个图内三角形最多往下送几个候选对应关系。

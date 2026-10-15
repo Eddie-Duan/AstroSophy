@@ -25,7 +25,7 @@ flutter pub get
 flutter run
 ```
 
-双击 [`BUILD_APK.bat`](./BUILD_APK.bat) 可生成 release APK。本机没装 Android SDK 的话，每次推送后 GitHub Actions 会构建一份 debug APK 并作为产物上传，可以直接下载安装。正式发行版在 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases) 页面下载，推送 `v*` 标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建并发布，各版变更见 [`CHANGELOG.md`](./CHANGELOG.md)。
+双击 [`BUILD_APK.bat`](./BUILD_APK.bat) 可生成 release APK。正式发行版在 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases) 页面下载，推送 `v*` 标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建并发布，各版变更见 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 没有真机或还没拍过星空，可以在选图界面点「使用演示图片」，用内置的三张演示星图走一遍完整流程。
 
@@ -35,13 +35,13 @@ flutter run
 
 想启用 Agent，在应用“本机 API 设置”中选择 DeepSeek、OpenAI、OpenRouter 或硅基流动模板，核对/修改模型名并填写自己的 API Key。模板不含密钥；密钥只保存在设备安全存储中。
 
-首次打开会显示整屏新手引导；各卡片的“？”可随时查看该指标的解释，顶部问号可以重播引导。
+首次打开会显示整屏新手引导；各卡片的“?”可随时查看该指标的解释，顶部问号可以重播引导。
 
 星等、天空背景指数、RAW 支持边界和隐私说明见 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)。
 
 ## 致谢
 
-这个项目站在别人的肩膀上，用到的数据和服务都在这里说明白：
+这个项目站在巨人的肩膀上，所用的数据和服务在这里说明：
 
 - **[Recraft](https://www.recraft.ai/)** —— 应用启动图标与引导页吉祥物 Nox 的插画均由 Recraft 在开发期生成（矢量稿）。Recraft 凭据不进入应用，也不进入仓库；生成的图纸本体随仓库分发，来源见 `assets/brand/`，生成脚本见 [`tools/make_mascot.py`](./tools/make_mascot.py)。仓库设置里的社交预览图由 [`tools/make_social_preview.py`](./tools/make_social_preview.py) 用同一张吉祥物合成，只上传到 GitHub，不进 APP 安装包。
 - **[Hipparcos 主表](https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239)（ESA 1997，I/239）** —— 内置亮星目录的位置与 V 星等来源。
