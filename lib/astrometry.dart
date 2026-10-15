@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HttpException;
+import 'dart:io' show HttpException, SocketException;
 import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
@@ -15,6 +15,9 @@ typedef SolveProgressCallback = void Function(double progress, String stage);
 /// 再去 Gaia DR3 / SIMBAD 取星名和天体类型。整条链路只在用户授权后才调用。
 class AstrometryService {
   static const _api = 'https://nova.astrometry.net/api';
+
+  /// 对端要求客户端自报家门；也免得某些前置代理由「来源不明」直接把连接掐掉。
+  static const _userAgent = 'AstroSophy/1.0 (Flutter; astrometry.net client)';
 
   /// 排队等作业被拆出来、以及作业本身求解，各自的上限。
   static const _queueTimeout = Duration(minutes: 5);
@@ -41,6 +44,49 @@ class AstrometryService {
     return wcs.rescaledTo(analysis.width, analysis.height);
   }
 
+  /// 把一次网络调用重试几遍，但**只重试连接层的失败**。
+  ///
+  /// 这条链路要连的是 astrometry.net / Gaia / SIMBAD 三家的公开设施。nova 的
+  /// 反向代理会在上传一张大图之后主动关掉 keep-alive 连接，而 Dart 这一侧仍把
+  /// 它当活连接用，下一次请求就撞上
+  /// `ClientException: Connection closed before full header was received`。
+  /// 换一条连接重来几乎总能成功，不该让整次解算白等一场。
+  ///
+  /// 反过来，HTTP 状态码、JSON 格式这些是服务方**真的答复**，重试只会把故障盖
+  /// 住、让用户多等几轮，所以原样抛出去。
+  ///
+  /// 公开是为了让测试能钉住这两条边界：这条链路没法在测试里真的去连
+  /// astrometry.net，但「断线重试、真错误不重试」可以单独验。
+  static Future<T> withRetry<T>(
+    Future<T> Function() action, {
+    int attempts = 3,
+    Duration pause = const Duration(seconds: 2),
+  }) async {
+    for (var attempt = 1; ; attempt++) {
+      try {
+        return await action();
+      } on http.ClientException {
+        if (attempt >= attempts) rethrow;
+      } on SocketException {
+        if (attempt >= attempts) rethrow;
+      } on HttpException catch (error) {
+        // Dart 的 HttpClient 把「完整响应头都没收到」也归进 HttpException，
+        // 和 HTTP 错误码共用同一个类型，只能按消息区分。
+        if (attempt >= attempts || !_isConnectionDropped(error)) rethrow;
+      }
+      await Future<void>.delayed(pause * attempt);
+    }
+  }
+
+  /// 这条 [HttpException] 说的是「连接没了」，而不是「服务方答复了一个错误」。
+  static bool _isConnectionDropped(HttpException error) {
+    final message = error.message.toLowerCase();
+    return message.contains('connection closed') ||
+        message.contains('connection reset') ||
+        message.contains('connection terminated') ||
+        message.contains('connection abort');
+  }
+
   static Future<SolveResult> solve({
     required SkyAnalysis analysis,
     required String apiKey,
@@ -49,30 +95,42 @@ class AstrometryService {
     final client = http.Client();
     try {
       onProgress?.call(0.05, '正在登录 Astrometry.net');
-      final login = await client.post(
-        Uri.parse('$_api/login'),
-        body: {'request-json': jsonEncode({'apikey': apiKey})},
-      ).timeout(const Duration(seconds: 30));
+      final login = await withRetry(
+        () => client
+            .post(
+              Uri.parse('$_api/login'),
+              headers: {'User-Agent': _userAgent},
+              body: {'request-json': jsonEncode({'apikey': apiKey})},
+            )
+            .timeout(const Duration(seconds: 30)),
+      );
       final sessionToken = _json(login)['session'];
       if (sessionToken is! String || sessionToken.isEmpty) {
         throw StateError('Astrometry.net 未返回会话令牌，请检查 API Key。');
       }
 
       onProgress?.call(0.15, '正在上传分析预览图');
-      final request = http.MultipartRequest('POST', Uri.parse('$_api/upload'))
-        ..fields['request-json'] = jsonEncode({
-          'session': sessionToken,
-          'allow_commercial_use': 'n',
-          'allow_modifications': 'n',
-          'publicly_visible': 'n',
-          // 明确要求不解算缩小副本。缩小的副本认星更难，而且回来的坐标是
-          // 缩小那一帧的，还得再换算一次（见 [Wcs.rescaledTo]）。
-          'downsample_factor': 1,
-        })
-        ..files.add(http.MultipartFile.fromBytes('file', analysis.preview,
-            filename: 'sky.jpg'));
-      final upload =
-          _json(await client.send(request).then(http.Response.fromStream));
+      // 每次重试都得新建一个请求：http 的 Request 只能 finalize 一次，拿同一个
+      // 对象再 send 一次会抛 "Can't finalize a finalized Request."
+      http.MultipartRequest buildUpload() =>
+          http.MultipartRequest('POST', Uri.parse('$_api/upload'))
+            ..headers['User-Agent'] = _userAgent
+            ..fields['request-json'] = jsonEncode({
+              'session': sessionToken,
+              'allow_commercial_use': 'n',
+              'allow_modifications': 'n',
+              'publicly_visible': 'n',
+              // 明确要求不解算缩小副本。缩小的副本认星更难，而且回来的坐标是
+              // 缩小那一帧的，还得再换算一次（见 [Wcs.rescaledTo]）。
+              'downsample_factor': 1,
+            })
+            ..files.add(http.MultipartFile.fromBytes('file', analysis.preview,
+                filename: 'sky.jpg'));
+      final upload = _json(
+        await withRetry(
+          () => client.send(buildUpload()).then(http.Response.fromStream),
+        ),
+      );
       final subId = upload['subid'];
       if (subId == null) throw StateError('天文解算服务未接受图片。');
 
@@ -91,10 +149,14 @@ class AstrometryService {
           (0.2 + 0.25 * (elapsed / 60000).clamp(0.0, 1.0)).toDouble(),
           '已提交，正在排队等待解算',
         );
-        final response =
-            await client.get(Uri.parse('$_api/submissions/$subId')).timeout(
-                  const Duration(seconds: 30),
-                );
+        final response = await withRetry(
+          () => client
+              .get(
+                Uri.parse('$_api/submissions/$subId'),
+                headers: {'User-Agent': _userAgent},
+              )
+              .timeout(const Duration(seconds: 30)),
+        );
         final jobs = _json(response)['jobs'];
         if (jobs is List) {
           for (final job in jobs) {
@@ -121,9 +183,14 @@ class AstrometryService {
           '正在识别星图模式',
         );
         final status = _json(
-          await client.get(Uri.parse('$_api/jobs/$jobId')).timeout(
-                const Duration(seconds: 30),
-              ),
+          await withRetry(
+            () => client
+                .get(
+                  Uri.parse('$_api/jobs/$jobId'),
+                  headers: {'User-Agent': _userAgent},
+                )
+                .timeout(const Duration(seconds: 30)),
+          ),
         );
         if (status['status'] == 'failure') {
           throw StateError('星图解算失败：请检查星点数量、拖线和画面遮挡。');
@@ -137,9 +204,14 @@ class AstrometryService {
       }
 
       onProgress?.call(0.7, '正在读取天球坐标');
-      final fitsResponse = await client
-          .get(Uri.parse('https://nova.astrometry.net/wcs_file/$jobId'))
-          .timeout(const Duration(seconds: 45));
+      final fitsResponse = await withRetry(
+        () => client
+            .get(
+              Uri.parse('https://nova.astrometry.net/wcs_file/$jobId'),
+              headers: {'User-Agent': _userAgent},
+            )
+            .timeout(const Duration(seconds: 45)),
+      );
       if (fitsResponse.statusCode != 200) {
         throw StateError('无法读取天球坐标解算结果。');
       }
@@ -218,7 +290,11 @@ class AstrometryService {
       'FORMAT': 'csv',
       'QUERY': adql,
     });
-    final response = await client.get(uri).timeout(const Duration(seconds: 90));
+    final response = await withRetry(
+      () => client
+          .get(uri, headers: {'User-Agent': _userAgent})
+          .timeout(const Duration(seconds: 90)),
+    );
     if (response.statusCode != 200) {
       throw HttpException('Gaia DR3 星表查询返回 HTTP ${response.statusCode}。');
     }
@@ -268,7 +344,11 @@ class AstrometryService {
       'FORMAT': 'csv',
       'QUERY': adql,
     });
-    final response = await client.get(uri).timeout(const Duration(seconds: 90));
+    final response = await withRetry(
+      () => client
+          .get(uri, headers: {'User-Agent': _userAgent})
+          .timeout(const Duration(seconds: 90)),
+    );
     if (response.statusCode != 200) {
       throw HttpException('SIMBAD 名称目录返回 HTTP ${response.statusCode}。');
     }

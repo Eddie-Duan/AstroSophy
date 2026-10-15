@@ -1,9 +1,11 @@
+import 'dart:io' show HttpException;
 import 'dart:typed_data';
 
 import 'package:astrosophy/analysis.dart';
 import 'package:astrosophy/astrometry.dart';
 import 'package:astrosophy/models.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 
 /// 在线链路的两处纯函数。
 ///
@@ -205,6 +207,63 @@ void main() {
     test('空行和只有空白的行都不参与', () {
       final lines = AstrometryService.csvLines('a,b\n\n  \nc,d\n');
       expect(lines, ['a,b', 'c,d']);
+    });
+  });
+
+  group('AstrometryService.withRetry', () {
+    // 用户实际遇到的那一条：nova 的反向代理在上传大图之后关掉了 keep-alive
+    // 连接，Dart 这边还当它是活的，于是第一次轮询就撞上
+    // "Connection closed before full header was received"，整次解算就此中止。
+    test('连接被对端掐断时换一条连接重来', () async {
+      var calls = 0;
+      final result = await AstrometryService.withRetry(
+        () async {
+          calls++;
+          if (calls < 3) {
+            throw http.ClientException(
+              'Connection closed before full header was received',
+              Uri.parse('https://nova.astrometry.net/api/submissions/16262561'),
+            );
+          }
+          return 'ok';
+        },
+        pause: Duration.zero,
+      );
+      expect(result, 'ok');
+      expect(calls, 3, reason: '前两次断线都要重试，第三次才拿到答复');
+    });
+
+    test('服务方答复的错误不重试，原样抛出去', () async {
+      var calls = 0;
+      await expectLater(
+        AstrometryService.withRetry(
+          () async {
+            calls++;
+            throw const HttpException('天文服务返回 HTTP 404。');
+          },
+          pause: Duration.zero,
+        ),
+        throwsA(isA<HttpException>()),
+      );
+      expect(calls, 1, reason: 'HTTP 状态码是真的答复，重试只会把故障盖住');
+    });
+
+    test('重试到上限还是断线，就把最后一次的错误抛出去', () async {
+      var calls = 0;
+      await expectLater(
+        AstrometryService.withRetry(
+          () async {
+            calls++;
+            throw http.ClientException(
+              'Connection closed before full header was received',
+            );
+          },
+          attempts: 2,
+          pause: Duration.zero,
+        ),
+        throwsA(isA<http.ClientException>()),
+      );
+      expect(calls, 2);
     });
   });
 }
