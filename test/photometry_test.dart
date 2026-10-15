@@ -93,22 +93,41 @@ void main() {
   });
 
   group('非星空内容', () {
-    test('大面积亮斑被划成非星空区域，里面不会长出星点', () {
+    test('大而圆的亮斑按月面处理，里面不会长出星点', () {
       final image = nightSky(width: 400, height: 300);
       scatterStars(image, count: 50);
-      // 一轮月亮/一盏路灯。左上角留空，星点都撒在外围。
+      // 半径 45 像素的圆亮斑，占画面 5%——这已经是个月亮了（实测那张真月球照
+      // 占 1.1%，判据的门槛还在它下面）。走月面分支，不进星点流程。
       drawBlob(image, 200, 150, 45);
 
       final result = SkyAnalysis.analyze(encodePng(image));
+      expect(result.isMoonShot, isTrue,
+          reason: '半径 45 像素的圆亮斑该被当成月面');
+      expect(result.moonDisc, isNotNull);
+      // 关键的一条：亮斑内部不能冒出成片的假星。亮斑边缘的噪声最容易
+      // 被阈值切出一堆碎块，那正是「误检」的来源。月面分支里一颗都不会有。
+      expect(result.stars, isEmpty);
+      expect(result.isLikelyStarfield, isFalse);
+    });
+
+    test('太小的亮斑不算月面，仍按非星空区域处理', () {
+      // 这条路必须留着：不然一盏路灯、一团失焦的光斑都会被当成月亮，
+      // 而月面分支会直接把星点流程整个跳过。
+      final image = nightSky(width: 400, height: 300);
+      scatterStars(image, count: 50);
+      drawBlob(image, 200, 150, 12);
+
+      final result = SkyAnalysis.analyze(encodePng(image));
+      expect(result.isMoonShot, isFalse,
+          reason: '半径 12 像素的亮斑太小，不该被当成月亮');
       expect(
         result.maskRegions.any((region) => region.kind == MaskKind.blob),
         isTrue,
-        reason: '半径 45 像素的亮斑必须被认出来',
+        reason: '它还是该被划成非星空区域',
       );
-      // 关键的一条：亮斑内部不能冒出成片的假星。亮斑边缘的噪声最容易
-      // 被阈值切出一堆碎块，那正是「误检」的来源。
+      // 亮斑内部不能冒出成片的假星。
       final inside = result.compactSources.where(
-        (star) => math.sqrt(math.pow(star.x - 200, 2) + math.pow(star.y - 150, 2)) < 42,
+        (star) => math.sqrt(math.pow(star.x - 200, 2) + math.pow(star.y - 150, 2)) < 10,
       );
       expect(inside.length, lessThanOrEqualTo(1));
     });

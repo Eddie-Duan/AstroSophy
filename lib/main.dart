@@ -2745,7 +2745,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 更好」。这三件事分别对应这里的一段话、一排数字、一份建议清单。下面
   /// 那些卡都是过程性的细节，只有这张是结论。
   Widget _observationCard(SkyAnalysis analysis, SolveResult? solve) {
-    final record = buildObservationRecord(analysis, solve);
+    final moon = moonFactsOf(analysis, _moment?.utc);
+    final record = buildObservationRecord(analysis, solve, moon: moon);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -2779,8 +2780,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   MetricChip('拍到', record.constellation!),
                 MetricChip('画质', record.quality),
                 MetricChip('天空背景', record.skyBrightness),
-                MetricChip('点源 FWHM',
-                    '${analysis.fwhm.toStringAsFixed(1)} px'),
+                // 月面照片不走星点链路，点源 FWHM、星表匹配这些数在这里没有
+                // 意义——报出来只会让用户以为测了，其实是零。
+                if (record.moon == null)
+                  MetricChip('点源 FWHM',
+                      '${analysis.fwhm.toStringAsFixed(1)} px'),
                 if (solve != null) ...[
                   MetricChip('星表匹配', '${record.matchedStars} 颗'),
                   MetricChip('视场对角', record.fieldOfView),
@@ -2796,6 +2800,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             if (record.movingBodies.isNotEmpty) ...[
               const SizedBox(height: 12),
               _movingBodiesNotice(record.movingBodies),
+            ],
+            if (record.moon != null) ...[
+              const SizedBox(height: 4),
+              _moonBlock(record.moon!),
             ],
             const Divider(height: 26),
             const Text('拍摄建议', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -2821,6 +2829,67 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ),
     );
   }
+
+  /// 月面那一小块：两个数并排摆出来。
+  ///
+  /// 「图上量的」和「按时刻算的」是两个独立的数，放在一起才说明问题——它们对得
+  /// 上，用户才知道这个亮面占比可信；对不上，界面必须说出来，而不是挑一个报。
+  /// 相名只挂在后一个数上：单张照片里相机有没有镜像或翻转是看不出来的，光看图
+  /// 说不出是在盈还是在亏。
+  Widget _moonBlock(MoonFacts moon) {
+    final phaseLabel = moon.phaseName == null
+        ? '填上拍摄时间即可算出相名'
+        : '${moon.waxing == true ? '盈' : '亏'} · ${moon.phaseName}';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      decoration: BoxDecoration(
+        color: kMint.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kMint.withValues(alpha: 0.30)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('月面', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _moonMetric('亮面占比（图上量的）', moon.measuredPercent),
+              const SizedBox(width: 12),
+              _moonMetric(
+                '亮面占比（按时刻算的）',
+                moon.ephemerisPercent ?? '—',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(phaseLabel, style: const TextStyle(fontSize: 13)),
+          if (moon.caution != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              moon.caution!,
+              style: const TextStyle(fontSize: 12.5, height: 1.45),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _moonMetric(String label, String value) => Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 11.5, color: Color(0xFF8192A8))),
+            const SizedBox(height: 2),
+            Text(value,
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
 
   /// 「疑似运动天体」那一小块。
   ///

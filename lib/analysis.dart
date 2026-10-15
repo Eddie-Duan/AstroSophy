@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as imglib;
 
 import 'models.dart';
+import 'moon_disc.dart';
 
 /// 图像分析层：解码、星点检测、非星空掩膜、孔径测光和处理图生成。
 ///
@@ -98,6 +99,7 @@ class SkyAnalysis {
     required this.starfieldConfidence,
     required this.brightFlatFraction,
     this.solverExtras = const [],
+    this.moonDisc,
   });
 
   final int width;
@@ -142,6 +144,17 @@ class SkyAnalysis {
   /// 它们**不在** [stars] 里：界面上的编号、列表、星等统计都只认 [stars]，
   /// 否则用户会看到一堆分不清是星还是拖线的圆圈。这里只服务于解算。
   final List<DetectedStar> solverExtras;
+
+  /// 量出来的月面。**非 null 表示这张照片走的是月面分支**，此时 [stars] 一定
+  /// 是空的：月面亮得离谱，星点检测在它身上没有意义。
+  ///
+  /// 分流在 [analyze] 的**最一开始**做，不是等星点流程跑完再判断——实测一张
+  /// 月球照会被现有判据老老实实当成正常星场，在月面上「检出」13 颗星，甚至
+  /// 局部对比度还挺高。等它跑完再改判，报告里那些数字早就编好了。
+  final MoonDisc? moonDisc;
+
+  /// 这张照片是不是以月面为主。
+  bool get isMoonShot => moonDisc != null;
 
   /// 参与星表匹配和测光的紧凑点源（排除拉长候选和用户剔除项）。
   List<DetectedStar> get compactSources => stars
@@ -223,6 +236,7 @@ class SkyAnalysis {
         starfieldConfidence: starfieldConfidence,
         brightFlatFraction: brightFlatFraction,
         solverExtras: solverExtras,
+        moonDisc: moonDisc,
       );
 
   static bool _sameSource(DetectedStar a, DetectedStar b) =>
@@ -245,6 +259,7 @@ class SkyAnalysis {
         'starfield_confidence': starfieldConfidence,
         'bright_flat_fraction': brightFlatFraction,
         'solver_extras': solverExtras.map((star) => star.toJson()).toList(),
+        'moon_disc': moonDisc?.toJson(),
       };
 
   /// 历史记录里只存索引信息，图片从磁盘重新读，不在 JSON 里塞 base64。
@@ -283,6 +298,11 @@ class SkyAnalysis {
             .whereType<Map<Object?, Object?>>()
             .map((item) => DetectedStar.fromJson(Map<String, Object?>.from(item)))
             .toList(growable: false),
+        moonDisc: json['moon_disc'] is Map<Object?, Object?>
+            ? MoonDisc.fromJson(
+                Map<String, Object?>.from(json['moon_disc'] as Map<Object?, Object?>),
+              )
+            : null,
       );
 
   /// 对外唯一入口：给一份图片字节，返回分析结果。
@@ -301,6 +321,21 @@ class SkyAnalysis {
     final height = image.height;
 
     final gray = _toGrayscale(image);
+
+    // 定性分流放在最一开始：月面为主的照片走月面那条链路，根本不进星点流程。
+    //
+    // 不这么做的话后果是实打实的——实测一张月球照会被现有星点判据老老实实
+    // 判成「正常星场」，在月面上找出 13 颗「星」。月面本身就亮得离谱，等星点
+    // 流程跑完再回头看，报告里的星等、噪声、解算建议早就编好了。
+    final moonDisc = measureMoonDisc(
+      gray: _byteGrayscale(gray),
+      width: width,
+      height: height,
+    );
+    if (moonDisc != null) {
+      return _analyzeMoon(image, gray, width, height, moonDisc);
+    }
+
     final excludedRegions = _applyImageExclusions(
       gray,
       width,
@@ -447,6 +482,103 @@ class SkyAnalysis {
       solverExtras: solverExtras,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 月面分支
+// ---------------------------------------------------------------------------
+
+/// 0–255 的整帧灰度，月面测量吃这个口径。
+Uint8List _byteGrayscale(Float32List gray) {
+  final bytes = Uint8List(gray.length);
+  for (var i = 0; i < gray.length; i++) {
+    bytes[i] = (gray[i] * 255).round().clamp(0, 255);
+  }
+  return bytes;
+}
+
+/// 月面分支：不做星点检测，只报月面本身。
+///
+/// 星点那条链路的产物——星等、FWHM、非星空掩膜、解算候选——在月球照上全是
+/// 噪声（月面上的「星点」就是环形山和噪点）。与其报一堆听起来很专业的假数字，
+/// 不如一条都不报。
+SkyAnalysis _analyzeMoon(
+  imglib.Image image,
+  Float32List gray,
+  int width,
+  int height,
+  MoonDisc disc,
+) {
+  final bytes = _byteGrayscale(gray);
+
+  // 天空统计量只取月盘外那一圈。盘内是月亮，算进去背景就虚高了——而这张图
+  // 的背景本来就是月面分析自己要用的一把尺子。
+  final outer = disc.radiusPixels * 1.15 + 4;
+  final outerSq = outer * outer;
+  var sum = 0.0;
+  var sumSq = 0.0;
+  var count = 0;
+  var saturated = 0;
+  for (var y = 0; y < height; y++) {
+    final dy = y - disc.centerY;
+    for (var x = 0; x < width; x++) {
+      final value = bytes[y * width + x];
+      if (value >= 250) saturated++;
+      final dx = x - disc.centerX;
+      if (dx * dx + dy * dy <= outerSq) continue;
+      final level = value.toDouble();
+      sum += level;
+      sumSq += level * level;
+      count++;
+    }
+  }
+  final skyMean = count == 0 ? 0.0 : sum / count;
+  final variance = count == 0 ? 0.0 : sumSq / count - skyMean * skyMean;
+  final background = skyMean / 255.0;
+  final noise = variance > 0 ? math.sqrt(variance) / 255.0 : 0.0;
+  final saturatedFraction = bytes.isEmpty ? 0.0 : saturated / bytes.length;
+
+  final preview = Uint8List.fromList(imglib.encodeJpg(image, quality: 92));
+  final litPercent = (disc.illuminatedFraction * 100).toStringAsFixed(1);
+  final discPercent = (disc.discAreaFraction * 100).toStringAsFixed(2);
+
+  return SkyAnalysis(
+    width: width,
+    height: height,
+    stars: const [],
+    quality: '月面',
+    background: background,
+    noise: noise,
+    backgroundIndex: background * 100,
+    saturatedFraction: saturatedFraction,
+    diagnostics: [
+      '这张照片以月面为主，走的是月面分析，不做星点检测。'
+          '月亮比任何恒星都亮得多，在它身上找「星」找到的只是环形山和噪点；'
+          '这类照片里通常也没有可用的星场。',
+      '月盘：圆心 (${disc.centerX.round()}, ${disc.centerY.round()}) 像素，'
+          '半径 ${disc.radiusPixels.toStringAsFixed(1)} 像素，'
+          '占画面 $discPercent%。',
+      '亮面占比 $litPercent%：这是数出来的——'
+          '被照亮的像素数除以整个月盘的面积。月面是球，投影到画面上是正圆，'
+          '明暗界线投影成半个椭圆，亮面那块占整个圆的比恰好就是亮面占比，'
+          '所以直接数像素就是准的。',
+      '注意这个数只说明「多大一块亮着」，说明不了「在盈还是在亏」：'
+          '单张照片里相机有没有镜像、有没有上下翻转是看不出来的'
+          '（加了天顶镜的折射镜是镜像的，牛顿式是旋转的）。'
+          '月的盈亏和相名要靠拍摄时刻算，见报告里的月相一条。',
+    ],
+    preview: preview,
+    // 处理图那条链路是「扣背景、拉伸、抹掉非星空区域、只留星场」，
+    // 在月球照上没有意义，也不该把月亮本身「抹掉」。原图即是成品。
+    processedPreview: preview,
+    fwhm: 0,
+    nonStarFraction: 0,
+    maskRegions: const [],
+    isLikelyStarfield: false,
+    starfieldConfidence: 0,
+    brightFlatFraction: 0,
+    moonDisc: disc,
+  );
 }
 
 List<MaskRegion> _applyImageExclusions(

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'analysis.dart';
 import 'models.dart';
+import 'moon.dart';
 
 /// 报告层：把测量结果翻译成两类东西——给人看的，和给模型看的。
 ///
@@ -18,8 +19,12 @@ import 'models.dart';
 /// 这是模型唯一能看到的东西——原始照片不上传，模型只拿这份结构化的测量
 /// 结果说话。所以字段要写成「测量值 + 它有多可信」，而不是一句结论：模型
 /// 拿得到散布、内点数这类信息，才能自己判断哪些数字不值得当真。
-Map<String, Object?> buildAgentReport(SkyAnalysis analysis, SolveResult? solve) {
-  final record = buildObservationRecord(analysis, solve);
+Map<String, Object?> buildAgentReport(
+  SkyAnalysis analysis,
+  SolveResult? solve, {
+  MoonFacts? moon,
+}) {
+  final record = buildObservationRecord(analysis, solve, moon: moon);
   return {
     'quality': analysis.quality,
     'detected_stars': analysis.compactSources.length,
@@ -34,6 +39,20 @@ Map<String, Object?> buildAgentReport(SkyAnalysis analysis, SolveResult? solve) 
     'non_star_fraction': analysis.nonStarFraction,
     'is_likely_starfield': analysis.isLikelyStarfield,
     'starfield_confidence': analysis.starfieldConfidence,
+    // 月球走的是另一条链路：星点相关的字段在这类照片上没有意义，月面自己有
+    // 一套。两条路径都给出去，让模型自己看它们是否互相印证。
+    'is_moon_shot': analysis.isMoonShot,
+    'moon': moon == null
+        ? null
+        : {
+            'lit_fraction_measured': moon.measuredFraction,
+            'lit_fraction_from_ephemeris': moon.ephemerisFraction,
+            'phase_name': moon.phaseName,
+            'waxing': moon.waxing,
+            'disc_radius_pixels': analysis.moonDisc!.radiusPixels,
+            'fraction_of_frame': analysis.moonDisc!.discAreaFraction,
+            'caution': moon.caution,
+          },
     'diagnostics': analysis.diagnostics,
     'solved': solve != null,
     // 解算是本机算的还是在线算的，直接关系到结果能不能离线和速率上限。
@@ -108,6 +127,79 @@ Map<String, Object?> buildAgentReport(SkyAnalysis analysis, SolveResult? solve) 
 // 给爱好者看的观星记录
 // ---------------------------------------------------------------------------
 
+/// 月面的两条结论：图上量出来的，和从拍摄时刻算出来的。
+///
+/// 两条路径完全独立——一边数像素，一边算天体力学。它们能互相对上，才说明两边
+/// 都没错；差得远就说明其中有一个站不住。这正是为什么要把两个数都摆出来，而
+/// 不是挑一个报。
+class MoonFacts {
+  const MoonFacts({
+    required this.measuredFraction,
+    required this.centerX,
+    required this.centerY,
+    required this.radiusPixels,
+    this.ephemerisFraction,
+    this.phaseName,
+    this.waxing,
+  });
+
+  /// 图上数出来的亮面占比（0–1）。
+  final double measuredFraction;
+
+  /// 月盘，画圈用。
+  final double centerX;
+  final double centerY;
+  final double radiusPixels;
+
+  /// 从拍摄时刻算出来的亮面占比；没有可用时刻时为 null。
+  final double? ephemerisFraction;
+
+  /// 相名（盈凸月、上弦…）。**依赖拍摄时刻**，没有时刻就是 null。
+  final String? phaseName;
+
+  /// 是否在盈。单张图看不出来（镜像/翻转未知），只有时刻能定。
+  final bool? waxing;
+
+  String get measuredPercent =>
+      '${(measuredFraction * 100).toStringAsFixed(1)}%';
+
+  String? get ephemerisPercent => ephemerisFraction == null
+      ? null
+      : '${(ephemerisFraction! * 100).toStringAsFixed(1)}%';
+
+  /// 两条路径的差距，超过这个数就值得说一句。
+  static const double _agreementTolerance = 0.05;
+
+  /// 两条路径对不上时的说明；对得上、或者缺一条时为 null。
+  String? get caution {
+    final other = ephemerisFraction;
+    if (other == null) return null;
+    if ((measuredFraction - other).abs() <= _agreementTolerance) return null;
+    return '图上量出 $measuredPercent，按拍摄时刻算是 $ephemerisPercent，'
+        '差得比预期大。可能是拍摄时刻不对（这个数对时间很敏感），'
+        '也可能是明暗界线附近的亮度被曝光或后期处理改了。';
+  }
+}
+
+/// 从分析结果和拍摄时刻拼出月面的两条结论。
+///
+/// 没有 [utc] 也能给出图上量出来的那一条；只是没有相名、没有盈亏、没有第二个
+/// 数可以互相印证。
+MoonFacts? moonFactsOf(SkyAnalysis analysis, DateTime? utc) {
+  final disc = analysis.moonDisc;
+  if (disc == null) return null;
+  final phase = utc == null ? null : moonPhaseAt(utc);
+  return MoonFacts(
+    measuredFraction: disc.illuminatedFraction,
+    centerX: disc.centerX,
+    centerY: disc.centerY,
+    radiusPixels: disc.radiusPixels,
+    ephemerisFraction: phase?.illuminatedFraction,
+    phaseName: phase?.name,
+    waxing: phase?.waxing,
+  );
+}
+
 /// 一张照片的「观星记录」：一屏能读完的关键数字，加一句人话总结。
 class ObservationRecord {
   const ObservationRecord({
@@ -125,6 +217,7 @@ class ObservationRecord {
     required this.magnitudes,
     required this.deepSky,
     required this.movingBodies,
+    this.moon,
   });
 
   /// 一段话讲清楚这张照片拍了什么、拍得怎么样。
@@ -162,15 +255,20 @@ class ObservationRecord {
   ///
   /// 空表示没判出来——可能是没有拍摄时刻，也可能是星表在那里能查到星。
   final List<MovingBodyEntry> movingBodies;
+
+  /// 月面那条链路的结论。非 null 表示这张照片走的是月面分支。
+  final MoonFacts? moon;
 }
 
 ObservationRecord buildObservationRecord(
   SkyAnalysis analysis,
-  SolveResult? solve,
-) {
+  SolveResult? solve, {
+  MoonFacts? moon,
+}) {
   final magnitudes = calibratedMagnitudes(analysis, solve);
   return ObservationRecord(
-    summary: _summary(analysis, solve, magnitudes),
+    summary: _summary(analysis, solve, magnitudes, moon),
+    moon: moon,
     constellation:
         solve != null && solve.constellations.isNotEmpty
             ? solve.constellations.first
@@ -186,7 +284,7 @@ ObservationRecord buildObservationRecord(
     brightest: _brightest(analysis, solve),
     quality: analysis.quality,
     skyBrightness: describeSkyBrightness(analysis.backgroundIndex),
-    advice: buildAdvice(analysis, solve),
+    advice: buildAdvice(analysis, solve, moon: moon),
     magnitudes: magnitudes,
     deepSky: buildDeepSkyEntries(solve),
     movingBodies: buildMovingBodyEntries(solve),
@@ -375,8 +473,36 @@ String? _brightest(SkyAnalysis analysis, SolveResult? solve) {
 }
 
 /// 拍摄建议。每条都从测量结果里推出来，不写没有依据的话。
-List<String> buildAdvice(SkyAnalysis analysis, SolveResult? solve) {
+List<String> buildAdvice(
+  SkyAnalysis analysis,
+  SolveResult? solve, {
+  MoonFacts? moon,
+}) {
   final advice = <String>[];
+  if (moon != null) {
+    // 月面照片走另一条链路，星场那套建议（对焦、星点数量、解算）一条都不适用。
+    advice.add('这是一张月面照片，亮面占月盘的 ${moon.measuredPercent}。'
+        '拍月面讲究的是不过曝：月亮比恒星亮上万倍，'
+        '要单独用很短的曝光，别和星空用同一套参数。');
+    if (moon.phaseName != null) {
+      advice.add('拍摄时刻算出来是${moon.phaseName}，'
+          '亮面占比应有 ${moon.ephemerisPercent}，和图上量出来的'
+          '${moon.measuredPercent} 是两个独立的数——'
+          '它们对得上，说明测量可信。');
+    } else {
+      advice.add('没有拍摄时刻就没有相名，也说不清是在盈还是在亏：'
+          '单张照片里相机有没有镜像或上下翻转是看不出来的。'
+          '在下方填上拍摄时间，就能算出来。');
+    }
+    if (analysis.saturatedFraction > 0.01) {
+      advice.add('有 ${(analysis.saturatedFraction * 100).toStringAsFixed(1)}% '
+          '的像素已经饱和。月面比以前更亮的部分会连成一片死白，'
+          '明暗界线也会被抹平——把曝光再降一档。');
+    }
+    final caution = moon.caution;
+    if (caution != null) advice.add(caution);
+    return advice;
+  }
   if (!analysis.isLikelyStarfield) {
     advice.add('这张图看起来不完全是星空——里面有超过 '
         '${(analysis.nonStarFraction * 100).toStringAsFixed(0)}% 的区域'
@@ -667,8 +793,22 @@ List<MovingBodyEntry> buildMovingBodyEntries(SolveResult? solve) {
 String _summary(
   SkyAnalysis analysis,
   SolveResult? solve,
-  List<double> magnitudes,
-) {
+  List<double> magnitudes, [
+  MoonFacts? moon,
+]) {
+  if (moon != null) {
+    final buffer = StringBuffer('这张照片拍的是月亮。');
+    buffer.write('月盘占画面约 ${(analysis.moonDisc!.discAreaFraction * 100).toStringAsFixed(2)}%，'
+        '亮面占月盘 ${moon.measuredPercent}。');
+    if (moon.phaseName != null) {
+      buffer.write('按拍摄时刻算，这时月亮是${moon.phaseName}');
+      buffer.write('（亮面 $moon.ephemerisPercent）。');
+    } else {
+      buffer.write('没有拍摄时刻，所以算不出相名，也说不清是在盈还是在亏。');
+    }
+    buffer.write('画面里没有可用的星场——拍月亮的时候基本拍不到别的。');
+    return buffer.toString();
+  }
   final buffer = StringBuffer();
   final constellation =
       solve != null && solve.constellations.isNotEmpty

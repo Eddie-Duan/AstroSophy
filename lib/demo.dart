@@ -65,6 +65,19 @@ final demoImages = <DemoImage>[
       source: CaptureTimeSource.demo,
     ),
   ),
+  DemoImage(
+    asset: 'assets/demo/demo_moon.jpg',
+    title: '月亮',
+    subtitle: '一张月球照：画面上除了它几乎什么都没有，走的是月面那条链路',
+    moment: CaptureMoment(
+      // 拍摄者给的当地时间：2026-06-25 19:38，东八区。这张图的 EXIF 也在
+      // 入库时丢了，但时刻对月面分析是必需的——盈亏只能由它决定，而且它是
+      // 图上量出来的那个亮面占比的唯一独立校验。
+      local: DateTime(2026, 6, 25, 19, 38),
+      offset: const Duration(hours: 8),
+      source: CaptureTimeSource.demo,
+    ),
+  ),
 ];
 
 /// 读出演示图的字节。

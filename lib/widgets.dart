@@ -277,6 +277,41 @@ class DetectedStarsPainter extends CustomPainter {
       shadows: [Shadow(color: Colors.black, blurRadius: 5)],
     );
 
+    // 月面圈。
+    //
+    // 月球照走的是另一条链路，画面上一个编号都不会有——这个圈就是唯一能告诉
+    // 用户「照片我认出来了，月亮在这里、量到了多大」的东西。没有它，界面上
+    // 会是一片什么都没标的原图，看着像没分析。
+    final moon = analysis.moonDisc;
+    if (moon != null) {
+      final center = toCanvas(moon.centerX, moon.centerY);
+      final moonRadius = moon.radiusPixels * scale;
+      canvas.drawCircle(
+        center,
+        moonRadius,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..color = kMint.withValues(alpha: 0.9),
+      );
+      final caption = TextPainter(
+        text: TextSpan(
+          text: '月面 · 亮 ${(moon.illuminatedFraction * 100).toStringAsFixed(1)}%',
+          style: const TextStyle(
+            color: kMint,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            shadows: [Shadow(color: Colors.black, blurRadius: 5)],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      caption.paint(
+        canvas,
+        Offset(center.dx - caption.width / 2, center.dy + moonRadius + 4),
+      );
+    }
+
     // 星座连线先画，压在最底下。它是背景参考，不能盖住用户真正要看的
     // 星点和编号——那两样才是这个面板要回答的问题。
     final figurePaint = Paint()
