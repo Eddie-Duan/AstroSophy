@@ -111,6 +111,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 所以这条信息是「运动天体」那一节的前提，缺了只能不做判断。
   CaptureMoment? _moment;
 
+  /// 喂给星历的那个瞬间（UTC）。
+  ///
+  /// 时区从 EXIF 里读到了就用读到的；没读到就按本机时区算——这是界面上
+  /// 承诺过的那句话。这里取的偏移是**那个时刻**的本机偏移而不是此刻的偏移，
+  /// 夏令时切换前后拍的照片因此不会差一小时。
+  DateTime? get _captureInstant {
+    final moment = _moment;
+    if (moment == null) return null;
+    return moment.utcAt(moment.local.timeZoneOffset);
+  }
+
   /// 三组亮点在代码里的名字。数组顺序就是列表里的显示顺序。
   static const _groupIds = <String>['named', 'unnamed', 'streaks'];
 
@@ -407,6 +418,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ).run(
         bytes,
         question: _questionController.text,
+        moment: _captureInstant,
         onProgress: (progress) {
           if (mounted) setState(() => _progress = progress);
         },
@@ -1235,6 +1247,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         analysis: analysis,
                         namedStars: _visibleNamedStars(analysis, solve),
                         objects: solve?.deepSkyObjects ?? const [],
+                        // 运动天体的圆心是检出到的那颗亮点，而星历位置只有
+                        // 赤经赤纬，得靠 WCS 现推——所以这两个一起传。
+                        bodies: solve?.movingBodies ?? const [],
+                        wcs: solve?.wcs,
                         arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
                         // 关掉连线时传空表而不是把 painter 换一个：换 painter
                         // 会让整张图重画，而这里只是少画几条线。
@@ -2198,6 +2214,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Text('画面最亮：${record.brightest}',
                   style: const TextStyle(fontSize: 13)),
             ],
+            if (record.movingBodies.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _movingBodiesNotice(record.movingBodies),
+            ],
             const Divider(height: 26),
             const Text('拍摄建议', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
@@ -2222,6 +2242,58 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ),
     );
   }
+
+  /// 「疑似运动天体」那一小块。
+  ///
+  /// 用橙色而不是下面建议清单的薄荷色：这一节说的是**疑似**——是两个条件凑出来
+  /// 的推断（星表这一带没星 ＋ 星历位置上有亮点），不是量出来的事实。颜色得跟着
+  /// 这份不确定走，不然用户会把它当成和「星表匹配 18 颗」同一档次的东西。
+  ///
+  /// 那句不确定度说明是这块的一部分，不是可选的点缀：行星识别一旦给错就是错的，
+  /// 所以结论和「它凭什么可能不成立」必须同时出现在屏幕上。
+  Widget _movingBodiesNotice(List<MovingBodyEntry> bodies) => Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: Colors.orangeAccent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: Colors.orangeAccent.withValues(alpha: 0.35),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.public_rounded, size: 15, color: Colors.orangeAccent),
+                SizedBox(width: 6),
+                Text(
+                  '疑似运动天体',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            for (final body in bodies)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  body.describe,
+                  style: const TextStyle(fontSize: 13, height: 1.4),
+                ),
+              ),
+            const SizedBox(height: 6),
+            const Text(
+              movingBodyCaution,
+              style: TextStyle(
+                fontSize: 11.5,
+                height: 1.45,
+                color: Color(0xFF8192A8),
+              ),
+            ),
+          ],
+        ),
+      );
 
   /// 视场内的恒星表：爱好者熟悉的「一张星表」的样子。
   ///

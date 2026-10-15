@@ -197,6 +197,8 @@ class DetectedStarsPainter extends CustomPainter {
     required this.namedStars,
     required this.objects,
     this.figures = const [],
+    this.bodies = const [],
+    this.wcs,
     this.hidden = const {},
     this.selected,
     this.numbers = true,
@@ -206,6 +208,17 @@ class DetectedStarsPainter extends CustomPainter {
   final SkyAnalysis analysis;
   final List<SkyObject> namedStars;
   final List<SkyObject> objects;
+
+  /// 疑似的运动天体（行星、太阳）。
+  ///
+  /// [MovingBodySuspicion.x]、[.y] 是检出到的那颗亮点在图上的位置，星历自己
+  /// 算出的位置只有赤经赤纬，要靠 [wcs] 现推——两者都要画，因为它们的间距
+  /// 就是这个结论的不确定度。
+  final List<MovingBodySuspicion> bodies;
+
+  /// 解算出来的坐标映射。只有画运动天体时要用：深空天体的像素位置在解算
+  /// 那一侧就算好了，而星历给的是赤经赤纬。
+  final Wcs? wcs;
 
   /// 图像比例尺（角秒/像素），只用来把深空天体的角尺寸换成图上的圆。
   /// 0 表示还没解算——那就退回到一个固定大小的标记。
@@ -400,6 +413,102 @@ class DetectedStarsPainter extends CustomPainter {
       )..layout(maxWidth: destination.width * 0.55);
       label.paint(canvas, point + const Offset(10, -7));
     }
+
+    // 疑似运动天体最后画，压在最上面：它是这张图上最稀有、也最该被先看到的
+    // 结论，被别的圈盖住就白判了。
+    //
+    // 三处刻意的选择，都是为了不把它画得比它实际有多硬：
+    //   * 圈用**虚线**。图上其余两套圈都是实线（薄荷色是星点、粉色是深空
+    //     天体），而这里的结论是「疑似」——判据依赖星历精度，虚线和实线在
+    //     视觉上正好是「大概在这儿」和「就在这儿」的区别。
+    //   * 圆的大小**不跟角尺寸走**，和深空天体那一套相反。行星的视面在手机
+    //     照片上小到分辨不出来（木星冲日也才 49″），画一个按角尺寸缩放的圆
+    //     会让人以为看到了圆面。这里的圈只表示「它在这儿」。
+    //   * 星历算出的位置单独画一个十字，不和圈合并。两个记号错开的那点距离
+    //     就是这个结论的不确定度——把它画出来，用户才看得见「疑似」有多大。
+    final bodyPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..color = const Color(0xFFFFAB40);
+    final predictedPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = const Color(0xFFFFAB40).withValues(alpha: 0.75);
+    final bodyLabelStyle = const TextStyle(
+      color: Color(0xFFFFAB40),
+      fontSize: 10,
+      fontWeight: FontWeight.w700,
+      shadows: [Shadow(color: Colors.black, blurRadius: 5)],
+    );
+    for (final body in bodies) {
+      final found = toCanvas(body.x, body.y);
+      _dashedCircle(canvas, found, 11, bodyPaint);
+
+      final predicted = _predictedPoint(body, toCanvas, destination, scale);
+      if (predicted != null) {
+        // 十字，臂长 5 像素。画成小号是有意的：它是「星历说的位置」，一个
+        // 参考点，不该和那个表示检出的圈抢注意力。
+        canvas.drawLine(
+          predicted - const Offset(5, 0),
+          predicted + const Offset(5, 0),
+          predictedPaint,
+        );
+        canvas.drawLine(
+          predicted - const Offset(0, 5),
+          predicted + const Offset(0, 5),
+          predictedPaint,
+        );
+      }
+
+      final separation = body.separationArcsec;
+      final label = TextPainter(
+        text: TextSpan(
+          text: separation < movingBodyCoincidenceArcsec
+              ? '${body.name} · 位置重合'
+              : '${body.name} · 差 ${separation.round()}″',
+          style: bodyLabelStyle,
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: destination.width * 0.55);
+      label.paint(canvas, found + const Offset(14, -20));
+    }
+  }
+
+  /// 星历位置画到画布上的点。没有坐标映射、或者投影算不出有限值时返回 null。
+  ///
+  /// 算不出来就不画这个十字，而不是退回画在圈心上：画在圈心上等于宣称
+  /// 「星历位置就是这里」，而这时我们其实不知道它在哪——一个假的十字比
+  /// 没有十字更坏。
+  Offset? _predictedPoint(
+    MovingBodySuspicion body,
+    Offset Function(double, double) toCanvas,
+    Rect destination,
+    double scale,
+  ) {
+    final wcs = this.wcs;
+    if (wcs == null) return null;
+    final (x, y) = wcs.worldToPixel(body.ra, body.dec);
+    if (!x.isFinite || !y.isFinite) return null;
+    final point = toCanvas(x, y);
+    // 投影出来的点跑到画布外面很远的地方时就别画了：十字会被裁掉，而连过去
+    // 的空白反倒像是「差了很远」。
+    if (!destination.inflate(40 * scale).contains(point)) return null;
+    return point;
+  }
+
+  /// 画一个虚线圆。
+  ///
+  /// Canvas 没有现成的虚线，得自己把圆周按弧长切开逐段画。
+  void _dashedCircle(Canvas canvas, Offset center, double radius, Paint paint) {
+    final path = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    for (final metric in path.computeMetrics()) {
+      var start = 0.0;
+      while (start < metric.length) {
+        final end = math.min(start + 4, metric.length);
+        canvas.drawPath(metric.extractPath(start, end), paint);
+        start = end + 3;
+      }
+    }
   }
 
   @override
@@ -408,6 +517,8 @@ class DetectedStarsPainter extends CustomPainter {
       !identical(namedStars, oldDelegate.namedStars) ||
       !identical(objects, oldDelegate.objects) ||
       !identical(figures, oldDelegate.figures) ||
+      !identical(bodies, oldDelegate.bodies) ||
+      !identical(wcs, oldDelegate.wcs) ||
       // 数目一样、又没有对方缺的元素，两个集合就是同一个。不引 foundation
       // 的 setEquals，是为了让这个文件只依赖 material 一层。
       hidden.length != oldDelegate.hidden.length ||

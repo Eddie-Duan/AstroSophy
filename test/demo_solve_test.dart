@@ -54,7 +54,28 @@ void main() {
     final analysis = SkyAnalysis.analyze(
       File('assets/demo/demo_m31.jpg').readAsBytesSync(),
     );
+    // 打两个耗时，不断言。这条路径是全套里最贵的一条（细星表那一层 34 MB、
+    // 档位要在 24 和 120 之间试），而 `docs/建议.md` 的风险项 1 里写的
+    // 「M31 要多久」正是这两个数。
+    //
+    // 为什么要打两个：深层的索引是懒建的，`warmUp()` 只暖了浅层那一半。
+    // 所以第一次的数和后面的数不是一回事——第一个数里含一次建索引，而它恰好
+    // 就是「用户拍到的第一张稀疏天区照片要等多久」。只报一个数会把这件事抹掉。
+    //
+    // 不写成断言是因为它随机器变；写在这里是为了文档里那个数有个能随时复现
+    // 的来源，而不是一句凭印象的话。
+    final coldStarted = DateTime.now();
+    final cold = solver.solve(analysis);
+    final coldMs = DateTime.now().difference(coldStarted).inMilliseconds;
+
+    final warmStarted = DateTime.now();
     final solve = solver.solve(analysis);
+    final warmMs = DateTime.now().difference(warmStarted).inMilliseconds;
+
+    // ignore: avoid_print
+    print('M31 本机解算：首次 $coldMs ms（含深层索引懒建），预热后 $warmMs ms');
+
+    expect(cold, isNotNull, reason: '冷启动那次也必须解得出来');
     expect(solve, isNotNull, reason: '稀疏天区必须靠小档星数解出来');
     expect(solve!.source, SolveSource.local);
 

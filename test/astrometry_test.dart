@@ -36,7 +36,7 @@ Uint8List _fitsHeader(Map<String, Object> cards) {
   final buffer = StringBuffer();
   cards.forEach((key, value) {
     final text = value is String ? "'$value'" : '$value';
-    buffer.write((key.padRight(8) + '= ' + text.padRight(70)).substring(0, 80));
+    buffer.write('${key.padRight(8)}= ${text.padRight(70)}'.substring(0, 80));
   });
   buffer.write('END'.padRight(80));
   return Uint8List.fromList(buffer.toString().codeUnits);

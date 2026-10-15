@@ -75,6 +75,20 @@ Map<String, Object?> buildAgentReport(SkyAnalysis analysis, SolveResult? solve) 
           'fraction_of_field_of_view': entry.fieldFraction,
         },
     ],
+    // 疑似运动天体。给模型的时候必须连判据和不确定度一起给：只给一个名字，
+    // 模型会把它当既成事实写进解读里，而这里其实只说得出「疑似」。
+    'moving_bodies': [
+      for (final entry in buildMovingBodyEntries(solve))
+        {
+          'name': entry.name,
+          'separation_arcsec': entry.separationArcsec,
+          'magnitude': entry.magnitude,
+          'distance_au': entry.distanceAu,
+        },
+    ],
+    'moving_body_caution': solve == null || solve.movingBodies.isEmpty
+        ? null
+        : movingBodyCaution,
     'catalog_warning': solve?.catalogWarning,
     'magnitude_zero_point': solve?.magnitudeZeroPoint,
     'photometry_scatter_mag': solve?.magnitudeScatter,
@@ -110,6 +124,7 @@ class ObservationRecord {
     required this.advice,
     required this.magnitudes,
     required this.deepSky,
+    required this.movingBodies,
   });
 
   /// 一段话讲清楚这张照片拍了什么、拍得怎么样。
@@ -142,6 +157,11 @@ class ObservationRecord {
 
   /// 画面中的深空天体，按占画面大小排序。
   final List<DeepSkyEntry> deepSky;
+
+  /// 疑似的运动天体（行星、太阳），按和星历位置的差距从小到大排。
+  ///
+  /// 空表示没判出来——可能是没有拍摄时刻，也可能是星表在那里能查到星。
+  final List<MovingBodyEntry> movingBodies;
 }
 
 ObservationRecord buildObservationRecord(
@@ -169,6 +189,7 @@ ObservationRecord buildObservationRecord(
     advice: buildAdvice(analysis, solve),
     magnitudes: magnitudes,
     deepSky: buildDeepSkyEntries(solve),
+    movingBodies: buildMovingBodyEntries(solve),
   );
 }
 
@@ -569,6 +590,80 @@ List<DeepSkyEntry> buildDeepSkyEntries(SolveResult? solve) {
   return entries;
 }
 
+/// 星历位置和检出点差到这个角秒数以内，就报不出「差多少」了。
+///
+/// 这个门槛不是在说「算得准」，恰恰相反：星历近似根数本身的误差就有角分量级，
+/// 解算带来的尺度误差也是零点几角秒一档，所以一角秒以内的那个差数主要是噪声，
+/// 报成「差 0.4″」是假精确。图上标注和报告正文共用这一个数，否则同一颗行星
+/// 会在图上说「重合」、在报告里说「差 0.4″」。
+const double movingBodyCoincidenceArcsec = 1.0;
+
+/// 一个疑似运动天体，报告里的一行。
+///
+/// 和深空天体一样，这里呈现的是「结论 ＋ 这个结论有多硬」。[separationArcsec]
+/// 必须跟着名字一起给出去：它就是这个结论的不确定度，藏起来的话「疑似」两个
+/// 字就成了一句空话。
+class MovingBodyEntry {
+  const MovingBodyEntry({
+    required this.name,
+    required this.separationArcsec,
+    this.magnitude,
+    this.distanceAu,
+  });
+
+  final String name;
+  final double separationArcsec;
+  final double? magnitude;
+  final double? distanceAu;
+
+  /// 「和星历位置差 42″」。
+  String get separationLabel {
+    final seconds = separationArcsec;
+    if (seconds < movingBodyCoincidenceArcsec) return '和星历位置几乎重合';
+    return '和星历位置差 ${seconds.round()}″';
+  }
+
+  String get magnitudeLabel =>
+      magnitude == null ? '' : '，星等约 ${magnitude!.toStringAsFixed(1)}';
+
+  String get distanceLabel => distanceAu == null
+      ? ''
+      : '，距地球约 ${distanceAu!.toStringAsFixed(2)} 个天文单位';
+
+  /// 一句话讲完这一条：位置、亮度、距离，以及它和星历差了多少。
+  String get describe => '$name$distanceLabel$magnitudeLabel，$separationLabel';
+}
+
+/// 落到报告里的那条不确定度说明。
+///
+/// 行星识别这东西一旦给错就是错的，所以结论旁边必须说清楚它凭什么成立、
+/// 以及凭什么可能不成立。最后那句「隔几天再拍一张」不是客套——那是唯一能
+/// 真正把「疑似」变成「确认」的、用户自己就做得到的办法：行星几天里会挪出
+/// 肉眼可见的位置，恒星不会。
+const String movingBodyCaution =
+    '这些是「疑似」，不是「确认」。判断依据有两条，缺一不可：星表里这个位置'
+    '查不到星，而且星历算出的位置上有颗亮点。用的星历是近似根数，位置本身有'
+    '角分量级的误差，所以看到「差几十角秒」是正常的。想看得更实，可以过几天'
+    '在同一机位再拍一张：行星会挪位置，恒星不会。';
+
+/// 把解算结果里的疑似运动天体整理成报告条目。
+List<MovingBodyEntry> buildMovingBodyEntries(SolveResult? solve) {
+  final bodies = solve?.movingBodies;
+  if (bodies == null || bodies.isEmpty) return const [];
+  // 和星历差得少的排前面：差得越少，「就是它」越站得住。
+  final sorted = [...bodies]
+    ..sort((a, b) => a.separationArcsec.compareTo(b.separationArcsec));
+  return [
+    for (final body in sorted)
+      MovingBodyEntry(
+        name: body.name,
+        separationArcsec: body.separationArcsec,
+        magnitude: body.magnitude,
+        distanceAu: body.distanceAu,
+      ),
+  ];
+}
+
 /// 一段话的总结。给人看的，所以只讲结论，不讲算法。
 String _summary(
   SkyAnalysis analysis,
@@ -624,6 +719,14 @@ String _summary(
       '画面里有 ${solve.deepSkyObjects.length} 个深空天体，'
       '其中最主要的是 $names——${main.sizeLabel}$coverage。',
     );
+  }
+  // 行星是这张照片里唯一「只在这一刻成立」的东西，所以它有话说的时候要单独
+  // 讲一句、并当场把「疑似」两个字说出口——总结里出现的东西用户会当成结论。
+  if (solve != null && solve.movingBodies.isNotEmpty) {
+    final entries = buildMovingBodyEntries(solve);
+    buffer.write('另外，图上 ${entries.map((entry) => entry.describe).join('、')}，'
+        '疑似是行星这一类会动的天体——'
+        '这个判断依赖拍摄时刻，也依赖星历的精度，所以只说疑似。');
   }
   return buffer.toString();
 }

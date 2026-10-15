@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'analysis.dart';
 import 'catalog.dart';
 import 'deepsky.dart';
+import 'ephemeris.dart';
 import 'models.dart';
+import 'moving.dart';
 
 /// 本机离线天区解算（lost-in-space plate solving）。
 ///
@@ -987,6 +989,43 @@ class PlateSolver {
       decoration.figures,
       deepSkyObjects: _sizedDeepSky(result.deepSkyObjects),
     );
+  }
+
+  /// 标出疑似运动天体（行星、太阳）。
+  ///
+  /// [moment] 为 null 就原样返回：行星、彗星、小行星的位置随日期变，没有拍摄
+  /// 时刻就没有判据可说，这时候报任何东西都是猜。
+  ///
+  /// 判据的前一半落在这里——「星表在这一带没有星」。所以这件事必须由持有星表
+  /// 的一侧来做，`moving.dart` 只管几何。放在 [solve] 之外而不是塞进去，是因为
+  /// 在线解算拿回来的坐标同样要过这一道，塞进 solve 就只能覆盖本机那条路。
+  SolveResult annotateMovingBodies(
+    SolveResult result,
+    SkyAnalysis analysis,
+    DateTime? moment,
+  ) {
+    final wcs = result.wcs;
+    if (wcs == null || moment == null) return result;
+
+    // 太阳也从同一组根数白拿一个：地心看到的太阳方向就是地球日光心方向的
+    // 反方向，不需要为它在表里单占一行。
+    final predictions = <PredictedBody>[
+      ...predictedBodies(moment),
+      sunPosition(moment),
+    ];
+
+    final findings = matchMovingBodies(
+      analysis: analysis,
+      wcs: wcs,
+      predictions: predictions,
+      magnitudeZeroPoint: result.magnitudeZeroPoint,
+      // 半径从角分换成度：目录那边的接口是按度收的。查的是全部星表（含 Gaia
+      // 补充层）——一颗 Gaia 星被拍到了也同样是恒星，不是行星。
+      hasCatalogStarNear: (ra, dec, radiusArcmin) =>
+          catalog.starsNear(ra, dec, radiusArcmin / 60).isNotEmpty,
+    );
+    if (findings.isEmpty) return result;
+    return result.withMovingBodies(findings);
   }
 
   /// 给在线解算带回来的深空天体补上角尺寸。

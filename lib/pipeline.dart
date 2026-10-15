@@ -84,10 +84,14 @@ class SkyPipeline {
       ];
 
   /// 跑完整条链路。
+  ///
+  /// [moment] 是拍摄时刻（UTC）。给不出来就是 null——行星、彗星、小行星的位置
+  /// 随日期变，没有时刻这一节不出结论，但其余各步照跑。
   Future<PipelineOutcome> run(
     Uint8List bytes, {
     void Function(PipelineProgress)? onProgress,
     String question = '',
+    DateTime? moment,
   }) async {
     final stages = _stages;
     final total = stages.fold<int>(0, (sum, stage) => sum + stage.weight);
@@ -162,6 +166,15 @@ class SkyPipeline {
           onlineError: onlineError,
         ),
       );
+    } else if (moment != null) {
+      // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
+      // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
+      // 这一步只是几次星表查询，快到不值得为它占一段进度条。
+      try {
+        solve = await worker.annotateMovingBodies(analysis, solve, moment);
+      } catch (error) {
+        warnings.add('运动天体判定未能完成：$error');
+      }
     }
 
     String? explanation;
@@ -360,6 +373,18 @@ class SkyWorker {
   Future<SolveResult> decorate(SolveResult solve) async =>
       await _request('decorate', solve, null) as SolveResult;
 
+  /// 标出疑似运动天体（行星、太阳）。
+  ///
+  /// 也走后台 isolate，理由和 [decorate] 一样：判据要用星表查「这一带有没有
+  /// 星」，而星表只在那边。[moment] 为 null 时那边原样返回，不做任何计算。
+  Future<SolveResult> annotateMovingBodies(
+    SkyAnalysis analysis,
+    SolveResult solve,
+    DateTime? moment,
+  ) async =>
+      await _request('moving', _MovingRequest(analysis, solve, moment), null)
+          as SolveResult;
+
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -373,6 +398,17 @@ class _Pending {
 
   final void Function(double, String)? onProgress;
   final completer = Completer<Object?>();
+}
+
+/// 「标出疑似运动天体」这一步要一起送过去的三样东西。
+class _MovingRequest {
+  const _MovingRequest(this.analysis, this.solve, this.moment);
+
+  final SkyAnalysis analysis;
+  final SolveResult solve;
+
+  /// 拍摄时刻（UTC）。null 表示这张照片没有可用时刻。
+  final DateTime? moment;
 }
 
 /// 后台 isolate 的入口。`Isolate.spawn` 要一个顶层函数。
@@ -420,6 +456,19 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
               message.id,
               'done',
               solver.decorateSolve(message.payload! as SolveResult),
+            ),
+          );
+        case 'moving':
+          final request = message.payload! as _MovingRequest;
+          boot.reply.send(
+            _WorkerReply(
+              message.id,
+              'done',
+              solver.annotateMovingBodies(
+                request.solve,
+                request.analysis,
+                request.moment,
+              ),
             ),
           );
         default:

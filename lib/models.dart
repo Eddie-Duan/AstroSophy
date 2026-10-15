@@ -485,6 +485,81 @@ class Wcs {
   }
 }
 
+/// 一颗疑似运动天体：星历说它在这儿，图上这儿也真有一颗星表解释不了的亮点。
+///
+/// 「疑似」两个字是认真的：判据是「星表在这一带没有星」＋「星历位置对得上
+/// 一颗检出」，两条都成立才写出来。行星的视面、星历近似根数本身的误差、解算
+/// 带来的尺度误差都会让位置差出角分量级，所以 [separationArcsec] 要跟着结论
+/// 一起呈现，让用户自己看得见这份不确定有多宽。
+class MovingBodySuspicion {
+  const MovingBodySuspicion({
+    required this.name,
+    required this.ra,
+    required this.dec,
+    required this.x,
+    required this.y,
+    required this.separationArcsec,
+    this.magnitude,
+    this.distanceAu,
+    this.discDiameterArcsec,
+  });
+
+  /// 中文名，直接给用户看（「木星」）。
+  final String name;
+
+  /// 星历给出的位置。
+  final double ra;
+  final double dec;
+
+  /// 那颗亮点在图上的像素位置。
+  final double x;
+  final double y;
+
+  /// 亮点和星历位置差了多少角秒。
+  final double separationArcsec;
+
+  /// 亮点的星等。没有星等零点时为 null——宁可空着，也不报一个没有绝对含义的
+  /// 仪器星等。
+  final double? magnitude;
+
+  /// 星历给的地心距离（天文单位）。
+  final double? distanceAu;
+
+  /// 星历给的视直径（角秒）。见 `moving.dart` 里 [PredictedBody] 的说明：
+  /// 这一项目前恒为 null。
+  final double? discDiameterArcsec;
+
+  Map<String, Object?> toJson() => {
+        'name': name,
+        'ra_deg': ra,
+        'dec_deg': dec,
+        'x': x,
+        'y': y,
+        'separation_arcsec': separationArcsec,
+        'magnitude': magnitude,
+        'distance_au': distanceAu,
+        'disc_diameter_arcsec': discDiameterArcsec,
+      };
+
+  /// 从历史记录里读回来。
+  ///
+  /// 必须存也必须读：这条结论依赖拍摄时刻，而从历史里重新打开一条记录时，
+  /// 手头只有存下来的这张预览图（上面没有 EXIF），重新推是推不出来的。
+  /// 老记录里没有这个键，读出来就是空的。
+  static MovingBodySuspicion fromJson(Map<String, Object?> json) =>
+      MovingBodySuspicion(
+        name: json['name'] as String? ?? '未命名',
+        ra: _number(json['ra_deg']),
+        dec: _number(json['dec_deg']),
+        x: _number(json['x']),
+        y: _number(json['y']),
+        separationArcsec: _number(json['separation_arcsec']),
+        magnitude: _nullableNumber(json['magnitude']),
+        distanceAu: _nullableNumber(json['distance_au']),
+        discDiameterArcsec: _nullableNumber(json['disc_diameter_arcsec']),
+      );
+}
+
 /// 天区解算的最终产出，附带匹配星表和测光标定。
 class SolveResult {
   const SolveResult({
@@ -504,6 +579,7 @@ class SolveResult {
     this.wcs,
     this.rotationDegrees = 0,
     this.matchedCount = 0,
+    this.movingBodies = const [],
   });
 
   final double centerRa;
@@ -536,6 +612,12 @@ class SolveResult {
 
   /// 与星表成功匹配的星数，用于展示解算质量。
   final int matchedCount;
+
+  /// 疑似运动天体（行星、彗星、小行星）。
+  ///
+  /// 只在拍到了拍摄时刻、并且星历位置附近真有一颗星表解释不了的亮点时才有
+  /// 内容。没有时刻就是空的——位置随日期变，没有日期就没有判据可说。
+  final List<MovingBodySuspicion> movingBodies;
 
   static const empty = SolveResult(
     centerRa: 0,
@@ -574,6 +656,7 @@ class SolveResult {
       wcs: wcs,
       rotationDegrees: rotationDegrees,
       matchedCount: matchedCount,
+      movingBodies: movingBodies,
     );
   }
 
@@ -603,6 +686,32 @@ class SolveResult {
         wcs: wcs,
         rotationDegrees: rotationDegrees,
         matchedCount: matchedCount,
+        movingBodies: movingBodies,
+      );
+
+  /// 附上疑似运动天体的判定结果。
+  ///
+  /// 单独一步而不是塞进 [solve]：这件事需要拍摄时刻，而时刻是主 isolate 才有
+  /// 的信息；而且在线解算拿回来的坐标同样要过这一道，放在 solve 里就只能覆盖
+  /// 本机那条路。
+  SolveResult withMovingBodies(List<MovingBodySuspicion> bodies) => SolveResult(
+        centerRa: centerRa,
+        centerDec: centerDec,
+        arcsecPerPixel: arcsecPerPixel,
+        namedStars: namedStars,
+        deepSkyObjects: deepSkyObjects,
+        matchedStars: matchedStars,
+        magnitudeZeroPoint: magnitudeZeroPoint,
+        magnitudeScatter: magnitudeScatter,
+        catalogWarning: catalogWarning,
+        source: source,
+        fieldOfViewDegrees: fieldOfViewDegrees,
+        constellations: constellations,
+        constellationFigures: constellationFigures,
+        wcs: wcs,
+        rotationDegrees: rotationDegrees,
+        matchedCount: matchedCount,
+        movingBodies: bodies,
       );
 
   Map<String, Object?> toJson() => {
@@ -623,6 +732,7 @@ class SolveResult {
         'wcs': wcs?.toJson(),
         'rotation_degrees': rotationDegrees,
         'matched_count': matchedCount,
+        'moving_bodies': movingBodies.map((body) => body.toJson()).toList(),
       };
 
   static SolveResult fromJson(Map<String, Object?> json) => SolveResult(
@@ -653,6 +763,8 @@ class SolveResult {
             : null,
         rotationDegrees: _number(json['rotation_degrees']),
         matchedCount: (_nullableNumber(json['matched_count']) ?? 0).round(),
+        movingBodies:
+            _objectList(json['moving_bodies'], MovingBodySuspicion.fromJson),
       );
 }
 
