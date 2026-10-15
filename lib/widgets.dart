@@ -546,11 +546,38 @@ class DetectedStarsPainter extends CustomPainter {
 /// 星点，进度往前走，星星一点点亮起来。解算动辄要等一两分钟，进度条是这
 /// 段时间里屏幕上唯一在动的东西，做得像「星空正在显影」比一根灰条好。
 class SkyProgressBar extends StatelessWidget {
-  const SkyProgressBar({super.key, required this.value, this.height = 10});
+  const SkyProgressBar({
+    super.key,
+    required this.value,
+    this.height = 10,
+    this.online = false,
+  });
 
   /// 0–1。
   final double value;
   final double height;
+
+  /// 这一段是不是在跑在线解算。
+  ///
+  /// 配色跟着换：前面几步是「手机上在算」，照片没出过门；这一段是「照片已经
+  /// 传上去了」，等的东西和等的心态都不一样。用户瞥一眼进度条就知道现在到
+  /// 哪一段，不必去读那行小字。
+  final bool online;
+
+  /// 本机那几步的填充色：薄荷绿，和全应用的主强调色一致。
+  static const _localColours = <Color>[
+    Color(0xFF2E8C7A),
+    kMint,
+    Color(0xFFCFF6EA),
+  ];
+
+  /// 在线那一段的填充色：琥珀。和「低可信 / 需要留意」用的是同一族颜色，
+  /// 提醒的是「这一步依赖外部服务」，而不是「出错了」。
+  static const _onlineColours = <Color>[
+    Color(0xFF8A6520),
+    Color(0xFFFFDE77),
+    Color(0xFFFFF3C4),
+  ];
 
   @override
   Widget build(BuildContext context) => TweenAnimationBuilder<double>(
@@ -572,13 +599,13 @@ class SkyProgressBar extends StatelessWidget {
                   SizedBox(
                     width: constraints.maxWidth * animated,
                     height: height,
-                    child: const DecoratedBox(
+                    child: DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [Color(0xFF2E8C7A), kMint, Color(0xFFCFF6EA)],
+                          colors: online ? _onlineColours : _localColours,
                         ),
                       ),
-                      child: CustomPaint(painter: _StarRushPainter()),
+                      child: const CustomPaint(painter: _StarRushPainter()),
                     ),
                   ),
                 ],

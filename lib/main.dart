@@ -365,7 +365,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
               child: Text(
-                '三张都是真实拍摄的星空照片，可以直接走完整的解析流程。',
+                '四张都是真实拍摄的星空照片，可以直接走完整的解析流程。',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
             ),
@@ -396,7 +396,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     try {
       final bytes = await loadDemoImage(choice);
       if (!mounted) return;
-      _setImage(bytes, '${choice.title}.jpg');
+      // 演示图里没有 EXIF（入库前裁掉了），时刻随条目一起给；没有就给 null，
+      // `_setImage` 会照常去读文件，读不到就是「未读到」。
+      _setImage(bytes, '${choice.title}.jpg', moment: choice.moment);
     } catch (error) {
       _showError('读取演示图片失败：$error');
     }
@@ -856,15 +858,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                   Text(
                     '${(progress.fraction * 100).round()}%',
-                    style: const TextStyle(
-                      color: kMint,
+                    style: TextStyle(
+                      color: progress.online
+                          ? const Color(0xFFFFDE77)
+                          : kMint,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 10),
-              SkyProgressBar(value: progress.fraction),
+              SkyProgressBar(
+                value: progress.fraction,
+                online: progress.online,
+              ),
             ],
           ),
         ),

@@ -14,8 +14,8 @@ double luminanceOf(imglib.Pixel pixel) =>
 
 void main() {
   group('演示星图', () {
-    test('三张都在仓库里，且都能解码', () {
-      expect(demoImages.length, 3);
+    test('四张都在仓库里，且都能解码', () {
+      expect(demoImages.length, 4);
       for (final image in demoImages) {
         expect(File(image.asset).existsSync(), isTrue,
             reason: '${image.asset} 不存在——pubspec.yaml 里的 assets 少登记了？');
@@ -56,18 +56,18 @@ void main() {
             worstRow = y;
           }
         }
-        // 实测三张分别是 3 / 1 / 3 个亮像素，这里留了四倍余量。
+        // 实测四张分别是 3 / 1 / 1 / 3 个亮像素，这里留了四倍余量。
         expect(worst, lessThan(12),
             reason: '${image.asset} 第 $worstRow 行有 $worst 个亮像素，'
                 '底部的信息条可能没裁干净');
       }
     });
 
-    test('三张演示图覆盖了不同的难度', () {
-      // 三张都是同一台设备同一天拍的，但目标性质不同：星系、疏散星团、
-      // 稀疏星场。星点密度差一个量级，本机解算在这三种情况下的表现很不一样
-      // ——演示图要是全挑星点密集的，用户第一次试就会觉得「本机解算总是
-      // 成功」，真拍起来才发现不是。
+    test('四张演示图覆盖了不同的难度', () {
+      // 四种目标性质不同：星系、疏散星团、稀疏星场、一颗亮行星。星点密度差
+      // 一个量级，本机解算在这几种情况下的表现很不一样——演示图要是全挑星点
+      // 密集的，用户第一次试就会觉得「本机解算总是成功」，真拍起来才发现不是。
+      // 最后那张还多带一样东西：拍摄时刻，行星那一节才有判据。
       final densities = <String, double>{};
       for (final image in demoImages) {
         final decoded = imglib.decodeImage(readAsset(image.asset))!;

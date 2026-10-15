@@ -39,16 +39,32 @@ class PredictedBody {
   final double? discDiameterArcsec;
 }
 
-/// 星历位置和检出点之间允许多大的偏差。
+/// 星历位置和图上那个亮点之间允许多大的偏差。
 ///
 /// 这个数不是「星历有多准」，是「星历有多不准」。出处那张近似根数表在
-/// 1800–2050 区间内，内行星的位置误差可以到角分量级；再叠加解算本身带来的
-/// 零点几角分的像素尺度误差，两角分是个留了余量又不至于把无关的星圈进来的数。
+/// 1800–2050 区间内只给到角分量级，而且**外行星更差**：木星和土星的 5:2
+/// 近共振（「大不等式」）在土星黄经上有约 0.06° 的周期项，两体近似里根本
+/// 没有这一项。实测一张 2026-09-01 的土星照片：预报位置和图上那个亮斑
+/// 相差 4.3 角分，而当时这个数只有 2 角分——位置明明对得上，却被判成对不上。
 ///
-/// 放宽它的代价不对称：放宽只会让「亮点对上了」更容易成立，而判据的另一半
-/// （这一带星表里没有星）拦住了绝大多数误报——一颗恒星要是正好在预测位置上，
-/// 它自己就会被星表解释掉。所以这里宁可宽一点。
-const double ephemerisToleranceArcmin = 2.0;
+/// 放宽它**不等于**放宽判据：真正拦误报的是另一半——「这个亮点星表解释不了
+/// 吗」，那一问用的半径是 [catalogGateArcmin]，小得多，而且问的是候选自己的
+/// 位置，星历的偏差传不过去。
+const double ephemerisToleranceArcmin = 8.0;
+
+/// 判定「这颗亮点能不能被星表解释掉」时，向星表查的半径。
+///
+/// 要小。它问的是「我已经找到的那个亮点，星表里有没有对应的恒星」，问的是
+/// **候选自己**的位置。半径一大，一颗离得很远的恒星也能把行星顶掉。
+const double catalogGateArcmin = 2.0;
+
+/// 多大的「非星空」亮斑还够格当行星候选。
+///
+/// 行星的视面加上曝光过度的那圈光晕，在画面里只占很小一块；占掉一大片的
+/// 是被解析开了的延展目标——月亮、窗玻璃、路灯——那是另一回事。没有这个
+/// 上限的话，只要行星恰好预报在月亮附近（冲日、掩星前后很容易），月球那
+/// 一大团就会被当成那颗行星报出去。
+const double _blobAreaFractionLimit = 0.04;
 
 /// 检出至少要有多少置信度才够格被当成行星。
 ///
@@ -63,14 +79,62 @@ const double _minimumConfidence = 0.25;
 /// 在粗尺度上仍然可能成立。
 const double _minimumTolerancePixels = 3.0;
 
+/// 图上够格当行星候选的一个位置。
+///
+/// 两类：普通星点，以及被判成「非星空」的大亮斑。
+class _Candidate {
+  const _Candidate({
+    required this.x,
+    required this.y,
+    required this.isBlob,
+    this.star,
+  });
+
+  final double x;
+  final double y;
+
+  /// 是不是「大亮斑」那一类。
+  final bool isBlob;
+
+  /// 对应的星点；大亮斑没有星点，为 null。
+  final DetectedStar? star;
+}
+
+/// 收集候选。
+///
+/// 大亮斑是刻意收进来的：行星的视面加上曝光过度的那圈光晕够大够亮，会被遮罩
+/// 成一块「非星空」区域，于是在星点列表里根本不存在。只看星点，等于「行星越
+/// 大越亮越认不出来」——正好把最该认出来的那一种漏掉。
+List<_Candidate> _candidatesOf(SkyAnalysis analysis) {
+  final frameArea = analysis.width * analysis.height;
+  return [
+    for (final star in analysis.compactSources)
+      if (!star.isRejected && star.confidence >= _minimumConfidence)
+        _Candidate(x: star.x, y: star.y, isBlob: false, star: star),
+    for (final region in analysis.maskRegions)
+      if (region.kind == MaskKind.blob &&
+          region.width * region.height <= frameArea * _blobAreaFractionLimit)
+        _Candidate(
+          x: region.x + region.width / 2,
+          y: region.y + region.height / 2,
+          isBlob: true,
+        ),
+  ];
+}
+
 /// 在图上找出「星历说在这儿、星表又解释不了」的亮点。
 ///
 /// [hasCatalogStarNear] 由调用方给：星表只在解算那一侧，这里不该知道它的形状。
-/// 它的语义是「以 (ra, dec) 为中心、半径 [ephemerisToleranceArcmin] 角分内，
-/// 星表里有没有一颗星」——有，就说明那颗亮点是恒星，不是行星。
+/// 它的语义是「以 (ra, dec) 为中心、半径 [catalogGateArcmin] 角分内，星表里
+/// 有没有一颗星」——有，就说明那颗亮点是恒星，不是行星。
 ///
 /// 两个条件缺一不可，这是刻意的：只看「星表没星」会把噪声、坏点、被拉长的
 /// 杂讯都算成行星；只看「位置对得上」会在满场恒星的密集天区里胡说八道。
+///
+/// 两件事的顺序也是刻意的：**先找候选，再拿候选的位置去问星表**。反过来
+/// （先按预测位置问星表）在星历偏出几角分的时候问的就是另一个地方的事，
+/// 结果是最该认出来的那颗行星被顶掉，而星历的偏差本来是这套近似根数的
+/// 固有性质，不是异常。
 List<MovingBodySuspicion> matchMovingBodies({
   required SkyAnalysis analysis,
   required Wcs wcs,
@@ -83,17 +147,15 @@ List<MovingBodySuspicion> matchMovingBodies({
   final scale = wcs.arcsecPerPixel;
   if (!scale.isFinite || scale <= 0) return const [];
 
-  // 只取一次 `compactSources`：它每读一次都要按轴比过滤一遍全部检出。
-  final detections = [
-    for (final star in analysis.compactSources)
-      if (!star.isRejected && star.confidence >= _minimumConfidence) star,
-  ];
-  if (detections.isEmpty) return const [];
+  // 只取一次：`compactSources` 每读一次都要按轴比过滤一遍全部检出。
+  final candidates = _candidatesOf(analysis);
+  if (candidates.isEmpty) return const [];
 
   final tolerancePixels = math.max(
     _minimumTolerancePixels,
     ephemerisToleranceArcmin * 60 / scale,
   );
+  final toleranceSquared = tolerancePixels * tolerancePixels;
 
   final findings = <MovingBodySuspicion>[];
   for (final body in predictions) {
@@ -106,39 +168,50 @@ List<MovingBodySuspicion> matchMovingBodies({
         y > analysis.height + tolerancePixels) {
       continue;
     }
-    // 前一半判据：星表在这一带得有「没有星」这个结论。有星就收手。
-    if (hasCatalogStarNear(body.ra, body.dec, ephemerisToleranceArcmin)) {
-      continue;
-    }
 
-    DetectedStar? nearest;
-    var nearestSquared = double.infinity;
-    for (final star in detections) {
-      final dx = star.x - x;
-      final dy = star.y - y;
+    _Candidate? best;
+    var bestRank = 2;
+    var bestSquared = double.infinity;
+    for (final candidate in candidates) {
+      final dx = candidate.x - x;
+      final dy = candidate.y - y;
       final squared = dx * dx + dy * dy;
-      if (squared < nearestSquared) {
-        nearestSquared = squared;
-        nearest = star;
+      if (squared > toleranceSquared) continue;
+      // 后一半判据：这个候选星表解释不了吗？问的是**它自己**的位置。
+      final (ra, dec) = wcs.pixelToWorld(candidate.x, candidate.y);
+      if (hasCatalogStarNear(ra, dec, catalogGateArcmin)) continue;
+      // 大亮斑压过普通点源，距离只在自己那一档里比。
+      //
+      // 不这样排的话，实测那张土星照片会圈错地方：土星本体是一块 31×29 的
+      // 饱和光斑，而光晕边缘被检出一串 flux≈0 的假点，其中一个离星历预测
+      // 位置（16px）比土星本体（24.8px）还近。光晕里全是噪声峰，按距离比，
+      // 行星永远输给紧贴着它的噪声；而亮斑本身在画面里很稀有——它一出现，
+      // 就是在说「这里有个大家伙」。
+      final rank = candidate.isBlob ? 0 : 1;
+      final better =
+          rank < bestRank || (rank == bestRank && squared < bestSquared);
+      if (better) {
+        best = candidate;
+        bestRank = rank;
+        bestSquared = squared;
       }
     }
-    if (nearest == null) continue;
-    final separationPixels = math.sqrt(nearestSquared);
-    if (separationPixels > tolerancePixels) continue;
+    if (best == null) continue;
 
     findings.add(
       MovingBodySuspicion(
         name: body.name,
         ra: body.ra,
         dec: body.dec,
-        x: nearest.x,
-        y: nearest.y,
-        separationArcsec: separationPixels * scale,
+        x: best.x,
+        y: best.y,
+        separationArcsec: math.sqrt(bestSquared) * scale,
         // 没有星等零点就报 null，而不是报仪器星等：仪器星等是个没有绝对
-        // 含义的数，用户拿它和「这颗比天狼星暗」之类的常识对不上。
-        magnitude: magnitudeZeroPoint == null
+        // 含义的数，用户拿它和「这颗比天狼星暗」之类的常识对不上。大亮斑
+        // 也是一样——它已经曝到饱和，测出来的通量没有意义。
+        magnitude: magnitudeZeroPoint == null || best.star == null
             ? null
-            : nearest.instrumentalMagnitude + magnitudeZeroPoint,
+            : best.star!.instrumentalMagnitude + magnitudeZeroPoint,
         distanceAu: body.distanceAu,
         discDiameterArcsec: body.discDiameterArcsec,
       ),

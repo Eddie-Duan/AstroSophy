@@ -90,6 +90,37 @@ void main() {
     );
   }, timeout: const Timeout(Duration(minutes: 5)));
 
+  test('demo_saturn 本机解算并认出画面里的土星', () {
+    final analysis = SkyAnalysis.analyze(
+      File('assets/demo/demo_saturn.jpg').readAsBytesSync(),
+    );
+    final solve = solver.solve(analysis);
+    expect(solve, isNotNull, reason: '这张图是演示图，必须能解出来');
+    expect(solve!.source, SolveSource.local);
+    // 容差给到 0.2° 是为了说「这一片天区」，不是某一次解算的小数点。
+    expect(solve.centerRa, closeTo(13.13, 0.2));
+    expect(solve.centerDec, closeTo(2.95, 0.2));
+
+    // 拍摄时刻来自 demo.dart 的条目——这张图入库前裁掉了 EXIF，时间只能跟着
+    // 条目写下来。没有它就出不了行星结论，所以这条用例同时守住那段时间。
+    final annotated = solver.annotateMovingBodies(
+      solve,
+      analysis,
+      DateTime.utc(2026, 9, 1, 14, 38), // 2026-09-01 22:38（东八区）
+    );
+    expect(
+      annotated.movingBodies.map((body) => body.name),
+      contains('土星'),
+      reason: '画面正中最亮的那一块就是土星',
+    );
+    // 报出来的必须是那块亮斑本体。光晕边缘还有一串 flux≈0 的假点，其中一个
+    // 离星历位置比土星本体更近——按距离取最近就会圈到噪声峰上去。
+    final saturn =
+        annotated.movingBodies.firstWhere((body) => body.name == '土星');
+    expect(saturn.x, closeTo(388.5, 8), reason: '土星本体的横向位置');
+    expect(saturn.y, closeTo(669.5, 8), reason: '土星本体的纵向位置');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
   test('demo_vesta 本机解算', () {
     final analysis = SkyAnalysis.analyze(
       File('assets/demo/demo_vesta.jpg').readAsBytesSync(),

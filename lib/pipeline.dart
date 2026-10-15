@@ -15,13 +15,19 @@ import 'solver.dart';
 
 /// 一键解析的进度快照。
 class PipelineProgress {
-  const PipelineProgress(this.fraction, this.stage);
+  const PipelineProgress(this.fraction, this.stage, {this.online = false});
 
   /// 0–1，界面上的进度条直接用这个值。
   final double fraction;
 
   /// 当前在做什么，写成人话。
   final String stage;
+
+  /// 这一段是不是在跑在线解算。
+  ///
+  /// 界面拿它换进度条的配色：前面几步是「手机上在算」，照片没出过门；这一段
+  /// 是「照片已经传上去了」，等的东西和等的心态都不是一回事。
+  final bool online;
 
   @override
   String toString() => '${(fraction * 100).toStringAsFixed(0)}% · $stage';
@@ -79,7 +85,7 @@ class SkyPipeline {
   List<_Stage> get _stages => [
         const _Stage('正在分析星图', 20),
         const _Stage('正在本机解算天区', 26),
-        if (_canUpload) const _Stage('正在在线解算天区', 34),
+        if (_canUpload) const _Stage('正在在线解算天区', 34, online: true),
         if (_canExplain) const _Stage('正在生成解读', 16),
       ];
 
@@ -110,6 +116,7 @@ class SkyPipeline {
         PipelineProgress(
           start + (end - start) * local.clamp(0.0, 1.0),
           text ?? stages[index].name,
+          online: stages[index].online,
         ),
       );
     }
@@ -207,12 +214,15 @@ class SkyPipeline {
 }
 
 class _Stage {
-  const _Stage(this.name, this.weight);
+  const _Stage(this.name, this.weight, {this.online = false});
 
   final String name;
 
   /// 相对权重，不必加起来是 1。
   final int weight;
+
+  /// 这一步在跑在线解算，进度条要换配色。
+  final bool online;
 }
 
 // ---------------------------------------------------------------------------

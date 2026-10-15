@@ -105,13 +105,21 @@ enum CaptureTimeSource {
   gps,
 
   /// 图片里没有可用时间，用户手填的。
-  manual;
+  manual,
+
+  /// 演示图自带的拍摄时间。
+  ///
+  /// 这几张是从原图上裁下来的，EXIF 早被裁没了，时间只能跟着图一起写进
+  /// 代码里。它和「手填」不同：这是拍摄者提供的原始信息，不是用户在现场
+  /// 现补的，报告里该分清楚。
+  demo;
 
   String get label => switch (this) {
         CaptureTimeSource.dateTimeOriginal => '照片 EXIF 的拍摄时间',
         CaptureTimeSource.fileModified => '照片 EXIF 的文件时间',
         CaptureTimeSource.gps => '照片 EXIF 的 GPS 时间',
         CaptureTimeSource.manual => '你手动填写的时间',
+        CaptureTimeSource.demo => '演示图自带的拍摄时间',
       };
 }
 
