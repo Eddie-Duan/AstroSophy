@@ -38,7 +38,7 @@ void main() {
   testWidgets('第一页讲清楚这是什么，按钮是「下一步」', (tester) async {
     await pumpOnboarding(tester, onDone: () {});
     expect(find.text('AstroSophy'), findsOneWidget);
-    expect(find.text('嗨，我是 Nox，你的观星搭子。'), findsOneWidget);
+    expect(find.text('拍下星空，剩下交给它'), findsOneWidget);
     expect(find.text('下一步'), findsOneWidget);
     expect(find.text('开始探索'), findsNothing);
   });
@@ -64,9 +64,9 @@ void main() {
     // 每页的标题，翻了就该出现。
     const titles = [
       'AstroSophy',
-      '解析在本机进行',
-      '结果能一边看一边点',
-      '存下来，慢慢看',
+      '照片不出手机',
+      '点一下，认出是哪颗',
+      '存下来，随时翻',
     ];
     for (var page = 0; page < titles.length; page++) {
       expect(find.text(titles[page]), findsOneWidget, reason: '第 ${page + 1} 页');
@@ -79,10 +79,10 @@ void main() {
 
   testWidgets('圆点能直接跳页', (tester) async {
     await pumpOnboarding(tester, onDone: () {});
-    // 第三个圆点的语义标签就是「第 3 页，共 4 页」，点它应该跳到保存那一页。
+    // 第三个圆点的语义标签就是「第 3 页，共 4 页」，点它应该跳到结果那一页。
     await tester.tap(find.bySemanticsLabel('第 3 页，共 4 页'));
     await tester.pumpAndSettle();
-    expect(find.text('结果能一边看一边点'), findsOneWidget);
+    expect(find.text('点一下，认出是哪颗'), findsOneWidget);
   });
 
   testWidgets('首次启动只给「跳过」，不给返回键', (tester) async {
@@ -124,5 +124,27 @@ void main() {
       (images.first.image as AssetImage).assetName,
       'assets/brand/astrosophy_mascot.png',
     );
+  });
+
+  testWidgets('四页各配一张自己的插画，不是同一张重复四遍', (tester) async {
+    // 这条盯的是「四页共用一张吉祥物」那个旧做法：图片换成一张不难，难的是别
+    // 在下次改版时又退回去。
+    await pumpOnboarding(tester, onDone: () {});
+    final assets = <String>[];
+    for (var page = 0; page < 4; page++) {
+      final names = tester
+          .widgetList<Image>(find.byType(Image))
+          .where((image) => image.image is AssetImage)
+          .map((image) => (image.image as AssetImage).assetName)
+          .toList();
+      expect(names, hasLength(1), reason: '第 ${page + 1} 页只该有一张插画');
+      assets.addAll(names);
+      if (page < 3) {
+        await tester.tap(find.text('下一步'));
+        await tester.pumpAndSettle();
+      }
+    }
+    expect(assets, hasLength(4));
+    expect(assets.toSet(), hasLength(4), reason: '四页必须是四张不同的图');
   });
 }

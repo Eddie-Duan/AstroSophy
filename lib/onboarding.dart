@@ -8,6 +8,10 @@ import 'theme.dart';
 /// 所以无论左右滑还是点按钮，圆点和按钮都不会跳位。四页的顺序按用户第一次
 /// 拿到照片的真实顺序排：先导入，再看它在本机跑出了什么，然后是怎么读结果，
 /// 最后是保存下来以后还能翻。
+///
+/// 文案刻意压到「一句主张 + 一句补充 + 三个短语」：引导页是广告位，用户只会扫
+/// 一眼，成段的解释放在帮助里更合适。每页配一张自己的插画（见
+/// `tools/make_onboarding_art.py`），四页四种风格，翻页才有节奏。
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key, required this.onDone, this.isReplay = false});
 
@@ -110,117 +114,51 @@ class _OnboardingPageState extends State<OnboardingPage> {
   // -- 四页内容 --
 
   Widget _welcomeSlide() => _pageShell([
-        _mascotDialogue('嗨，我是 Nox，你的观星搭子。'),
-        const SizedBox(height: 16),
-        const Text(
-          'AstroSophy',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          '把随手拍下的星空，变成一张看得懂的观星记录。',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 14.5,
-            height: 1.3,
-            fontWeight: FontWeight.w600,
-            color: kMint,
-          ),
-        ),
-        const SizedBox(height: 14),
-        const Text(
-          '不用赤道仪，也不用先知道自己在拍哪片天。选一张照片，'
-          '剩下的交给手机——找出星点、认出天区、把结果讲成你能看懂的话。',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, height: 1.4, color: Color(0xFFA6B5C8)),
+        const _Hero(
+          asset: 'assets/brand/astrosophy_mascot.png',
+          label: '吉祥物 Nox——一颗抱着望远镜的星星',
         ),
         const SizedBox(height: 18),
-        const Center(child: _Pill('内置三张演示星图，没有照片也能先试一遍')),
+        const _Headline('AstroSophy'),
+        const _Lead('拍下星空，剩下交给它'),
+        const SizedBox(height: 18),
+        const _Chips(['不用赤道仪', '不用懂天文', '内置演示图']),
       ]);
 
   Widget _localSlide() => _pageShell([
-        _mascotDialogue('照片默认不出手机——我在本机把星点找出来。'),
-        const SizedBox(height: 16),
-        const _SlideTitle('解析在本机进行'),
-        const SizedBox(height: 8),
-        const Text(
-          '本机分析和本机天区解算都在手机上跑，用不着联网，也用不着账号。',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13.5, height: 1.4, color: Color(0xFFA6B5C8)),
+        const _Hero(
+          asset: 'assets/brand/astrosophy_onboarding_local.png',
+          label: '手机屏幕里亮着一张星图',
         ),
         const SizedBox(height: 18),
-        const _FeatureRow(
-          icon: Icons.memory_rounded,
-          title: '本机分析',
-          body: '测光、对焦、噪点和光污染都在手机上算，照片不离开设备。',
-        ),
-        const _FeatureRow(
-          icon: Icons.travel_explore_rounded,
-          title: '本机天区解算',
-          body: '带了一份亮星目录，直接对着星点算坐标，认出你拍的是哪片天。',
-        ),
-        const _FeatureRow(
-          icon: Icons.cloud_off_rounded,
-          title: '在线解算和 AI 都是可选的',
-          body: '只有本机认不出来时才需要联网，而且要你单独点过同意才会传。',
-        ),
+        const _Headline('照片不出手机'),
+        const _Lead('解析全程都在本机跑'),
+        const SizedBox(height: 18),
+        const _Chips(['不用联网', '不用账号', '上传先问你']),
       ]);
 
   Widget _resultSlide() => _pageShell([
-        _mascotDialogue('点列表里第 10 项，图上就会圈出第 10 颗。'),
-        const SizedBox(height: 16),
-        const _SlideTitle('结果能一边看一边点'),
-        const SizedBox(height: 8),
-        const Text(
-          '上半屏是标好的图，下半屏是图里的亮点，两边的编号一一对应。',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13.5, height: 1.4, color: Color(0xFFA6B5C8)),
+        const _Hero(
+          asset: 'assets/brand/astrosophy_onboarding_result.png',
+          label: '手指点中画面里的一颗星',
         ),
         const SizedBox(height: 18),
-        const _FeatureRow(
-          icon: Icons.touch_app_rounded,
-          title: '点哪一颗就定位哪一颗',
-          body: '点图上的亮点或者点列表，另一边跟着高亮，不用自己数格子。',
-        ),
-        const _FeatureRow(
-          icon: Icons.remove_circle_outline,
-          title: '拉长的亮点可以剔除',
-          body: '拖着尾巴的多半是卫星、飞机或者手抖。留着还是划掉，你说了算。',
-        ),
-        const _FeatureRow(
-          icon: Icons.compare_rounded,
-          title: '原图和处理图随时切换',
-          body: '处理图扣掉天空背景、抹掉非星空的部分，星场本身看得更清楚。',
-        ),
+        const _Headline('点一下，认出是哪颗'),
+        const _Lead('图上和列表，编号一一对应'),
+        const SizedBox(height: 18),
+        const _Chips(['边看边点', '剔除拖线', '原图／处理图']),
       ]);
 
   Widget _keepSlide() => _pageShell([
-        _mascotDialogue('解析完记得保存，回头还能翻出来看。'),
-        const SizedBox(height: 16),
-        const _SlideTitle('存下来，慢慢看'),
-        const SizedBox(height: 8),
-        const Text(
-          '一次拍摄的记录会连同当时的测量结果一起留在手机上。',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13.5, height: 1.4, color: Color(0xFFA6B5C8)),
+        const _Hero(
+          asset: 'assets/brand/astrosophy_onboarding_keep.png',
+          label: '夹着星空照片的相册',
         ),
         const SizedBox(height: 18),
-        const _FeatureRow(
-          icon: Icons.bookmark_add_outlined,
-          title: '保存这一次的结果',
-          body: '存档里放的是缩过的预览图，手机相册里的原图不受影响。',
-        ),
-        const _FeatureRow(
-          icon: Icons.collections_bookmark_outlined,
-          title: '在「观星记录」里回看',
-          body: '右上角的书架图标就是入口，点任意一条能接着看完整结果。',
-        ),
-        const _FeatureRow(
-          icon: Icons.delete_outline,
-          title: '不想要了就删掉',
-          body: '删除会连图片一起清掉，界面里会写清楚这条占了多少空间。',
-        ),
+        const _Headline('存下来，随时翻'),
+        const _Lead('原图不动，只存预览'),
+        const SizedBox(height: 18),
+        const _Chips(['一键保存', '书架回看', '随时删除']),
       ]);
 
   // -- 组件 --
@@ -243,60 +181,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
             ),
           );
         },
-      );
-
-  Widget _mascotDialogue(String dialogue) => Semantics(
-        label: 'Nox 说：$dialogue',
-        child: Row(
-          children: [
-            SizedBox(
-              width: 116,
-              height: 116,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: Image.asset(
-                  'assets/brand/astrosophy_mascot.png',
-                  fit: BoxFit.cover,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF17263A),
-                      border: Border.all(color: const Color(0xFF1D2B40)),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(
-                      dialogue,
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        height: 1.3,
-                        color: Color(0xFFD8E4F2),
-                      ),
-                    ),
-                  ),
-                  Transform.translate(
-                    offset: const Offset(16, -1),
-                    child: const CustomPaint(
-                      size: Size(16, 10),
-                      painter: _SpeechBubbleTailPainter(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
       );
 
   /// 圆点指示器：可点击跳页。
@@ -333,8 +217,34 @@ class _OnboardingPageState extends State<OnboardingPage> {
       );
 }
 
-class _SlideTitle extends StatelessWidget {
-  const _SlideTitle(this.text);
+/// 每页顶上那张插画。
+///
+/// 四页各用一张不同风格的图（见 `tools/make_onboarding_art.py`），而不是同一
+/// 张换个台词——翻到第二页还能看到新东西，用户才有往下翻的理由。图本身是深蓝
+/// 底的，压在页面背景上不会出现一块亮斑。
+class _Hero extends StatelessWidget {
+  const _Hero({required this.asset, required this.label});
+
+  final String asset;
+
+  /// 图在讲什么。这几张图就是内容本身，不写一句的话读屏用户什么都听不到。
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 188, maxHeight: 188),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: Image.asset(asset, fit: BoxFit.cover, semanticLabel: label),
+          ),
+        ),
+      );
+}
+
+/// 每页只有一句主张，这是最大的一行。
+class _Headline extends StatelessWidget {
+  const _Headline(this.text);
 
   final String text;
 
@@ -343,67 +253,46 @@ class _SlideTitle extends StatelessWidget {
         text,
         textAlign: TextAlign.center,
         style: const TextStyle(
-          fontSize: 21,
+          fontSize: 25,
           fontWeight: FontWeight.bold,
-          color: Color(0xFFFFDE77),
+          height: 1.2,
         ),
       );
 }
 
-/// 「图标 + 一句话标题 + 两行解释」。四页里凡是并列讲几件事的地方都用它，
-/// 免得每页各写一套排版。
-class _FeatureRow extends StatelessWidget {
-  const _FeatureRow({
-    required this.icon,
-    required this.title,
-    required this.body,
-  });
+/// 标题下面那句补充。一行说完，不铺开解释。
+class _Lead extends StatelessWidget {
+  const _Lead(this.text);
 
-  final IconData icon;
-  final String title;
-  final String body;
+  final String text;
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: kMint.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, size: 20, color: kMint),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    body,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      height: 1.35,
-                      color: Color(0xFFA6B5C8),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 14.5,
+            fontWeight: FontWeight.w600,
+            color: kMint,
+          ),
         ),
+      );
+}
+
+/// 几个短语，替代原先成段的说明。
+class _Chips extends StatelessWidget {
+  const _Chips(this.items);
+
+  final List<String> items;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: [for (final item in items) _Pill(item)],
       );
 }
 
@@ -429,30 +318,6 @@ class _Pill extends StatelessWidget {
           ),
         ),
       );
-}
-
-class _SpeechBubbleTailPainter extends CustomPainter {
-  const _SpeechBubbleTailPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final tail = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width, 0)
-      ..lineTo(4, size.height)
-      ..close();
-    canvas.drawPath(tail, Paint()..color = const Color(0xFF17263A));
-    canvas.drawPath(
-      tail,
-      Paint()
-        ..color = const Color(0xFF1D2B40)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _SpeechBubbleTailPainter oldDelegate) => false;
 }
 
 /// 翻页时的淡入 + 轻微上移，让滑动更有层次（跟手滑动本身仍由 PageView 负责）。

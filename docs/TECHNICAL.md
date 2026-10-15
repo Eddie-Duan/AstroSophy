@@ -10,7 +10,7 @@
 - 结果页的图内亮点列表按“亮星 / 亮点 / 可疑飞线”分成三组，每组可折叠，也能整组把圆圈从图上隐去或显示回来（默认只显示亮星那一组）。分组只是显示方式：每项记的是它在全局编号里的下标，所以列表里第 7 项和图上标着 ⑦ 的永远是同一颗星。判“有没有名字”用的是图上标注星名的那套判据和同一个阈值，两边不会各说各话。
 - 看图区可以双指缩放和平移，圆圈、编号和星座连线和图在同一棵被变换的子树里，所以放大时跟着一起放大，指的还是那颗星；放大后右上角会出现一个“回到整幅”的按钮，因为把比例精确捏回 1 倍并不顺手。
 - AI 解读按 Markdown 渲染（`lib/markdown.dart`），标题、粗体、列表、引用、代码块、表格和链接都会排版后显示，不会把 `##`、`**` 原样留在屏幕上；链接只显示文字，不跳转。不认识的语法当普通文字显示，宁可少排版也不吞内容。
-- 启动器图标与引导页吉祥物 Nox 由 Recraft 在开发期生成矢量稿（前者渲染为 Android 多密度及自适应图标资源，后者栅格化为 PNG 后随应用分发）；Recraft 凭据不进入应用或仓库，见 [`tools/make_mascot.py`](../tools/make_mascot.py)。
+- 启动器图标与引导页插画（吉祥物 Nox 及另外三页）由 Recraft 在开发期生成（前者渲染为 Android 多密度及自适应图标资源，后者栅格化为 PNG 后随应用分发）；Recraft 凭据不进入应用或仓库，见 [`tools/make_onboarding_art.py`](../tools/make_onboarding_art.py)。
 - 图片选择支持常见图片和相机 RAW 文件。RAW 解码尝试在容器中查找最大的嵌入式 JPEG 预览；不同相机格式和厂商编码差异很大，因此不是完整 LibRaw 支持，也不是对传感器原始线性数据的分析。
 
 ## 本机天区解算
@@ -87,7 +87,7 @@
 - `lib/history.dart` / `lib/history_screen.dart`：存档读写与历史记录页。
 - `lib/markdown.dart`：自写的 Markdown 渲染器，用于 AI 解读。不引 `flutter_markdown`（已停止维护），要处理的语法只有模型实际会用的那几种，几百行的转换器比一个长期没人管的依赖更好交代——也和这个项目“图表全部自绘、不引图表库”的选择一致。
 - `lib/onboarding.dart` / `lib/widgets.dart` / `lib/theme.dart`：引导页、共享组件与配色。
-- `tools/build_catalog.py`：离线生成星表与星座数据；`tools/make_mascot.py`：生成引导页吉祥物。
+- `tools/build_catalog.py`：离线生成星表与星座数据；`tools/make_onboarding_art.py`：生成引导页四页插画。
 - `android/`：Android Manifest、应用入口和 Gradle 配置。
 - `test/`：合成星场、测光、解算、报告、存档与界面测试。
 
@@ -111,4 +111,4 @@
 
 星座连线不是抄自任何星图的现成画法，而是对每个星座最亮的成员跑最小生成树（按角距加权）自动生成的，因此不引入第三方星图数据的授权问题。
 
-应用启动图标与引导页吉祥物 Nox 的插画由 [Recraft](https://www.recraft.ai/) 在开发期生成（矢量稿），凭据不进入应用或仓库。运行时用到的第三方服务是 [Astrometry.net](https://astrometry.net/)、[ESA Gaia 归档](https://gea.esac.esa.int/archive/) 与 [SIMBAD](https://simbad.cds.unistra.fr/)，均为可选功能，说明见上文“隐私与联网”。
+应用启动图标与引导页四页插画（含吉祥物 Nox）由 [Recraft](https://www.recraft.ai/) 在开发期生成，凭据不进入应用或仓库。运行时用到的第三方服务是 [Astrometry.net](https://astrometry.net/)、[ESA Gaia 归档](https://gea.esac.esa.int/archive/) 与 [SIMBAD](https://simbad.cds.unistra.fr/)，均为可选功能，说明见上文“隐私与联网”。
