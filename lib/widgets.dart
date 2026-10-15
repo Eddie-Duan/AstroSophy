@@ -201,6 +201,7 @@ class DetectedStarsPainter extends CustomPainter {
     this.wcs,
     this.hidden = const {},
     this.selected,
+    this.selectedObjectName,
     this.numbers = true,
     this.arcsecPerPixel = 0,
   });
@@ -238,6 +239,9 @@ class DetectedStarsPainter extends CustomPainter {
   /// 单独框出来——点列表第 10 项和图上的 ⑩ 必须是同一颗星，否则这套编号
   /// 就白做了。
   final int? selected;
+
+  /// 选中的深空天体名称；深空天体不属于星点编号序列。
+  final String? selectedObjectName;
 
   /// 是否在圈旁边标编号。
   final bool numbers;
@@ -395,12 +399,19 @@ class DetectedStarsPainter extends CustomPainter {
     for (final object in objects) {
       final point = toCanvas(object.x, object.y);
       final size = object.angularSizeArcmin;
+      final selected = object.name == selectedObjectName;
+      final paint = selected
+          ? (Paint()
+            ..color = const Color(0xFFFFDE77)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.8)
+          : objectPaint;
       if (size == null || size <= 0 || arcsecPerPixel <= 0) {
-        canvas.drawCircle(point, 9, objectPaint);
+        canvas.drawCircle(point, 9, paint);
       } else {
         // 角尺寸换成图像像素要经过实际比例尺；画到画布上再乘一次缩放。
         final radius = size * 60 / arcsecPerPixel / 2 * scale;
-        canvas.drawCircle(point, radius.clamp(6.0, 400.0), objectPaint);
+        canvas.drawCircle(point, radius.clamp(6.0, 400.0), paint);
       }
       final label = TextPainter(
         text: TextSpan(
@@ -524,6 +535,7 @@ class DetectedStarsPainter extends CustomPainter {
       hidden.length != oldDelegate.hidden.length ||
       !hidden.containsAll(oldDelegate.hidden) ||
       oldDelegate.selected != selected ||
+      oldDelegate.selectedObjectName != selectedObjectName ||
       oldDelegate.numbers != numbers ||
       oldDelegate.arcsecPerPixel != arcsecPerPixel;
 }

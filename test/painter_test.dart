@@ -71,12 +71,15 @@ void main() {
     SkyAnalysis analysis, {
     Set<int> hidden = const {},
     bool numbers = true,
+    List<SkyObject> objects = const [],
+    String? selectedObjectName,
   }) =>
       DetectedStarsPainter(
         analysis: analysis,
         namedStars: const [],
-        objects: const [],
+        objects: objects,
         hidden: hidden,
+        selectedObjectName: selectedObjectName,
         numbers: numbers,
       );
 
@@ -130,6 +133,23 @@ void main() {
         painterOf(analysis, hidden: {0}).shouldRepaint(
           painterOf(analysis, hidden: {0}),
         ),
+        isFalse,
+      );
+    });
+
+    test('选中的深空天体变化时重画', () {
+      final analysis = analysisOf([starAt(60, 50)]);
+      final objects = [
+        const SkyObject('M 31', 10, 20, '星系', x: 120, y: 80),
+      ];
+      final unselected = painterOf(analysis, objects: objects);
+      final selected =
+          painterOf(analysis, objects: objects, selectedObjectName: 'M 31');
+
+      expect(selected.shouldRepaint(unselected), isTrue);
+      expect(
+        painterOf(analysis, objects: objects, selectedObjectName: 'M 31')
+            .shouldRepaint(selected),
         isFalse,
       );
     });

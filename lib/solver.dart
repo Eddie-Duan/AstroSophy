@@ -127,7 +127,7 @@ class PlateSolver {
       ..sort((a, b) => b.flux.compareTo(a.flux));
     if (detections.length < _minimumDetections) return null;
 
-    onProgress?.call(0.05, '正在准备本机星表索引');
+    onProgress?.call(0.05, '正在准备离线解算索引');
     final index = _index;
     if (index.triangleCount == 0) return null;
     // 索引是跨帧复用的，像面尺寸每帧都可能不同，所以每次解算都更新。
@@ -733,7 +733,7 @@ class PlateSolver {
           star.dec,
           name?.spectralType?.isNotEmpty == true
               ? '恒星 · ${name!.spectralType}'
-              : '恒星 · 本地星表',
+              : '恒星',
           magnitude: star.vMagnitude,
           magnitudeBand: 'V',
           x: x,

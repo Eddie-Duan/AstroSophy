@@ -100,6 +100,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 下方列表里当前选中的那一项（`numberedTargets` 的下标）。图上的高亮环
   /// 和列表的选中底色都跟着它走，两边同号才是同一颗星。
   int? _selectedTarget;
+  String? _selectedDeepSkyName;
 
   /// 看图区显示的是处理图还是原图。默认原图——处理图是加工过的。
   bool _showProcessed = false;
@@ -127,7 +128,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     return moment.utcAt(moment.local.timeZoneOffset);
   }
 
-  /// 三组亮点在代码里的名字。数组顺序就是列表里的显示顺序。
+  /// 三组星点在代码里的名字。数组顺序就是列表里的显示顺序。
   static const _groupIds = <String>['named', 'unnamed', 'streaks'];
 
   /// 一开始既收起、又隐去圆圈的那两组。
@@ -153,8 +154,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   final _hiddenTargets = <int>{};
   final _restoredTargets = <int>{};
 
-  /// 列表里被折叠起来的分组。默认只展开亮星，与圆圈的默认可见性一致。
-  final _collapsedGroups = <String>{..._secondaryGroups};
+  /// 深空天体没有星点编号，显隐按目录名称单独管理。
+  final _hiddenDeepSkyObjects = <String>{};
+
+  /// 默认只展开深空天体；其余星点分组保持折叠。
+  final _collapsedGroups = <String>{'named', ..._secondaryGroups};
 
   /// 看图区的缩放/平移状态。
   final _viewer = TransformationController();
@@ -208,11 +212,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ..addAll(_secondaryGroups);
     _collapsedGroups
       ..clear()
-      ..addAll(_secondaryGroups);
+      ..addAll({'named', ..._secondaryGroups});
     // 逐项设定记的是编号，而编号是「这张图上的第几号」。换一张图之后同一
     // 个编号指的是另一颗星，留着就会莫名其妙地少画几个圈。
     _hiddenTargets.clear();
     _restoredTargets.clear();
+    _hiddenDeepSkyObjects.clear();
+    _selectedDeepSkyName = null;
   }
 
   /// 把设置里的开关读进内存。设置表单保存之后也要再读一次。
@@ -1572,7 +1578,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       painter: DetectedStarsPainter(
                         analysis: analysis,
                         namedStars: _visibleNamedStars(analysis, solve),
-                        objects: solve?.deepSkyObjects ?? const [],
+                        objects: _visibleDeepSkyObjects(solve),
                         // 运动天体的圆心是检出到的那颗亮点，而星历位置只有
                         // 赤经赤纬，得靠 WCS 现推——所以这两个一起传。
                         bodies: solve?.movingBodies ?? const [],
@@ -1585,6 +1591,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             : const [],
                         hidden: _hiddenIndices(analysis, solve),
                         selected: _selectedTarget,
+                        selectedObjectName: _selectedDeepSkyName,
                       ),
                     ),
                   ],
@@ -1679,7 +1686,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final targets = analysis.numberedTargets;
     final index = _selectedTarget;
     final String text;
-    if (index == null || index >= targets.length) {
+    if (_selectedDeepSkyName != null) {
+      text = '深空天体 · $_selectedDeepSkyName';
+    } else if (index == null || index >= targets.length) {
       text = '点图中的亮点，或点下方列表——两边编号一一对应；双指可放大';
     } else {
       final star = targets[index];
@@ -1689,9 +1698,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         text = '第 ${index + 1} 号 · $position · 已判为非天体，不计入报告';
       } else {
         final name = _nearestNamed(star, solve?.namedStars ?? const []);
-        final what =
-            name?.name ?? (star.isElongated ? '拉长的亮点' : '图内亮点');
-        text = '第 ${index + 1} 号 · $what · $position · ${star.confidenceLabel}';
+        final what = name?.name ?? (star.isElongated ? '拉长点源' : '未匹配点源');
+        text = '第 ${index + 1} 号 · $what · $position';
       }
     }
     return Container(
@@ -1732,15 +1740,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
     // 点在空处就什么都不选——硬吸到最近的一颗会让用户以为自己点中了。
     if (best < 0) return;
-    setState(() => _selectedTarget = best);
+    setState(() {
+      _selectedTarget = best;
+      _selectedDeepSkyName = null;
+    });
   }
 
-  /// 图内亮点列表。
+  /// 图上目标列表。
   ///
-  /// 分成三组不是为了好看，而是因为这三类东西对用户意味着完全不同的事：
+  /// 星点分成三组不是为了好看，而是因为这三类东西对用户意味着完全不同的事：
   /// 有名字的回答「我拍到了什么」，没名字的回答「我这套设备能拍到多暗」，
-  /// 可疑飞线回答「这张要不要重拍」。混在一张表里，用户得逐行读才知道哪行
-  /// 是哪种；分开摆，各看各的。
+  /// 可疑飞线回答「这张要不要重拍」。深空天体另列一组，按目录名称独立管理。
   ///
   /// 分组只是显示上的事：编号仍然是 [SkyAnalysis.numberedTargets] 的下标，
   /// 图上画的 ⑦ 和列表里的 ⑦ 永远是同一个东西。按组重排编号，这套对应就断了。
@@ -1751,6 +1761,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Widget _highlightsCard(SkyAnalysis analysis, SolveResult? solve) {
     final targets = analysis.numberedTargets;
     final groups = _categoriseTargets(targets, solve);
+    final deepSkyObjects = _sortedDeepSkyObjects(solve);
     // 算一次，往下传：每行都要知道自己画不画，逐行去重算一遍就是 O(n²)，
     // 而这一页的检出点源动辄上千个。
     final hidden = _hiddenIndices(analysis, solve);
@@ -1764,29 +1775,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             child: Row(
               children: [
                 const Expanded(
-                  child: SectionTitle('图内亮点', Icons.blur_on_rounded),
+                  child: SectionTitle('图上目标', Icons.blur_on_rounded),
                 ),
-                // 三个组的 − / + 各管一组，这两个一次管全部。
+                // 各分组的 − / + 分别管理，这两个一次管全部。
                 _batchButton(
                   Icons.remove_circle_outline,
                   '把图上所有的圆圈都隐去',
-                  hidden.length < targets.length,
-                  () => _setAllCircles(true),
+                  hidden.length + _hiddenDeepSkyObjects.length <
+                      targets.length + deepSkyObjects.length,
+                  () => _setAllCircles(true, deepSkyObjects),
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
                   '把图上所有的圆圈都显示回来',
-                  hidden.isNotEmpty,
-                  () => _setAllCircles(false),
+                  hidden.isNotEmpty || _hiddenDeepSkyObjects.isNotEmpty,
+                  () => _setAllCircles(false, deepSkyObjects),
                 ),
                 const _HelpButton(
-                  title: '图内亮点',
+                  title: '图上目标',
                   message:
-                      '编号与上图里的编号一一对应，点一行就能在图上定位到那一颗，'
+                      '星点编号与上图里的编号一一对应，点一行就能在图上定位到那一颗；'
+                      '深空天体按名称单独管理。'
                       '双指捏合可以把图放大。放大之后圆圈跟着一起放大。'
                       '每一行右边的 − 把那一颗的圆圈从图上隐去，+ 显示回来；'
                       '组标题右边的 − / + 一次管整组，'
                       '卡片标题右边这两个一次管全部。'
+                      '星点编号颜色表示识别可信度：薄荷绿较高、黄色中等、粉红色较低。'
                       '隐去只是不画，测量结果、报告和星表匹配一个字都不变。'
                       '「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——'
                       '判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。'
@@ -1796,18 +1810,44 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ],
             ),
           ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 3, 12, 8),
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(fontSize: 10.5),
+                children: [
+                  TextSpan(text: '星点编号颜色：'),
+                  TextSpan(
+                    text: '较高 ≥70%',
+                    style: TextStyle(color: kMint),
+                  ),
+                  TextSpan(text: ' · '),
+                  TextSpan(
+                    text: '中等 35–69%',
+                    style: TextStyle(color: Color(0xFFFFDE77)),
+                  ),
+                  TextSpan(text: ' · '),
+                  TextSpan(
+                    text: '较低 <35%',
+                    style: TextStyle(color: Color(0xFFFF7B8C)),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const Divider(height: 1),
           Expanded(
-            child: targets.isEmpty
+            child: targets.isEmpty && deepSkyObjects.isEmpty
                 ? const Center(
                     child: Text(
-                      '没有检出可信的亮点。',
+                      '没有检出目标。',
                       style: TextStyle(color: Color(0xFF8192A8)),
                     ),
                   )
                 : ListView(
                     padding: const EdgeInsets.only(bottom: 10),
                     children: [
+                      _deepSkyGroup(deepSkyObjects, solve),
                       _targetGroup(
                         id: 'named',
                         title: '亮星',
@@ -1820,7 +1860,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ),
                       _targetGroup(
                         id: 'unnamed',
-                        title: '亮点',
+                        title: '未匹配星点',
                         icon: Icons.blur_on_rounded,
                         emptyHint: '没有未命名的点源。',
                         targets: targets,
@@ -1854,6 +1894,192 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         'streaks' => const Color(0xFFFF7B8C),
         _ => kMint,
       };
+
+  List<SkyObject> _sortedDeepSkyObjects(SolveResult? solve) {
+    final objects = [...?solve?.deepSkyObjects];
+    objects.sort(
+      (a, b) => (b.angularSizeArcmin ?? -1)
+          .compareTo(a.angularSizeArcmin ?? -1),
+    );
+    return objects;
+  }
+
+  List<SkyObject> _visibleDeepSkyObjects(SolveResult? solve) => [
+        for (final object in _sortedDeepSkyObjects(solve))
+          if (!_hiddenDeepSkyObjects.contains(object.name)) object,
+      ];
+
+  Widget _deepSkyGroup(List<SkyObject> objects, SolveResult? solve) {
+    const id = 'deepSky';
+    final collapsed = _collapsedGroups.contains(id);
+    final visibleObjects = objects
+        .where((object) => !_hiddenDeepSkyObjects.contains(object.name))
+        .toList();
+    final canHide = visibleObjects.isNotEmpty;
+    final canShow = visibleObjects.length < objects.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: () => setState(() {
+            if (!_collapsedGroups.remove(id)) _collapsedGroups.add(id);
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
+            child: Row(
+              children: [
+                Icon(
+                  collapsed
+                      ? Icons.chevron_right_rounded
+                      : Icons.expand_more_rounded,
+                  size: 20,
+                  color: const Color(0xFF8192A8),
+                ),
+                const Icon(
+                  Icons.public_rounded,
+                  size: 15,
+                  color: Color(0xFFFF7B8C),
+                ),
+                if (!canHide && objects.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.visibility_off_outlined,
+                    size: 13,
+                    color: Color(0xFF8192A8),
+                  ),
+                ],
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '深空天体  ${objects.length}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                _batchButton(
+                  Icons.remove_circle_outline,
+                  '把深空天体的标记从图上隐去',
+                  canHide,
+                  () => setState(() {
+                    _hiddenDeepSkyObjects.addAll(
+                      objects.map((object) => object.name),
+                    );
+                  }),
+                ),
+                _batchButton(
+                  Icons.add_circle_outline,
+                  '显示全部深空天体标记',
+                  canShow,
+                  () => setState(() => _hiddenDeepSkyObjects.clear()),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (!collapsed)
+          if (objects.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(38, 2, 12, 10),
+              child: Text(
+                '这片视场没有识别到深空天体。',
+                style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+              ),
+            )
+          else
+            for (final object in objects)
+              _deepSkyRow(object, solve),
+        const Divider(height: 1),
+      ],
+    );
+  }
+
+  Widget _deepSkyRow(SkyObject object, SolveResult? solve) {
+    final isHidden = _hiddenDeepSkyObjects.contains(object.name);
+    final isSelected = _selectedDeepSkyName == object.name;
+    final hasChineseName = RegExp(r'[\u4e00-\u9fff]').hasMatch(object.name);
+    final angularSize = object.angularSizeArcmin;
+    final details = <String>[
+      if (object.category.isNotEmpty) object.category,
+      if (angularSize != null && angularSize > 0)
+        angularSize < 1
+            ? '约 ${(angularSize * 60).round()}″'
+            : angularSize < 60
+                ? '约 ${angularSize.toStringAsFixed(1)}′'
+                : '约 ${(angularSize / 60).toStringAsFixed(2)}°',
+    ];
+    if (angularSize != null && angularSize > 0) {
+      final field = solve?.fieldOfViewDegrees ?? 0;
+      if (field > 0) {
+        final fraction = (angularSize / 60) / field;
+        details.add(
+          fraction >= 1
+              ? '大于视场对角线'
+              : '约占视场 ${(fraction * 100).round()}%',
+        );
+      }
+    }
+
+    return ListTile(
+      dense: true,
+      selected: isSelected,
+      selectedTileColor: const Color(0xFFFF7B8C).withValues(alpha: 0.10),
+      onTap: () => setState(() {
+        _selectedTarget = null;
+        _selectedDeepSkyName = object.name;
+        _hiddenDeepSkyObjects.remove(object.name);
+      }),
+      leading: Icon(
+        Icons.public_rounded,
+        size: 20,
+        color: isHidden
+            ? const Color(0xFF8192A8)
+            : const Color(0xFFFF7B8C),
+      ),
+      title: Text(
+        object.name,
+        style: TextStyle(
+          color: isHidden
+              ? const Color(0xFF8192A8)
+              : hasChineseName
+                  ? const Color(0xFFFFDE77)
+                  : null,
+          fontWeight: hasChineseName ? FontWeight.w700 : FontWeight.w500,
+        ),
+      ),
+      subtitle: details.isEmpty
+          ? null
+          : Text(
+              details.join(' · '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11),
+            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _batchButton(
+            Icons.remove_circle_outline,
+            '把 ${object.name} 的标记从图上隐去',
+            !isHidden,
+            () => setState(() => _hiddenDeepSkyObjects.add(object.name)),
+            dense: true,
+          ),
+          _batchButton(
+            Icons.add_circle_outline,
+            '显示 ${object.name} 的标记',
+            isHidden,
+            () => setState(() => _hiddenDeepSkyObjects.remove(object.name)),
+            dense: true,
+          ),
+        ],
+      ),
+    );
+  }
 
   /// 把编号列表分成三组，每组记着自己在全局编号里的下标。
   ///
@@ -2071,8 +2297,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         }
       });
 
-  /// 一次管全部：三个分组，外加之前按颗收起来或按颗放出来的那些。
-  void _setAllCircles(bool hidden) => setState(() {
+  /// 一次管全部星点和深空天体标记。
+  void _setAllCircles(bool hidden, List<SkyObject> deepSkyObjects) =>
+      setState(() {
         _hiddenGroups
           ..clear()
           ..addAll(hidden ? _groupIds : const <String>[]);
@@ -2080,6 +2307,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         // 几颗——按钮上是「所有」，那就得真的是所有。
         _hiddenTargets.clear();
         _restoredTargets.clear();
+        if (hidden) {
+          _hiddenDeepSkyObjects.addAll(
+            deepSkyObjects.map((object) => object.name),
+          );
+        } else {
+          _hiddenDeepSkyObjects.clear();
+        }
       });
 
   /// 单独隐去 / 单独显示一颗。
@@ -2120,6 +2354,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         disabledColor: const Color(0xFF44536A),
       );
 
+  Color _confidenceColor(double confidence) => confidence >= 0.7
+      ? kMint
+      : confidence >= 0.35
+          ? const Color(0xFFFFDE77)
+          : const Color(0xFFFF7B8C);
+
   Widget _highlightRow(
     List<DetectedStar> targets,
     int index,
@@ -2133,6 +2373,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     // 「这一行现在不在图上」。
     final muted = star.isRejected || isHidden;
     final name = _nearestNamed(star, solve?.namedStars ?? const []);
+    final confidenceColor = _confidenceColor(star.confidence);
     final zeroPoint = solve?.magnitudeZeroPoint;
     // 标定过就给真实星等，没标定就退回星表星等或图内相对亮度——三者不能混
     // 着看，所以每行只在末尾写一个数，且用不同的记号区分来源。
@@ -2148,6 +2389,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       selectedTileColor: kMint.withValues(alpha: 0.10),
       onTap: () => setState(() {
         _selectedTarget = index;
+        _selectedDeepSkyName = null;
         // 点一行就是要看那一颗。它现在要是隐着的，顺手把这一颗的圆圈显示
         // 回来——否则「点一行就能在图上定位到那一颗」这个承诺在隐去之后
         // 就是空的。只动这一颗：分组是批量设定，而用户点的是单独一颗。
@@ -2156,20 +2398,25 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       }),
       leading: CircleAvatar(
         radius: 15,
-        backgroundColor: muted
-            ? const Color(0x33FF7B8C)
-            : kMint.withValues(alpha: 0.16),
+        backgroundColor: confidenceColor.withValues(alpha: muted ? 0.08 : 0.16),
         child: Text(
           '${index + 1}',
           style: TextStyle(
-            color: muted ? const Color(0xFFFF7B8C) : kMint,
+            color: confidenceColor,
             fontSize: 12,
           ),
         ),
       ),
       title: Text(
-        name?.name ?? (star.isElongated ? '拉长的亮点' : '图内亮点'),
-        style: TextStyle(color: muted ? const Color(0xFF8192A8) : null),
+        name?.name ?? (star.isElongated ? '拉长点源' : '未匹配点源'),
+        style: TextStyle(
+          color: muted
+              ? const Color(0xFF8192A8)
+              : name != null
+                  ? const Color(0xFFFFDE77)
+                  : null,
+          fontWeight: name != null ? FontWeight.w700 : null,
+        ),
       ),
       subtitle: Text(
         _highlightSubtitle(star, name),
@@ -2248,8 +2495,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
     final category =
         name?.category.isNotEmpty == true ? '${name!.category} · ' : '';
-    return '$category$position · '
-        '${star.confidenceLabel} ${(star.confidence * 100).toStringAsFixed(0)}%';
+    return '$category$position';
   }
 
   /// 给一条可疑飞线判「是 / 不是天体」。
@@ -2318,7 +2564,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               return ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text(name?.name ?? '图内亮点'),
+                title: Text(name?.name ?? '未匹配点源'),
                 subtitle: Text(
                   '孔径通量 ${star.flux.toStringAsFixed(0)}'
                   '${error == null ? '' : ' · 星等误差 ±${error.toStringAsFixed(2)}'}',
@@ -2637,9 +2883,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             const SectionTitle('视场内的恒星', Icons.table_chart_outlined),
             const SizedBox(height: 6),
             Text(
-              solve.source == SolveSource.local
-                  ? '名称来自 APP 内置的 Hipparcos 亮星目录，解算过程完全离线。'
-                  : '星名来自在线星表（Gaia DR3 / SIMBAD）。',
+              '星名根据已匹配的恒星目录和解算位置标注。',
               style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
             ),
             const SizedBox(height: 10),
@@ -2684,16 +2928,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                                 size: 14,
                                 color: row.confidence == null
                                     ? const Color(0xFF8192A8)
-                                    : row.confidence! >= 0.7
-                                        ? kMint
-                                        : const Color(0xFFFFDE77),
+                                    : _confidenceColor(row.confidence!),
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 row.confidence == null
                                     ? '未检出'
-                                    : '${row.confidenceLabel} '
-                                        '${(row.confidence! * 100).toStringAsFixed(0)}%',
+                                    : '${(row.confidence! * 100).toStringAsFixed(0)}%',
+                                style: TextStyle(
+                                  color: row.confidence == null
+                                      ? const Color(0xFF8192A8)
+                                      : _confidenceColor(row.confidence!),
+                                ),
                               ),
                             ],
                           ),
@@ -2829,7 +3075,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               const SizedBox(height: 10),
               const Text(
                 '可查询当前报告、天体和本机记录；保存、改名、删除、在线解算或发送照片给视觉模型前会先征求确认。',
-                style: TextStyle(color: kMuted, fontSize: 12),
+                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 10),
               TextField(
@@ -2851,7 +3097,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const SizedBox(height: 8),
                 Text(
                   '本轮工具调用：${_agentActivity.join('、')}',
-                  style: const TextStyle(fontSize: 12, color: kMuted),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFA6B5C8),
+                  ),
                 ),
               ],
               if (_explanation != null) ...[
@@ -3148,7 +3397,7 @@ class _SettingsFormState extends State<SettingsForm> {
                 title: const Text('允许在必要时把分析预览图上传至 Astrometry.net'),
                 subtitle: const Text(
                   '默认关闭。手机本机解算失败、且这张图确实需要天区坐标时才会用到；'
-                  '不上传就只用本机星表。',
+                  '不上传时不会使用在线解算服务。',
                   style: TextStyle(fontSize: 12, color: Color(0xFFA6B5C8)),
                 ),
               ),
