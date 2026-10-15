@@ -745,6 +745,38 @@ List<String> buildSolveFailureAdvice(
   return advice;
 }
 
+/// 这个深空天体值不值得在**图上**画一个圈。
+///
+/// 两条同时成立才不画：**又大又没星等**。
+///
+///   * 「大」＝ 直径超过像场对角线的 [_markSizeLimit]。到这个尺寸，那个圆已经
+///     不是「目标在这儿」的意思，而是绕着整幅画面的一个环——它不再指出什么，
+///     只是把所有别的标注都圈进去。
+///   * 「没星等」＝ 目录里压根没记它的亮度。NGC 2000.0 里这类大面积弥漫天体的
+///     星等列普遍是空的，而空星等基本等于「在手机单张照片上看不见」，画个圈
+///     等于圈住了空气。
+///
+/// 两条是「且」不是「或」：M31 也很大（178′），但它有星等 3.5，那个圈是有意义
+/// 的；面纱星云的弧（70′）没有星等，可它没大到那个程度，圈也画得出来。真正
+/// 被挡掉的是 IC 353 这种——180′、没星等、大部分人没听说过，画在图上只是一
+/// 个大环。**它照样留在列表里**，用户还是能知道画面里有它，只是没有加减号
+/// 可点：图上本来就没画，隐不隐去无从谈起。
+///
+/// 只在这里定义一次。图上画不画、列表里给不给加减号是同一个问题，两边各自判
+/// 一次迟早会不一致——那种不一致的表现是「按了减号什么也没发生」。
+bool worthMarkingOnImage({
+  required double? sizeArcmin,
+  required double? magnitude,
+  required double fieldOfViewDegrees,
+}) {
+  if (sizeArcmin == null || fieldOfViewDegrees <= 0) return true;
+  final fraction = (sizeArcmin / 60) / fieldOfViewDegrees;
+  return fraction <= _markSizeLimit || magnitude != null;
+}
+
+/// 圆圈的直径超过像场对角线的这个比例之后，它就不再是「一个标记」了。
+const double _markSizeLimit = 0.6;
+
 /// 画面里的一个深空天体，已经整理成能直接写进报告的形式。
 ///
 /// 「画面中有 M31」只是一半的信息。用户真正想知道的还有两件事：它是什么，
@@ -807,8 +839,20 @@ class DeepSkyEntry {
 
 /// 把解算结果里的深空天体整理成报告条目。
 ///
-/// 排序按「占画面多大」而不是目录顺序：用户扫一眼报告，先看到大的那个才对，
-/// 那才是这张照片真正拍的东西。
+/// 排序不按目录顺序，也不单纯按大小——分三步：
+///
+///   1. **模型挑过的那个排最前**（`SolveResult.primaryDeepSky`）。挑主体是
+///      个判断，交给模型做：它知道 M45 是昴星团、而 IC 353 大部分人没听说过。
+///   2. 没挑过（没配模型、断网、回答不像话）就退回本机那套：**有中文常用名的
+///      排前面**。那张手写的表（`deepsky_names.dart`）收的正是「爱好者嘴里会
+///      说的目标」，所以「这里有没有名字」近似于「这个东西有没有人认识」。
+///   3. 同档之内按占画面多大排。
+///
+/// 少了这两步会出一个很怪的结论：拍昴星团，报告说主体是 IC 353。IC 353 在
+/// NGC 2000.0 里记着 180′，比 M45 的 110′ 大，可它没有星等、没有常用名、
+/// 大部分人没听说过——而 180′ 这个数本身就可疑（目录里 IC 360、IC 2118 也是
+/// 恰好 180.0′，几个不同的大面积弥漫天体全都一样，更像是当年的占位值）。
+/// 拿一个不可靠的尺寸去压一个响当当的名字，得到的是「这张照片拍的是 IC 353」。
 List<DeepSkyEntry> buildDeepSkyEntries(SolveResult? solve) {
   if (solve == null) return const [];
   final field = solve.fieldOfViewDegrees;
@@ -826,7 +870,18 @@ List<DeepSkyEntry> buildDeepSkyEntries(SolveResult? solve) {
             : (object.angularSizeArcmin! / 60) / field,
       ),
   ];
-  entries.sort((a, b) => (b.fieldFraction ?? -1).compareTo(a.fieldFraction ?? -1));
+  entries.sort((a, b) {
+    // 模型挑过的，就是它。
+    final primary = solve.primaryDeepSky;
+    if (primary != null && a.name != b.name) {
+      if (a.name == primary) return -1;
+      if (b.name == primary) return 1;
+    }
+    final aNamed = a.nickname != null;
+    final bNamed = b.nickname != null;
+    if (aNamed != bNamed) return aNamed ? -1 : 1;
+    return (b.fieldFraction ?? -1).compareTo(a.fieldFraction ?? -1);
+  });
   return entries;
 }
 

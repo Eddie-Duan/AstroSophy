@@ -19,16 +19,35 @@ void main() {
 
   group('深空目录资产', () {
     test('载入了整张离线深空目录', () {
-      expect(deepSky.objects.length, greaterThan(2000));
+      expect(deepSky.objects.length, greaterThan(2500));
       for (final object in deepSky.objects) {
         expect(object.name, isNotEmpty);
         expect(object.ra, inInclusiveRange(0, 360));
         expect(object.dec, inInclusiveRange(-90, 90));
-        // 目录里每条都必须带角尺寸和星等——没有这两样就没法回答
-        // 「它占了画面多大」，那这张表存在的意义也就没了。
-        expect(object.angularSizeArcmin, isNotNull, reason: '${object.name} 缺角尺寸');
-        expect(object.magnitude, isNotNull, reason: '${object.name} 缺星等');
+        // 星等和角尺寸**可以不填**，但只有一类允许不填。
+        //
+        // 这条以前是「每条都必须有星等和角尺寸」，而那个假设本身就是面纱星云
+        // 被漏掉的原因：NGC 2000.0 有 41% 的条目没有星等，而「又大又弥漫」正是
+        // 最容易没有星等的那一类。星云和星团这几类现在不看星等收进来，所以它
+        // 们中间出现空值是**设计**，不是数据坏了——但它必须只发生在这些类型上，
+        // 否则就是筛选规则被改坏了。
+        const unmagnituded = {'Nb', 'Pl', 'C+N', 'Kt', 'SNR', 'OC', 'Gb', 'Ast'};
+        if (object.magnitude == null || object.angularSizeArcmin == null) {
+          expect(
+            unmagnituded.contains(object.typeCode),
+            isTrue,
+            reason: '${object.name}（${object.typeCode}）缺星等或角尺寸，'
+                '而这个类型不该缺',
+          );
+        }
       }
+      // 至少要有这么多真的是带齐了两样的，否则上面那条会因为「几乎全是空值」
+      // 而变得没有约束力。
+      final complete = deepSky.objects
+          .where((object) =>
+              object.magnitude != null && object.angularSizeArcmin != null)
+          .length;
+      expect(complete, greaterThan(2000));
     });
 
     test('110 个 Messier 目标一个不少', () {
@@ -77,10 +96,14 @@ void main() {
       expect(found, isNotEmpty);
       expect(found.first.name, 'M 31');
       expect(found.map((object) => object.name), containsAll(['M 32', 'M 110']));
+      // 目录里现在允许没有角尺寸的条目（那几类不看星等收进来的星云星团），
+      // 它们排在最后，所以比大小的时候要跳过空值。
       var previous = double.infinity;
       for (final object in found) {
-        expect(object.angularSizeArcmin!, lessThanOrEqualTo(previous));
-        previous = object.angularSizeArcmin!;
+        final size = object.angularSizeArcmin;
+        if (size == null) continue;
+        expect(size, lessThanOrEqualTo(previous));
+        previous = size;
       }
     });
 

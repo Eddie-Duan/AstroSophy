@@ -580,6 +580,7 @@ class SolveResult {
     this.rotationDegrees = 0,
     this.matchedCount = 0,
     this.movingBodies = const [],
+    this.primaryDeepSky,
   });
 
   final double centerRa;
@@ -619,6 +620,20 @@ class SolveResult {
   /// 内容。没有时刻就是空的——位置随日期变，没有日期就没有判据可说。
   final List<MovingBodySuspicion> movingBodies;
 
+  /// 模型挑出来的「这张照片拍的是哪个深空天体」，值是 [deepSkyObjects] 里某个
+  /// 编号；没挑过或者没配模型时为 null。
+  ///
+  /// 为什么这件事交给模型：候选清单、坐标、角尺寸全是本机算出来的**测量**，
+  /// 而「这些里面哪个才是主角」是个**判断**——它需要知道哪个名字是爱好者真会
+  /// 说的。本机只能靠一张手写的常用名表去近似（`deepsky_names.dart`），那张表
+  /// 覆盖不到「M45 和 IC 353 之间该选哪个」这类比较。模型知道 M45 是昴星团，
+  /// 而 IC 353 大部分人没听说过，这正是它擅长的。
+  ///
+  /// 它只被允许**排序**，不允许增删：结果要能在 [deepSkyObjects] 里找到一模一
+  /// 样的编号，否则整条回答作废（见 `ModelService.pickPrimaryDeepSky`）。测量
+  /// 归本机、判断归模型，这条线不能松。
+  final String? primaryDeepSky;
+
   static const empty = SolveResult(
     centerRa: 0,
     centerDec: 0,
@@ -657,6 +672,7 @@ class SolveResult {
       rotationDegrees: rotationDegrees,
       matchedCount: matchedCount,
       movingBodies: movingBodies,
+      primaryDeepSky: primaryDeepSky,
     );
   }
 
@@ -687,6 +703,7 @@ class SolveResult {
         rotationDegrees: rotationDegrees,
         matchedCount: matchedCount,
         movingBodies: movingBodies,
+        primaryDeepSky: primaryDeepSky,
       );
 
   /// 附上疑似运动天体的判定结果。
@@ -712,6 +729,29 @@ class SolveResult {
         rotationDegrees: rotationDegrees,
         matchedCount: matchedCount,
         movingBodies: bodies,
+        primaryDeepSky: primaryDeepSky,
+      );
+
+  /// 附上模型挑出来的主体。
+  SolveResult withPrimaryDeepSky(String name) => SolveResult(
+        centerRa: centerRa,
+        centerDec: centerDec,
+        arcsecPerPixel: arcsecPerPixel,
+        namedStars: namedStars,
+        deepSkyObjects: deepSkyObjects,
+        matchedStars: matchedStars,
+        magnitudeZeroPoint: magnitudeZeroPoint,
+        magnitudeScatter: magnitudeScatter,
+        catalogWarning: catalogWarning,
+        source: source,
+        fieldOfViewDegrees: fieldOfViewDegrees,
+        constellations: constellations,
+        constellationFigures: constellationFigures,
+        wcs: wcs,
+        rotationDegrees: rotationDegrees,
+        matchedCount: matchedCount,
+        movingBodies: movingBodies,
+        primaryDeepSky: name,
       );
 
   Map<String, Object?> toJson() => {
@@ -733,6 +773,7 @@ class SolveResult {
         'rotation_degrees': rotationDegrees,
         'matched_count': matchedCount,
         'moving_bodies': movingBodies.map((body) => body.toJson()).toList(),
+        'primary_deep_sky': primaryDeepSky,
       };
 
   static SolveResult fromJson(Map<String, Object?> json) => SolveResult(
@@ -765,6 +806,7 @@ class SolveResult {
         matchedCount: (_nullableNumber(json['matched_count']) ?? 0).round(),
         movingBodies:
             _objectList(json['moving_bodies'], MovingBodySuspicion.fromJson),
+        primaryDeepSky: json['primary_deep_sky'] as String?,
       );
 }
 

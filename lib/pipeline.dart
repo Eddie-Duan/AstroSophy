@@ -8,6 +8,7 @@ import 'analysis.dart';
 import 'astrometry.dart';
 import 'catalog.dart';
 import 'deepsky.dart';
+import 'deepsky_names.dart';
 import 'model.dart';
 import 'models.dart';
 import 'report.dart';
@@ -255,14 +256,25 @@ class SkyPipeline {
             onlineError: onlineError,
           ),
         );
-      } else if (moment != null) {
-        // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
-        // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
-        // 这一步只是几次星表查询，快到不值得为它占一段进度条。
-        try {
-          solve = await worker.annotateMovingBodies(analysis, solve, moment);
-        } catch (error) {
-          warnings.add('运动天体判定未能完成：$error');
+      } else {
+        // 解开天区之后，再问模型一句「这张照片拍的是哪个深空天体」。
+        //
+        // 这一步只重排顺序，不改任何测量。做它的理由是实况逼出来的：拍昴星团
+        // 那张图里 IC 353（目录里 180′）比 M45（110′）大，按尺寸排出来的
+        // 「主体」成了 IC 353——一个没星等、没常用名、没人听说过的暗星云。
+        // 本机只能靠手写的常用名表去近似，而「M45 还是 IC 353」这种比较，正是
+        // 模型知道而本机不知道的事。
+        //
+        // 不占进度条：它是几次几十毫秒的请求，而且失败了什么都不影响。
+        solve = await _pickPrimary(solve, modelSettings) ?? solve;
+        if (moment != null) {
+          // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
+          // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
+          try {
+            solve = await worker.annotateMovingBodies(analysis, solve, moment);
+          } catch (error) {
+            warnings.add('运动天体判定未能完成：$error');
+          }
         }
       }
     }
@@ -308,6 +320,49 @@ class SkyPipeline {
       warnings: warnings,
       moonOnly: moonOnly,
     );
+  }
+
+  /// 问模型「这张照片拍的是哪个深空天体」，把它的选择挂到解算结果上。
+  ///
+  /// 候选少于两个时直接不问：只有一个天体时「主体是谁」没有第二个答案，多问
+  /// 一次只是多一次网络往返。
+  ///
+  /// 用轻量模型：这是个「哪个名字更耳熟」的问题，不需要推理链。
+  Future<SolveResult?> _pickPrimary(
+    SolveResult solve,
+    ModelSettings? settings,
+  ) async {
+    if (solve.deepSkyObjects.length < 2) return null;
+    if (settings == null) return null;
+    final key = settings.lightKey.trim().isNotEmpty
+        ? settings.lightKey
+        : settings.strongKey;
+    final model = settings.lightKey.trim().isNotEmpty
+        ? settings.lightModel
+        : settings.strongModel;
+    if (key.trim().isEmpty || model.trim().isEmpty) return null;
+
+    final field = solve.fieldOfViewDegrees;
+    final candidates = [
+      for (final object in solve.deepSkyObjects)
+        DeepSkyCandidate(
+          name: object.name,
+          category: object.category,
+          angularSizeArcmin: object.angularSizeArcmin,
+          fieldFraction: object.angularSizeArcmin == null || field <= 0
+              ? null
+              : (object.angularSizeArcmin! / 60) / field,
+          magnitude: object.magnitude,
+          nickname: chineseNicknameOf(object.name),        ),
+    ];
+    final picked = await ModelService.pickPrimaryDeepSky(
+      baseUrl: settings.baseUrl,
+      apiKey: key,
+      model: model,
+      candidates: candidates,
+    );
+    if (picked == null) return null;
+    return solve.withPrimaryDeepSky(picked);
   }
 }
 

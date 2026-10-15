@@ -528,7 +528,64 @@ DEEPSKY_TYPES = frozenset(
     {"Gx", "OC", "Gb", "Pl", "Nb", "C+N", "SNR", "D*", "***", "Ast", "Kt", "PD", "?"}
 )
 
+# 不看星等、一律收进目录的那几类。
+#
+# NGC 2000.0 有 41% 的条目没有星等（13227 条里 5461 条），而「又大又弥漫」正是
+# 最容易没有星等的那一类——星等那一列对这类天体本来就没多大意义（延展天体没有
+# 「一个点」的星等，面纱星云五个部件在表里全是空的）。
+#
+# 按星等筛的后果是实打实的：2274 条里真正的星云只剩 59 条，而面纱星云
+# （NGC 6960 / 6992 / 6995 / 6979 / 6974）一条都没有——它恰恰是爱好者最常拍的
+# 目标之一。用户拍了半天，图上什么也没有。
+#
+# 这几类加起来一千二百多条，全部收进来只多 30 KB 上下，而它们正是照片里真会
+# 出现的东西。剩下的绝大多数是星系（8682 条），继续按星等和尺寸筛。
+NO_MAGNITUDE_TYPES = frozenset({"Nb", "Pl", "C+N", "Kt", "SNR", "OC", "Gb", "Ast"})
+
 NGC2000_COLUMNS = "Name,Type,RAB2000,DEB2000,size,mag,n_mag,Desc"
+
+
+def rebuild_deepsky_only(args, cached_fetch) -> int:
+    """只重写 `deepsky.json`，顺带更新 `catalog_meta.json` 里和它有关的几个字段。
+
+    meta 是**读改写**而不是重写：恒星数、星座顺序、Gaia 层那几个数值只有完整
+    跑一遍才算得出来，这里不该动它们，更不该把它们抹成 null——那会让
+    `catalog_meta.json` 看起来像一份残缺的构建记录。
+    """
+    ngc_rows = cached_fetch("ngc2000", "VII/118/ngc2000", NGC2000_COLUMNS)
+    payload, missing = build_deepsky_payload(
+        ngc_rows, args.deepsky_mag_limit, args.deepsky_size_min
+    )
+    write_json(os.path.join(args.out, "deepsky.json"), payload)
+    if missing:
+        print(
+            "注意：这些 Messier 编号在 NGC 2000.0 里没找到，"
+            f"深空目录会缺条目：{missing}",
+            file=sys.stderr,
+        )
+
+    meta_path = os.path.join(args.out, "catalog_meta.json")
+    meta: dict[str, object] = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as handle:
+            meta = json.load(handle)
+    meta["deepsky_mag_limit"] = args.deepsky_mag_limit
+    meta["deepsky_size_min"] = args.deepsky_size_min
+    # 把「哪几类不看星等」也记进 meta：不然光看 mag_limit 会以为这套筛选只有
+    # 一条规则，而深空目录里那些没有星等的星云正是靠这一项才留下来的。
+    meta["deepsky_always_types"] = sorted(NO_MAGNITUDE_TYPES)
+    meta["deepsky_count"] = len(payload)
+    write_json(meta_path, meta)
+
+    kinds: dict[str, int] = {}
+    for row in payload:
+        kinds[str(row[3])] = kinds.get(str(row[3]), 0) + 1
+    print(
+        f"只重建深空目录：{len(payload)} 个天体，"
+        f"其中星云/星团 {sum(kinds.get(k, 0) for k in NO_MAGNITUDE_TYPES)} 个",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def build_gaia_layer(
@@ -622,9 +679,14 @@ def build_deepsky_payload(
 ) -> tuple[list[list[object]], list[int]]:
     """把 NGC 2000.0 裁成 APP 用的深空目录。
 
-    留下的有两类：全部 110 个 Messier 目标（爱好者真正会去拍的那批），
-    以及亮于 [mag_limit] 等且长轴大于 [size_min] 角分的 NGC/IC 成员。剩下
-    的一万多个条目全是十几等的暗星系，既拍不到，标出来也只会把画面糊满。
+    留下的有三类：
+
+    * 全部 110 个 Messier 目标（爱好者真正会去拍的那批）；
+    * [NO_MAGNITUDE_TYPES] 那几类——星云、行星状星云、疏散星团、球状星团——
+      **不看星等**，理由见那张表的注释：按星等筛会把面纱星云这种大名鼎鼎的
+      目标整片滤掉；
+    * 其余（绝大多数是星系）按「亮于 [mag_limit] 等且长轴大于 [size_min] 角分」
+      筛。这一万多条如果全收，画面会被十四等的暗星系糊满。
 
     返回 (目录, 没找到的 Messier 编号)。后者正常应该是空的；非空说明映射表
     或数据源变了，构建日志里要能看见。
@@ -653,14 +715,14 @@ def build_deepsky_payload(
         number = messier_of.get(name)
         size = parse_number(row.get("size", ""))
         magnitude = parse_number(row.get("mag", ""))
-        if number is None:
+        object_type = row.get("Type", "").strip()
+        if object_type not in DEEPSKY_TYPES:
+            object_type = ""
+        if number is None and object_type not in NO_MAGNITUDE_TYPES:
             if magnitude is None or magnitude > mag_limit:
                 continue
             if size is None or size < size_min:
                 continue
-        object_type = row.get("Type", "").strip()
-        if object_type not in DEEPSKY_TYPES:
-            object_type = ""
         payload.append(
             [
                 f"M {number}" if number else name,
@@ -702,6 +764,8 @@ def main() -> int:
                         help="Gaia 补充层保留的极限 G 星等（每深一等，星数约涨三倍）")
     parser.add_argument("--skip-gaia", action="store_true",
                         help="不生成 gaia.bin（只更新名字或深空目录时用）")
+    parser.add_argument("--only-deepsky", action="store_true",
+                        help="只重建 deepsky.json，其余资产一律不动")
     args = parser.parse_args()
 
     # Windows 控制台默认是 GBK，拜耳编号里的上标（α²）会让 print 抛
@@ -730,6 +794,14 @@ def main() -> int:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(text)
         return parse_tsv(text)
+
+    # 只重建深空目录。
+    #
+    # 单独留一条窄路，是因为深空目录的筛选规则改起来很容易想到要改（「为什么
+    # 面纱星云不在里面」），而完整跑一遍要重新拉 118218 行 Hipparcos 和
+    # 十三万行 Gaia——为了调一个筛选条件重下几 MB，下次就没人愿意改了。
+    if args.only_deepsky:
+        return rebuild_deepsky_only(args, cached_fetch)
 
     # ---- 1. 取三张表 -----------------------------------------------------
     bsc_rows = cached_fetch(

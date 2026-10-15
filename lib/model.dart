@@ -10,6 +10,46 @@ typedef AgentToolExecutor = Future<Object?> Function(
 
 typedef AgentToolListener = void Function(String name);
 
+/// 挑主体时给模型看的一条候选。只有测量结果，没有照片。
+class DeepSkyCandidate {
+  const DeepSkyCandidate({
+    required this.name,
+    required this.category,
+    this.angularSizeArcmin,
+    this.fieldFraction,
+    this.magnitude,
+    this.nickname,
+  });
+
+  /// 目录编号（`M 45`、`IC 353`）。模型必须逐字照抄这一个。
+  final String name;
+
+  /// 中文类型（「疏散星团」）。
+  final String category;
+
+  final double? angularSizeArcmin;
+
+  /// 长轴占像场对角线的比例。
+  final double? fieldFraction;
+
+  final double? magnitude;
+
+  /// 本机手写的常用名；没有就是 null。给模型看是因为它是个有用的提示——但
+  /// 也只是提示：真正做判断的是模型，本机那张表覆盖不到 IC 353 这种。
+  final String? nickname;
+
+  Map<String, Object?> toJson() => {
+        'name': name,
+        'type': category,
+        if (angularSizeArcmin != null) 'angular_size_arcmin': angularSizeArcmin,
+        if (fieldFraction != null)
+          'fraction_of_field_of_view':
+              double.parse(fieldFraction!.toStringAsFixed(3)),
+        if (magnitude != null) 'magnitude': magnitude,
+        if (nickname != null) 'common_chinese_name': nickname,
+      };
+}
+
 /// 与兼容 OpenAI 接口的模型服务对话。
 ///
 /// 双模型路由是刻意的：日常解读用便宜快的轻量模型，只有在结果「较弱」
@@ -332,6 +372,100 @@ class ModelService {
     } finally {
       if (httpClient == null) client.close();
     }
+  }
+
+  /// 从画面里的深空天体里挑出「这张照片拍的是哪一个」。
+  ///
+  /// ## 为什么这件事交给模型，而测量不交
+  ///
+  /// 候选编号、坐标、角尺寸、占像场多大——全是本机算出来的**测量**，模型一个
+  /// 字都不许改。而「这些里面哪个才是主角」是个**判断**，它需要的正是模型知道
+  /// 而本机不知道的东西：哪个名字是爱好者真会说的。
+  ///
+  /// 实况就是这么暴露出来的：拍昴星团的那张图里，IC 353 在目录里记着 180′，
+  /// 比 M45 的 110′ 大，于是按尺寸排出来的「主体」成了 IC 353——一个没有星等、
+  /// 没有常用名、大部分人没听说过的暗反射星云，而 180′ 这个数本身就可疑
+  /// （目录里 IC 360、IC 2118 也是恰好 180.0′）。本机只能靠手写的常用名表去
+  /// 近似，而那张表回答不了「M45 和 IC 353 之间选哪个」。
+  ///
+  /// ## 只允许排序，不允许增删
+  ///
+  /// 回答必须**逐字**等于候选里的某一个编号，否则返回 null、整个判断作废。模型
+  /// 编一个天体出来是最坏的结果：报告顶部会郑重其事地写一个画面里根本没有的
+  /// 东西，而用户没法察觉。
+  ///
+  /// 失败一律返回 null，调用方保留本机的次序——没配模型、断网、模型答得不像话，
+  /// 结果都只是「和以前一样」，不会变成「报告坏了」。
+  static Future<String?> pickPrimaryDeepSky({
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    required List<DeepSkyCandidate> candidates,
+    http.Client? httpClient,
+  }) async {
+    if (candidates.length < 2) return null;
+    if (apiKey.trim().isEmpty || model.trim().isEmpty) return null;
+    final client = httpClient ?? http.Client();
+    try {
+      final uri = Uri.parse(
+        '${baseUrl.trim().replaceFirst(RegExp(r'/+$'), '')}/chat/completions',
+      );
+      final response = await client.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${apiKey.trim()}',
+        },
+        body: jsonEncode({
+          'model': model.trim(),
+          'temperature': 0,
+          'messages': [
+            {
+              'role': 'system',
+              'content':
+                  '你是天文观测助手。用户会给你一张照片里解出来的深空天体清单，'
+                      '你要指出这张照片**拍的是哪一个**。'
+                      '只能从清单里的编号中选一个，逐字照抄，不要发明编号，'
+                      '也不要解释。判断依据是「爱好者会说自己拍了什么」：'
+                      '优先选那个大家都叫得出名字的目标，而不是尺寸数字最大的。'
+                      '只输出 JSON：{"primary": "编号"}。',
+            },
+            {
+              'role': 'user',
+              'content': jsonEncode({'objects': [for (final c in candidates) c.toJson()]}),
+            },
+          ],
+        }),
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) return null;
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      final content = decoded['choices']?[0]?['message']?['content'];
+      if (content is! String) return null;
+      final pick = _primaryFrom(content);
+      if (pick == null) return null;
+      // 必须是候选里真有的那一个，而且要**逐字**相等——差一个空格都算没匹配上，
+      // 返回去也没法在列表里定位。
+      for (final candidate in candidates) {
+        if (candidate.name == pick) return candidate.name;
+      }
+      return null;
+    } catch (_) {
+      // 挑主体这件事失败不该影响任何别的东西：报告照出，只是顺序按本机那套。
+      return null;
+    } finally {
+      if (httpClient == null) client.close();
+    }
+  }
+
+  /// 从模型那段话里抠出 `{"primary": "…"}`。
+  ///
+  /// 不要求整段就是 JSON：模型常常会包一层 ```json 围栏，或者先说一句「这张
+  /// 照片拍的是」再给 JSON。所以只找 `primary` 对应的那个字符串。
+  static String? _primaryFrom(String content) {
+    final match = RegExp(r'"primary"\s*:\s*"([^"]*)"').firstMatch(content);
+    final value = match?.group(1)?.trim();
+    if (value == null || value.isEmpty) return null;
+    return value;
   }
 
   static Future<List<Map<String, double>>> proposeNonSkyRegions({

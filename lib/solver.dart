@@ -800,9 +800,16 @@ class PlateSolver {
 
   /// 画面里落进了哪些深空天体，坐标已经投影成像素。
   ///
-  /// 判定条件是「中心落在画面内」，和星表恒星一样：圆圈本身比目标大得多
-  /// （M31 的 178′ 能铺满整幅），按圆圈是否压到画面来判会带进一堆只有
-  /// 边缘擦过去的邻居。中心在画面里，用户就确实拍到了它。
+  /// 判定分两种，因为同一把尺子量不了所有情况：
+  ///
+  ///   * **中心落在画面内** —— 用户确实把镜头对上了它，直接收。
+  ///   * **中心在外面，但天体的圆压到了画面** —— 只有够大的天体才算。这条是
+  ///     补上来的：面纱星云的东西两弧加起来能有一度多，广角拍一张，弧的
+  ///     大部分在画面里、中心却落在外头，按旧规则整条都被丢掉，用户看着自己
+  ///     明明拍到了的东西在图上没有任何标记。
+  ///
+  /// 为什么还留着「够大才算」这个条件：如果按圆圈算而不加门槛，广角照片里
+  /// 会有几十个只有边缘擦过去的暗星系挤进来，把真正主体淹掉。
   List<SkyObject> _deepSkyObjects(
     Wcs wcs,
     SkyAnalysis analysis,
@@ -815,7 +822,16 @@ class PlateSolver {
     final objects = <SkyObject>[];
     for (final object in catalog.near(centreRa, centreDec, radius)) {
       final (x, y) = wcs.worldToPixel(object.ra, object.dec);
-      if (x < 0 || y < 0 || x >= analysis.width || y >= analysis.height) continue;
+      if (!_reachesFrame(
+        x: x,
+        y: y,
+        sizeArcmin: object.angularSizeArcmin,
+        arcsecPerPixel: wcs.arcsecPerPixel,
+        width: analysis.width,
+        height: analysis.height,
+      )) {
+        continue;
+      }
       objects.add(object.toSkyObject(x, y));
       // 和在线路径同一个上限。广角照片里两三千条目录天体能有一两百个落进
       // 画面，全标出来会把星点、星座线一起淹掉。
@@ -823,6 +839,36 @@ class PlateSolver {
     }
     return objects;
   }
+
+  /// 这个天体要不要标。
+  ///
+  /// 中心在画面内的一律要；中心在外面的，只有「圆压到画面」并且「够大」才要。
+  /// 「够大」的门槛取像场对角线的 10%，和报告里 `fieldFraction` 的「这张照片的
+  /// 主体」用的是同一条线——两处说法不一致的话，同一个天体会在图上被标出来、
+  /// 却在报告里被说成「只占百分之几，偏小」。
+  ///
+  /// 本机和在线两条路都调它。在线那条拿回来的天体原本没有角尺寸，是
+  /// [_sizedDeepSky] 从内置目录里按位置补上的，补完再判，规则和本机一致。
+  static bool _reachesFrame({
+    required double x,
+    required double y,
+    required double? sizeArcmin,
+    required double arcsecPerPixel,
+    required int width,
+    required int height,
+  }) {
+    if (x >= 0 && y >= 0 && x < width && y < height) return true;
+    if (sizeArcmin == null || sizeArcmin <= 0 || arcsecPerPixel <= 0) return false;
+    final radiusPixels = sizeArcmin * 60 / arcsecPerPixel / 2;
+    final diagonal = math.sqrt(width * width + height * height);
+    if (radiusPixels * 2 < diagonal * _outOfFrameSizeFraction) return false;
+    // 到画面的最短距离（中心在画面外时为正）。
+    final dx = math.max(math.max(-x, x - width), 0.0);
+    final dy = math.max(math.max(-y, y - height), 0.0);
+    return math.sqrt(dx * dx + dy * dy) <= radiusPixels;
+  }
+
+  static const _outOfFrameSizeFraction = 0.1;
 
   static const _maxDeepSkyObjects = 30;
 
@@ -987,7 +1033,7 @@ class PlateSolver {
     return result.withConstellationDecoration(
       decoration.constellations,
       decoration.figures,
-      deepSkyObjects: _sizedDeepSky(result.deepSkyObjects),
+      deepSkyObjects: _sizedDeepSky(result),
     );
   }
 
@@ -1033,19 +1079,39 @@ class PlateSolver {
   /// SIMBAD 只给名字和类型，不给尺寸，所以在线路径的「占了画面多大」那一段
   /// 本来是空的。本机目录里有尺寸，按坐标对一下就能补——对不上就留空，
   /// 报告里写「尺寸未知」，不拿一个近邻的数凑上去。
-  List<SkyObject> _sizedDeepSky(List<SkyObject> objects) {
+  /// 给在线解算拿回来的深空天体补角尺寸，再按「圆有没有压到画面」筛一遍。
+  ///
+  /// 在线那条路的名字和坐标来自 SIMBAD，SIMBAD 不给角尺寸——它连「这个天体
+  /// 多大」都不知道，所以位置对不对、标不标得出来，只能靠内置目录按位置补。
+  /// 补上尺寸之后就和本机那条路用同一个判据（[_reachesFrame]），两条路对于
+  /// 「什么算拍到了」不会各说各话。
+  List<SkyObject> _sizedDeepSky(SolveResult result) {
     final catalog = deepSky;
-    if (catalog == null || objects.isEmpty) return objects;
-    return [
-      for (final object in objects)
-        if (object.angularSizeArcmin != null)
-          object
-        else
-          _withAngularSize(
-            object,
-            catalog.angularSizeNear(object.ra, object.dec),
-          ),
-    ];
+    final wcs = result.wcs;
+    if (catalog == null || result.deepSkyObjects.isEmpty || wcs == null) {
+      return result.deepSkyObjects;
+    }
+    final kept = <SkyObject>[];
+    for (final object in result.deepSkyObjects) {
+      final size = object.angularSizeArcmin ??
+          catalog.angularSizeNear(object.ra, object.dec);
+      if (!_reachesFrame(
+        x: object.x,
+        y: object.y,
+        sizeArcmin: size,
+        arcsecPerPixel: wcs.arcsecPerPixel,
+        width: wcs.width,
+        height: wcs.height,
+      )) {
+        continue;
+      }
+      kept.add(
+        object.angularSizeArcmin != null
+            ? object
+            : _withAngularSize(object, size),
+      );
+    }
+    return kept;
   }
 
   static SkyObject _withAngularSize(SkyObject object, double? size) =>

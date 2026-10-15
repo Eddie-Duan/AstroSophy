@@ -2483,10 +2483,29 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     return objects;
   }
 
+  /// 图上要画圈的那几个。
+  ///
+  /// 「太大又没有星等」的那些不传进来（判据见 [DeepSkyEntry.worthMarkingOnImage]）。
+  /// 它们在下面的列表里照旧有一行——用户该知道画面里有它——只是图上没有圈，
+  /// 所以也就没有「隐去那一个」这件事可做。
   List<SkyObject> _visibleDeepSkyObjects(SolveResult? solve) => [
         for (final object in _sortedDeepSkyObjects(solve))
-          if (!_hiddenDeepSkyObjects.contains(object.name)) object,
+          if (!_hiddenDeepSkyObjects.contains(object.name) &&
+              _worthMarking(object, solve))
+            object,
       ];
+
+  /// 这个天体在图上画不画圈。
+  ///
+  /// 角尺寸和像场之比要现算：判据用的是「占像场多大」，而不是绝对角分——
+  /// 同一个 180′ 的天体，放在 45° 的广角里是个小圈，放在 4° 的视场里就是
+  /// 绕着整幅画的一个环，只有相对大小才说明得了它画出来是什么样。
+  static bool _worthMarking(SkyObject object, SolveResult? solve) =>
+      worthMarkingOnImage(
+        sizeArcmin: object.angularSizeArcmin,
+        magnitude: object.magnitude,
+        fieldOfViewDegrees: solve?.fieldOfViewDegrees ?? 0,
+      );
 
   Widget _deepSkyGroup(List<SkyObject> objects, SolveResult? solve) {
     const id = 'deepSky';
@@ -2580,6 +2599,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Widget _deepSkyRow(SkyObject object, SolveResult? solve) {
     final isHidden = _hiddenDeepSkyObjects.contains(object.name);
     final isSelected = _selectedDeepSkyName == object.name;
+    final markable = _worthMarking(object, solve);
     // 「有中文常用名」这件事现在是标题上看得见的：M 16 写成「M 16 鹰状星云」。
     // 之前是拿「名字里有没有汉字」来判的，那对 M 16 这种编号根本不成立——
     // 于是它在列表里是灰的，而报告里却写着鹰状星云。
@@ -2645,20 +2665,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _batchButton(
-            Icons.remove_circle_outline,
-            '把 ${object.name} 的标记从图上隐去',
-            !isHidden,
-            () => setState(() => _hiddenDeepSkyObjects.add(object.name)),
-            dense: true,
-          ),
-          _batchButton(
-            Icons.add_circle_outline,
-            '显示 ${object.name} 的标记',
-            isHidden,
-            () => setState(() => _hiddenDeepSkyObjects.remove(object.name)),
-            dense: true,
-          ),
+          // 「又大又没星等」的天体图上本来就没画圈（判据见
+          // [worthMarkingOnImage]），所以这里没有加减号可给——给了一个按下去
+          // 什么也不会发生的开关，比没有开关更让人困惑。
+          if (markable) ...[
+            _batchButton(
+              Icons.remove_circle_outline,
+              '把 ${object.name} 的标记从图上隐去',
+              !isHidden,
+              () => setState(() => _hiddenDeepSkyObjects.add(object.name)),
+              dense: true,
+            ),
+            _batchButton(
+              Icons.add_circle_outline,
+              '显示 ${object.name} 的标记',
+              isHidden,
+              () => setState(() => _hiddenDeepSkyObjects.remove(object.name)),
+              dense: true,
+            ),
+          ] else
+            const Padding(
+              padding: EdgeInsets.only(left: 6),
+              child: Text(
+                '图上不画圈',
+                style: TextStyle(fontSize: 11, color: Color(0xFF8192A8)),
+              ),
+            ),
         ],
       ),
     );
