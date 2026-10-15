@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'analysis.dart';
+import 'deepsky_names.dart';
 import 'models.dart';
 import 'report.dart';
 import 'theme.dart';
@@ -487,9 +488,7 @@ class DetectedStarsPainter extends CustomPainter {
       }
       final label = TextPainter(
         text: TextSpan(
-          text: object.category.isEmpty
-              ? object.name
-              : '${object.name} · ${object.category}',
+          text: deepSkyCaption(object.name, object.category),
           style: labelStyle,
         ),
         textDirection: TextDirection.ltr,
@@ -802,6 +801,8 @@ class SkyProgressBar extends StatelessWidget {
     required this.value,
     this.height = 10,
     this.online = false,
+    this.moon = false,
+    this.solvedLocally = false,
   });
 
   /// 0–1。
@@ -814,6 +815,21 @@ class SkyProgressBar extends StatelessWidget {
   /// 传上去了」，等的东西和等的心态都不一样。用户瞥一眼进度条就知道现在到
   /// 哪一段，不必去读那行小字。
   final bool online;
+
+  /// 画面上已经认出月面。
+  ///
+  /// 真的时候在进度条**左侧**挂一个标记。位置是有讲究的：进度条本身说的是
+  /// 「还要等多久」，而这句话说的是「等一下，这可能是另一回事」——它必须
+  /// 出现在用户视线起点的左边，而不是混进右边的百分比里当又一个数字。
+  final bool moon;
+
+  /// 本机解算已经成功。
+  ///
+  /// 换成红色调。这是一个**结论**，不是一种进度：到这一步为止，这张照片的
+  /// 天区是手机上算出来的，它一次都没离开过设备。前面几步同一条进度条可能
+  /// 是薄荷绿（本机在算）或琥珀色（照片已经传上去了），而红色说的是
+  /// 「不用再等了，结果已经出来了」。
+  final bool solvedLocally;
 
   /// 本机那几步的填充色：薄荷绿，和全应用的主强调色一致。
   static const _localColours = <Color>[
@@ -830,8 +846,32 @@ class SkyProgressBar extends StatelessWidget {
     Color(0xFFFFF3C4),
   ];
 
+  /// 本机解算成功之后的填充色：红。
+  ///
+  /// 红在别处通常表示出错，这里刻意反过来用：整条链路上最要紧的一件事就是
+  /// 「照片有没有出过手机」，而这个红色是**只在照片确实没出去**的时候才出现
+  /// 的那种红。用户看一次就会记住它，因为这不需要读任何字。
+  static const _solvedColours = <Color>[
+    Color(0xFF8C2A2E),
+    Color(0xFFFF6B6B),
+    Color(0xFFFFC9C9),
+  ];
+
   @override
-  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+  Widget build(BuildContext context) => Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 月亮标记摆在进度条左边。它比进度条本身更该被先看到：进度条说
+          // 的是「还要等多久」，这个标记说的是「等一下，这可能是另一回事」。
+          if (moon) ...[
+            const _MoonBadge(),
+            const SizedBox(width: 8),
+          ],
+          Expanded(child: _bar()),
+        ],
+      );
+
+  Widget _bar() => TweenAnimationBuilder<double>(
         // 进度是跳着报上来的（阶段之间会跳一大格），补间让它滑过去而不是
         // 生硬地弹一下。
         tween: Tween<double>(begin: 0, end: value.clamp(0.0, 1.0)),
@@ -853,7 +893,11 @@ class SkyProgressBar extends StatelessWidget {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: online ? _onlineColours : _localColours,
+                          colors: solvedLocally
+                              ? _solvedColours
+                              : online
+                                  ? _onlineColours
+                                  : _localColours,
                         ),
                       ),
                       child: const CustomPaint(painter: _StarRushPainter()),
@@ -865,6 +909,47 @@ class SkyProgressBar extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// 进度条左边那个「这是个月亮」的标记。
+///
+/// 画一个缺了一角的圆（凸月的样子），而不是放一个通用的图标：这个标记只
+/// 在认出月面时出现，形状就是它要说的事，用户不必去读旁边的字。
+class _MoonBadge extends StatelessWidget {
+  const _MoonBadge();
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: '认出月面',
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CustomPaint(painter: _MoonBadgePainter()),
+        ),
+      );
+}
+
+class _MoonBadgePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - 1;
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()..color = const Color(0xFFFFDE77),
+    );
+    // 缺的那一块用背景色盖掉，露出一个月牙。位移取半径的 0.55 倍：再少就
+    // 看不出缺角，再多就不像月亮了。
+    canvas.drawCircle(
+      center.translate(radius * 0.55, -radius * 0.18),
+      radius * 1.02,
+      Paint()..color = const Color(0xFF1B2739),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _MoonBadgePainter oldDelegate) => false;
 }
 
 /// 进度条填充段里的星点。位置写死（用下标换算），这样每帧都一样，

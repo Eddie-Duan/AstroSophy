@@ -48,6 +48,23 @@ void main() {
           isNot(chineseNicknameOf('NGC 6992')));
     });
 
+    test('界面上只有一个地方决定这个天体怎么写', () {
+      // 曾经真的出现过两张脸：报告里写「M 16 鹰状星云」，图上的标注却是
+      // 「M 16 · 星团与星云」。根子是那句话在四个地方各写了一遍。现在四处
+      // 都调 deepSkyCaption，所以只要它对了，到处都是对的。
+      expect(deepSkyCaption('M 16', '星团与星云'), 'M 16 鹰状星云');
+      expect(deepSkyCaption('M 45', '疏散星团'), 'M 45 昴星团');
+      expect(deepSkyCaption('NGC 6960', '超新星遗迹'), 'NGC 6960 西面纱星云');
+      // 没收录的才退回「编号 · 类型」。
+      expect(deepSkyCaption('NGC 9999', '星系'), 'NGC 9999 · 星系');
+      // 类型缺失时不留一个孤零零的分隔符。
+      expect(deepSkyCaption('NGC 9999', ''), 'NGC 9999');
+    });
+
+    test('名字里已经带昵称时不再拼一遍', () {
+      expect(deepSkyCaption('M 16 鹰状星云', '星团与星云'), 'M 16 鹰状星云');
+    });
+
     test('没收录的编号不给编一个名字', () {
       // 硬译一个出来是最坏的结果：用户会拿它当事实去搜，然后什么也搜不到。
       expect(chineseNicknameOf('NGC 9999'), isNull);
@@ -62,10 +79,12 @@ void main() {
       expect(deepSkyLabel('NGC 9999'), 'NGC 9999');
     });
 
-    test('名字里已经带昵称时不再拼一遍', () {
+    test('已经带昵称的名字不会再拼一遍', () {
       // 在线星表回来的名字有可能已经写成这样，再拼一次就是
-      // 「M 45 昴星团 昴星团」。
+      // 「M 45 昴星团 昴星团」；而 deepSkyCaption 还要拿它去查表，查不到
+      // 就会退回「编号 · 类型」，变成「M 16 鹰状星云 · 星团与星云」。
       expect(deepSkyLabel('M 45 昴星团'), 'M 45 昴星团');
+      expect(deepSkyCaption('M 16 鹰状星云', '星团与星云'), 'M 16 鹰状星云');
     });
   });
 }

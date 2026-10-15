@@ -11,14 +11,19 @@ import 'package:image_picker/image_picker.dart';
 import 'agent_tools.dart';
 import 'analysis.dart';
 import 'astrometry.dart';
+import 'crop.dart';
+import 'deepsky_names.dart';
 import 'demo.dart';
 import 'exif.dart';
 import 'export.dart';
 import 'history.dart';
 import 'history_screen.dart';
+import 'jobs.dart';
 import 'markdown.dart';
 import 'model.dart';
 import 'models.dart';
+import 'naming.dart';
+import 'nox.dart';
 import 'onboarding.dart';
 import 'pipeline.dart';
 import 'report.dart';
@@ -75,7 +80,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   List<String> _agentActivity = const [];
   String? _error;
   List<String> _warnings = const [];
-  bool _running = false;
+  /// 当前界面正看着的那次解析。null 表示这一屏没有在跑的解析。
+  SkyJob? _job;
+
+  /// 界面在不在跑的判断，统一从任务那边取——两处各自记一份迟早会对不上，
+  /// 而对不上的表现是「按钮忽然点不动了」。
+  bool get _running => _job?.running ?? false;
+
+  /// 这次解析是「只报告月亮」。
+  bool _moonOnly = false;
+
+  /// 正在裁剪选中的那张图。
+  bool _cropping = false;
+
+  /// 裁剪框（归一化）。null 表示还没动过，等同于整幅。
+  CropRect? _crop;
   bool _explaining = false;
   int _imageGeneration = 0;
 
@@ -83,7 +102,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 明确勾选过才为真——上传照片是不可逆的动作，不能靠一次性的弹窗确认。
   bool _uploadAllowed = false;
 
+  /// astrometry.net 的 Key 配好了没有。
+  ///
+  /// 月亮那个岔路口要用它：说清「继续寻找」这一步到底会不会真的把照片传出去。
+  /// 把「会上传」和「其实是白等」两种后果分开讲，用户才能真的选。
+  bool _astrometryKeyPresent = false;
+
   PipelineProgress? _progress;
+
+  /// 正等着用户拍板的那一次月面提问。
+  ///
+  /// 非 null 时解析**停在**这里等答案——这是整条链路上唯一一个必须人来定的
+  /// 岔路口：往下走要么白等一趟在线解算，要么直接不做解算，两条路的结果对
+  /// 用户不一样，替他选哪一条都是错的。
+  _MoonQuestion? _moonQuestion;
 
   /// 历史记录仓库。第一次用到时才打开——不存不读的会话不必碰磁盘。
   HistoryStore? _history;
@@ -117,11 +149,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 时区从 EXIF 里读到了就用读到的；没读到就按本机时区算——这是界面上
   /// 承诺过的那句话。这里取的偏移是**那个时刻**的本机偏移而不是此刻的偏移，
   /// 夏令时切换前后拍的照片因此不会差一小时。
-  DateTime? get _captureInstant {
-    final moment = _moment;
-    if (moment == null) return null;
-    return moment.utcAt(moment.local.timeZoneOffset);
-  }
+  DateTime? _instantOf(CaptureMoment? moment) =>
+      moment?.utcAt(moment.local.timeZoneOffset);
 
   /// 三组星点在代码里的名字。数组顺序就是列表里的显示顺序。
   static const _groupIds = <String>['named', 'unnamed', 'streaks'];
@@ -166,10 +195,33 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 上下，起一次就够。
   Future<SkyWorker>? _worker;
 
+  /// 后台解析的总管。任务放在它这里，所以界面走了任务还在跑。
+  late final JobCenter _jobCenter = JobCenter(
+    runPipeline: (job, onProgress, onMoon) async {
+      final worker = await _ensureWorker();
+      final settings = await _readModelSettings();
+      final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
+      return SkyPipeline(
+        worker: worker,
+        astrometryKey: key,
+        allowUpload: _uploadAllowed,
+        modelSettings: settings,
+      ).run(
+        job.bytes,
+        question: job.question,
+        moment: _instantOf(job.moment),
+        onProgress: onProgress,
+        onMoonDetected: onMoon,
+      );
+    },
+    archive: _archiveJob,
+  );
+
   @override
   void initState() {
     super.initState();
     _viewer.addListener(_onViewChanged);
+    _jobCenter.addListener(_onJobsChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _reloadSettings();
       await _showOnboarding(firstLaunch: true);
@@ -181,8 +233,37 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     _questionController.dispose();
     _viewer.removeListener(_onViewChanged);
     _viewer.dispose();
+    _jobCenter.removeListener(_onJobsChanged);
+    _jobCenter.dispose();
     _worker?.then((worker) => worker.dispose());
     super.dispose();
+  }
+
+  /// 后台跑完的那次解析自动存进观星记录。
+  ///
+  /// 名字和手动保存时用的是同一套规则，所以用户从首页横幅点进去，在记录里
+  /// 看到的和当场保存时一模一样。
+  Future<String?> _archiveJob(SkyJob job, PipelineOutcome outcome) async {
+    final store = await _ensureHistory();
+    final existing = await store.list();
+    final name = uniqueObservationName(
+      suggestedObservationName(
+        analysis: outcome.analysis,
+        solve: outcome.solve,
+        moment: job.moment?.local,
+        originalFilename: job.filename,
+      ),
+      existing.map((entry) => entry.name),
+    );
+    final saved = await store.save(
+      name: name,
+      analysis: outcome.analysis,
+      solve: outcome.solve,
+      explanation: outcome.explanation,
+      capture: job.moment?.toMetadata(),
+    );
+    await _refreshHistorySnapshot();
+    return saved.name;
   }
 
   void _onViewChanged() {
@@ -220,12 +301,35 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Future<void> _reloadSettings() async {
     try {
       final upload = await _storage.read(key: 'allowUpload');
+      final astrometry = await _storage.read(key: 'astrometryKey') ?? '';
       if (!mounted) return;
       setState(() {
         _uploadAllowed = upload == 'true';
+        _astrometryKeyPresent = astrometry.trim().isNotEmpty;
       });
     } on Exception catch (error) {
       _showError('无法读取设置：$error');
+    }
+  }
+
+  /// 认出月面之后问用户一句，返回回答。
+  ///
+  /// 界面不在场时（比如解析被放到后台、用户已经翻到别的地方去了）没有人能
+  /// 回答，`_moonQuestion` 就一直挂着；这种情况下 [SkyPipeline] 按「只报告
+  /// 月亮」处理——上传是这条路里唯一不可逆的动作，没人看着的时候不能替
+  /// 用户做。
+  Future<bool> _askAboutMoon(SkyAnalysis analysis) {
+    final question = _MoonQuestion(analysis);
+    if (mounted) setState(() => _moonQuestion = question);
+    return question.completer.future;
+  }
+
+  void _answerMoon(bool searchMore) {
+    final question = _moonQuestion;
+    if (question == null) return;
+    setState(() => _moonQuestion = null);
+    if (!question.completer.isCompleted) {
+      question.completer.complete(searchMore);
     }
   }
 
@@ -313,7 +417,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 换图就等于把上一张的解析结果全部作废，漏清一项就会出现「这张图的
   /// 坐标配着那张图的星点」这种最难查的错。
   void _setImage(Uint8List bytes, String name, {CaptureMoment? moment}) {
+    // 换图之前，正在跑的那次解析要交代清楚。
+    //
+    // 不能直接把它扔掉：用户可能刚点了「一键解析」就去相册翻下一张，这时
+    // 那一次的结果已经算出来一半了。让它按「保存并退出」的同一条路走下去
+    // ——继续算，算完自动存进记录。
+    final previous = _job;
+    if (previous != null && previous.running) {
+      if (_moonQuestion != null) _answerMoon(false);
+      _jobCenter.detach(previous);
+    }
     setState(() {
+      _job = null;
       _imageGeneration++;
       _bytes = bytes;
       _filename = name;
@@ -334,6 +449,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _selectedTarget = null;
       _showProcessed = false;
       _showConstellations = true;
+      // 换图就把裁剪状态清掉：裁剪框是按**上一张**的构图选的，留下来只会让
+      // 新图莫名其妙地少一块。
+      _cropping = false;
+      _crop = null;
       _resetPanelState();
     });
   }
@@ -369,56 +488,92 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   ///
   /// 这条链路是「一键」的：用户只需要点一次。跑哪几步由已配置的 API 决定，
   /// 没配的部分自动跳过，不需要用户先想清楚自己配了什么。
+  ///
+  /// 真正跑的是 [JobCenter] 里的一次任务，而不是这个方法自己的局部变量。
+  /// 页面只是**看着**那个任务——用户随时可以点「保存并退出」走人，任务照跑，
+  /// 跑完自动存进观星记录。
   Future<void> _run() async {
     final bytes = _bytes;
     if (bytes == null) return;
+    final job = _jobCenter.start(
+      bytes: bytes,
+      filename: _filename ?? '未命名',
+      moment: _moment,
+      question: _questionController.text,
+    );
     setState(() {
-      _running = true;
       _error = null;
       _warnings = const [];
       _solve = null;
       _explanation = null;
+      _moonOnly = false;
       // 重新解析出来的是新的一份结果，和之前存过的那条记录不再是一回事，
       // 要能再存一次。
       _savedId = null;
       _selectedTarget = null;
-      _progress = const PipelineProgress(0.01, '正在准备');
     });
-    try {
-      final worker = await _ensureWorker();
-      final settings = await _readModelSettings();
-      final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
-      final outcome = await SkyPipeline(
-        worker: worker,
-        astrometryKey: key,
-        allowUpload: _uploadAllowed,
-        modelSettings: settings,
-      ).run(
-        bytes,
-        question: _questionController.text,
-        moment: _captureInstant,
-        onProgress: (progress) {
-          if (mounted) setState(() => _progress = progress);
-        },
-      );
-      if (!mounted) return;
-      setState(() {
-        _analysis = outcome.analysis;
-        _solve = outcome.solve;
-        _explanation = outcome.explanation;
-        _warnings = outcome.warnings;
-      });
-    } catch (error) {
-      _showError('解析失败：$error');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _running = false;
-          _progress = null;
-        });
-      }
-    }
+    _attachJob(job);
   }
+
+  /// 界面看着某个任务。图上、进度条、结果全都跟着它走。
+  void _attachJob(SkyJob job) {
+    _jobCenter.attach(job, _askAboutMoon);
+    setState(() {
+      _job = job;
+      _bytes = job.bytes;
+      _filename = job.filename;
+      _moment = job.moment;
+      _progress = job.progress;
+      if (job.outcome != null) _applyOutcome(job.outcome!);
+      if (job.error != null) _error = job.error;
+    });
+  }
+
+  void _applyOutcome(PipelineOutcome outcome) {
+    _analysis = outcome.analysis;
+    _solve = outcome.solve;
+    _explanation = outcome.explanation;
+    _warnings = outcome.warnings;
+    _moonOnly = outcome.moonOnly;
+  }
+
+  /// 任务那边有动静了。
+  ///
+  /// 只处理自己看着的那一个：别的任务（用户已经离开的那些）的进度和结果和
+  /// 这一屏没有关系。
+  void _onJobsChanged() {
+    final job = _job;
+    if (job == null || !mounted) return;
+    setState(() {
+      _progress = job.progress;
+      if (job.outcome != null) _applyOutcome(job.outcome!);
+      if (job.error != null) _error = job.error;
+    });
+  }
+
+  /// 「保存并退出」：解析交给后台，这一屏松开手。
+  ///
+  /// 这是这个页面唯一一个「还能反悔」的动作——用户走开以后随时可以从首页那
+  /// 条横幅回到这次解析，只要它还在跑。
+  void _detachJob() {
+    final job = _job;
+    if (job == null) return;
+    // 还挂着的月面提问先收回来：人都不看了，不能让它等着一个永远不来的回答。
+    if (_moonQuestion != null) _answerMoon(false);
+    _jobCenter.detach(job);
+    setState(() {
+      _job = null;
+      _progress = null;
+      _moonQuestion = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('已放到后台继续解析，完成后会自动存进观星记录'),
+      ),
+    );
+  }
+
+  /// 本机记录的一份快照，给 Nox 的上下文用。
 
   /// 只重跑解读。坐标、测光都是现成的，没必要为了换一句问法重算一遍。
   Future<void> _explain() async {
@@ -484,12 +639,102 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
   }
 
+  /// 记录类操作：改名、删除。
+  ///
+  /// 和「当前照片」无关，所以单独拎出来：用户常常是在还没选图的时候想起来
+  /// 「上个月那张改个名字」，而这件事本来就不需要照片。
+  Future<Object?> _handleArchiveAction(
+    String name,
+    Map<String, Object?> arguments,
+  ) async {
+    final id = arguments['observation_id'];
+    if (id is! String || !_isSafeObservationId(id)) {
+      throw const FormatException('记录编号无效。');
+    }
+    final history = await _ensureHistory();
+    final entries = await history.list();
+    final entry = entries.where((item) => item.id == id).firstOrNull;
+    if (entry == null) throw StateError('找不到指定的本机观测记录。');
+
+    if (name == 'rename_observation') {
+      final rawName = arguments['new_name'];
+      if (rawName is! String ||
+          rawName.trim().isEmpty ||
+          rawName.length > 100) {
+        throw const FormatException('新名称不能为空且不能超过 100 个字符。');
+      }
+      if (!await _confirmAgentAction(
+        '重命名观测记录',
+        '将把“${entry.name}”改名为“${rawName.trim()}”。',
+      )) {
+        return {'renamed': false, 'cancelled': true};
+      }
+      final renamed = await history.rename(entry, rawName.trim());
+      await _refreshHistorySnapshot();
+      return {'renamed': true, 'id': renamed.id, 'name': renamed.name};
+    }
+
+    if (!await _confirmAgentAction(
+      '删除观测记录',
+      '将永久删除“${entry.name}”的测量结果和本机预览图，无法恢复；相册里的原图不受影响。',
+    )) {
+      return {'deleted': false, 'cancelled': true};
+    }
+    await history.delete(entry);
+    if (mounted && _savedId == entry.id) setState(() => _savedId = null);
+    await _refreshHistorySnapshot();
+    return {'deleted': true, 'id': entry.id, 'name': entry.name};
+  }
+
+  /// 本机记录的一份快照，给 Nox 的上下文用。
+  ///
+  /// 那份上下文是**同步**取出去的（`NoxBackend.context` 是个普通函数），因为
+  /// 它每次发问都要现取，而发问本身已经是异步的了——再为它铺一层异步，只会
+  /// 把「记录读不到」变成一条新的失败路径。所以留着最近的一份快照，在打开
+  /// Nox、保存、改名、删除之后刷新。
+  List<SavedAnalysis> _historySnapshot = const [];
+
+  Future<void> _refreshHistorySnapshot() async {
+    try {
+      final store = await _ensureHistory();
+      final entries = await store.list();
+      if (mounted) setState(() => _historySnapshot = entries);
+    } catch (_) {
+      // 读不到就沿用上一份：Nox 少知道几条记录，总好过整页打不开。
+    }
+  }
+
   Future<Object?> _executeAgentAction(
     String name,
     Map<String, Object?> arguments,
-    SkyAnalysis analysis,
+    SkyAnalysis? analysis,
     Map<String, Object?> report,
   ) async {
+    // 换页面不需要照片，所以在最前面处理。
+    if (name == 'open_screen') {
+      final screen = arguments['screen'];
+      if (screen == 'history') {
+        // 先返回结果再换页面：导航会把这一轮的回复冲掉，用户看到的就成了
+        // 「什么都没说就跳走了」。
+        unawaited(Future<void>.delayed(Duration.zero, _openHistory));
+        return {'opened': 'history'};
+      }
+      if (screen == 'settings') {
+        unawaited(Future<void>.delayed(Duration.zero, _settings));
+        return {'opened': 'settings'};
+      }
+      throw const FormatException('可打开的页面只有 history 和 settings。');
+    }
+
+    // 记录类的操作不需要当前照片——Nox 常常是在「还没选图」的时候被问起
+    // 上一个月的记录的。所以这两件事往前挪，不再挂在照片上。
+    if (name == 'rename_observation' || name == 'delete_observation') {
+      return _handleArchiveAction(name, arguments);
+    }
+
+    if (analysis == null) {
+      throw StateError('这个操作需要有正在看的照片，请先选一张图并解析。');
+    }
     if (!identical(_analysis, analysis)) {
       throw StateError('当前照片已更换，请针对新照片重新发送请求。');
     }
@@ -523,46 +768,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         return {'saved': true, 'id': saved.id, 'name': saved.name};
 
       case 'rename_observation':
-        final id = arguments['observation_id'];
-        final rawName = arguments['new_name'];
-        if (id is! String ||
-            !_isSafeObservationId(id) ||
-            rawName is! String ||
-            rawName.trim().isEmpty ||
-            rawName.length > 100) {
-          throw const FormatException('记录编号或新名称无效。');
-        }
-        final history = await _ensureHistory();
-        final entries = await history.list();
-        final entry = entries.where((item) => item.id == id).firstOrNull;
-        if (entry == null) throw StateError('找不到指定的本机观测记录。');
-        if (!await _confirmAgentAction(
-          '重命名观测记录',
-          '将把“${entry.name}”改名为“${rawName.trim()}”。',
-        )) {
-          return {'renamed': false, 'cancelled': true};
-        }
-        final renamed = await history.rename(entry, rawName.trim());
-        return {'renamed': true, 'id': renamed.id, 'name': renamed.name};
-
       case 'delete_observation':
-        final id = arguments['observation_id'];
-        if (id is! String || !_isSafeObservationId(id)) {
-          throw const FormatException('记录编号无效。');
-        }
-        final history = await _ensureHistory();
-        final entries = await history.list();
-        final entry = entries.where((item) => item.id == id).firstOrNull;
-        if (entry == null) throw StateError('找不到指定的本机观测记录。');
-        if (!await _confirmAgentAction(
-          '删除观测记录',
-          '将永久删除“${entry.name}”的测量结果和本机预览图，无法恢复；相册里的原图不受影响。',
-        )) {
-          return {'deleted': false, 'cancelled': true};
-        }
-        await history.delete(entry);
-        if (mounted && _savedId == entry.id) setState(() => _savedId = null);
-        return {'deleted': true, 'id': entry.id, 'name': entry.name};
+        // 已经在 [_handleArchiveAction] 里处理过了，走不到这里。
+        throw StateError('内部错误：记录操作没有提前分流。');
 
       case 'request_online_solve':
         if (_solve != null) {
@@ -607,13 +815,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           apiKey: settings.lightKey.isNotEmpty
               ? settings.lightKey
               : settings.strongKey,
+          // 用同一个模型做视觉识别，不再单配一个「视觉模型名称」。多一个
+          // 输入框的代价是用户要再决定一次「该填哪个」，而这一步的用法本来
+          // 就是偶尔一次、还要先确认——把两个模型的名称并排列出来，只会让
+          // 人卡在这里去查服务商的模型清单。
           model: settings.lightKey.isNotEmpty
-              ? (settings.visionModel.trim().isNotEmpty
-                  ? settings.visionModel
-                  : settings.lightModel)
-              : (settings.visionModel.trim().isNotEmpty
-                  ? settings.visionModel
-                  : settings.strongModel),
+              ? settings.lightModel
+              : settings.strongModel,
           imageBase64: base64Encode(analysis.preview),
           imageWidth: analysis.width,
           imageHeight: analysis.height,
@@ -774,7 +982,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         strongKey: (await _storage.read(key: 'strongKey')) ?? '',
         strongModel:
             (await _storage.read(key: 'strongModel')) ?? 'deepseek-reasoner',
-        visionModel: (await _storage.read(key: 'visionModel')) ?? '',
       );
 
   Future<void> _settings() async {
@@ -803,6 +1010,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Widget _runButton() {
     final progress = _progress;
     if (_running && progress != null) {
+      final question = _moonQuestion;
       return Card(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
@@ -820,9 +1028,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   Text(
                     '${(progress.fraction * 100).round()}%',
                     style: TextStyle(
-                      color: progress.online
-                          ? const Color(0xFFFFDE77)
-                          : kMint,
+                      color: progress.solvedLocally
+                          ? const Color(0xFFFF6B6B)
+                          : progress.online
+                              ? const Color(0xFFFFDE77)
+                              : kMint,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -832,6 +1042,42 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               SkyProgressBar(
                 value: progress.fraction,
                 online: progress.online,
+                moon: progress.moon,
+                solvedLocally: progress.solvedLocally,
+              ),
+              if (progress.solvedLocally) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  '天区已经在手机上算出来了，照片没有离开过这台设备。',
+                  style: TextStyle(fontSize: 11.5, color: Color(0xFFFF9A9A)),
+                ),
+              ],
+              // 停在这里等用户拍板。
+              //
+              // 位置就在这次解析的状态下面，而不是弹一个盖住整屏的对话框：
+              // 这是个「这次还要不要往下跑」的决定，跟进度条是同一件事的两半，
+              // 摆在一起才对得上。而且不挡页面——用户完全可以把它晾着，
+              // 先去相册里挑下一张图。
+              if (question != null) ...[
+                const SizedBox(height: 14),
+                _moonQuestionCard(question.analysis),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _detachJob,
+                      icon: const Icon(Icons.move_to_inbox_outlined, size: 17),
+                      label: const Text('保存并退出'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                '解析继续在后台跑，完成后自动存进观星记录；这期间可以去看别的图。',
+                style: TextStyle(fontSize: 11.5, color: Color(0xFFA6B5C8)),
               ),
             ],
           ),
@@ -854,6 +1100,72 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         const SizedBox(height: 8),
         _actionRow(analysis: _analysis),
       ],
+    );
+  }
+
+  /// 认出月面之后的那个岔路口。
+  ///
+  /// 两句话各自说清后果，因为这正是用户要权衡的东西：往下跑要找别的天体，
+  /// 而这张图上月亮亮得离谱、星空那套判据对它没有意义，本机解算基本不会
+  /// 成功，多半会把照片送去在线解算——那是一次上传，排队几分钟，而且几乎
+  /// 注定失败。不知道这一点的用户会以为「继续」是免费的。
+  Widget _moonQuestionCard(SkyAnalysis analysis) {
+    final disc = analysis.moonDisc!;
+    final uploads = _uploadAllowed && _astrometryKeyPresent;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFDE77).withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFDE77).withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.nightlight_round, size: 18, color: Color(0xFFFFDE77)),
+              SizedBox(width: 8),
+              Text('这是一个月亮',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '月盘占画面 ${(disc.discAreaFraction * 100).toStringAsFixed(2)}%，'
+            '亮面 ${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%。'
+            '要接着找别的天体吗？',
+            style: const TextStyle(fontSize: 13, height: 1.5),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            uploads
+                ? '继续寻找会去做星点解算。月亮上没有任何恒星尺度的点源，'
+                    '本机多半解不出来，那时会把预览图上传到 Astrometry.net 排队。'
+                : '继续寻找会去做星点解算。月亮上没有任何恒星尺度的点源，'
+                    '本机多半解不出来；没开在线解算的话，这一趟就是白等。',
+            style: const TextStyle(fontSize: 12, height: 1.5, color: Color(0xFFA6B5C8)),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _answerMoon(false),
+                  child: const Text('直接报告月亮'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _answerMoon(true),
+                  child: const Text('继续寻找其他天体'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -909,8 +1221,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() => _saving = true);
     try {
       final store = await _ensureHistory();
+      // 名字按「拍到了什么 ＋ 哪天拍的」在本机拼出来，重名再加序号。
+      //
+      // 不去问模型：这里没有任何要「判断」的东西——月亮、行星、主体天体都是
+      // 已经算出来的结论，日期是照片自带的。让模型来做这件事，只是把一次确定
+      // 的映射换成一次会编的取样，还要联网、要等、要花钱。
+      final existing = await store.list();
+      final suggested = uniqueObservationName(
+        suggestedObservationName(
+          analysis: analysis,
+          solve: _solve,
+          moment: _moment?.local,
+          originalFilename: _filename,
+        ),
+        existing.map((entry) => entry.name),
+      );
       final saved = await store.save(
-        name: _filename ?? '未命名',
+        name: suggested,
         analysis: analysis,
         // 存的是剔除后的解算结果，和屏幕上看到的一致。剔除项本身跟着
         // `analysis.stars` 的 `isRejected` 一起存，重开还能改回来。
@@ -919,10 +1246,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         capture: _moment?.toMetadata(),
       );
       _savedId = saved.id;
+      await _refreshHistorySnapshot();
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已保存到观星记录')),
+        SnackBar(content: Text('已存为「${saved.name}」')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -931,11 +1259,57 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
   }
 
+  /// 「后台还在解析」那条横幅。没有就不显示。
+  ///
+  /// 它必须存在：用户点了「保存并退出」之后，屏幕上关于这次解析就什么都不剩
+  /// 了——不给他一个回来的地方，那个按钮就等于「放弃」。横幅上带着进度和
+  /// 名字，点一下就能回到那次解析。
+  Widget? _runningJobsNotice() {
+    if (_job != null) return null;
+    final running = _jobCenter.runningJobs;
+    if (running.isEmpty) return null;
+    return Card(
+      child: Column(
+        children: [
+          for (final job in running)
+            ListTile(
+              leading: const Icon(Icons.autorenew_rounded, color: kMint),
+              title: Text(
+                job.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: SkyProgressBar(
+                  value: job.fraction,
+                  height: 6,
+                  online: job.progress?.online ?? false,
+                  moon: job.progress?.moon ?? false,
+                  solvedLocally: job.progress?.solvedLocally ?? false,
+                ),
+              ),
+              trailing: Text('${(job.fraction * 100).round()}%'),
+              onTap: () => _attachJob(job),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// 退出：把当前这张图和它的解析结果清掉，回到刚打开 APP 的样子。
   ///
   /// 已经保存过的记录不受影响——「退出」清的是工作台，不是档案柜。
   void _exit() {
+    // 正在跑的解析照旧放着不管：它已经答应过用户「会存进记录」，从这里把
+    // 它掐掉等于毁约。
+    final previous = _job;
+    if (previous != null && previous.running) {
+      if (_moonQuestion != null) _answerMoon(false);
+      _jobCenter.detach(previous);
+    }
     setState(() {
+      _job = null;
       _bytes = null;
       _filename = null;
       _moment = null;
@@ -988,6 +1362,86 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
   }
 
+  /// 打开 Nox。
+  ///
+  /// Nox 和结果页那张「Agent 解读」卡不是一回事，两者都要留着：那张卡问的是
+  /// 「这一张照片」，问题和解说贴着照片、跟着照片存进记录；Nox 问的是「这个
+  /// 应用」，可以没有当前照片——用户刚打开 APP 想问「我上次拍的那张在哪」
+  /// 完全说得通，而这时那张卡根本不存在。
+  Future<void> _openNox() async {
+    final analysis = _analysis;
+    final solve = _solve?.withoutRejected(analysis?.stars ?? const []);
+    // 先刷一遍记录快照，否则 Nox 第一次被问「我有几条记录」时会说「没有」。
+    await _refreshHistorySnapshot();
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => NoxScreen(
+          onOpenSettings: () {
+            Navigator.of(context).pop();
+            _settings();
+          },
+          backend: NoxBackend(
+            loadSettings: _readModelSettings,
+            context: () => _noxContext(analysis, solve),
+            executeTool: (name, arguments) => AgentTools(
+              report: analysis == null
+                  ? const {}
+                  : buildAgentReport(analysis, solve),
+              loadHistory: () async => (await _ensureHistory()).list(),
+              handleAction: (action, args) => _executeAgentAction(
+                action,
+                args,
+                analysis,
+                analysis == null
+                    ? const {}
+                    : buildAgentReport(analysis, solve),
+              ),
+            ).execute(name, arguments),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 交给 Nox 的上下文。
+  ///
+  /// 三块：这个应用会什么（进系统提示，见 `noxAppBrief`）、本机存了哪些观测、
+  /// 以及当前这张照片算出了什么。历史只放最近若干条的摘要——Nox 需要的是
+  /// 「有几条、最近几条是什么」，不是把整个档案柜塞进一次请求里。
+  Map<String, Object?> _noxContext(SkyAnalysis? analysis, SolveResult? solve) {
+    final entries = _historySnapshot;
+    return {
+      'app': 'AstroSophy',
+      'current_image': analysis == null
+          ? null
+          : {
+              ...buildAgentReport(
+                analysis,
+                solve,
+                moon: moonFactsOf(analysis, _instantOf(_moment)),
+              ),
+              'filename': _filename,
+            },
+      'archive': {
+        'count': entries.length,
+        'recent': [
+          for (final entry in entries.take(8))
+            {
+              'id': entry.id,
+              'name': entry.name,
+              'saved_at': entry.savedAt.toIso8601String(),
+              'constellation': entry.constellation,
+              'solved': entry.solve != null,
+            },
+        ],
+      },
+      if (analysis == null)
+        'note': '当前没有正在看的照片。用户问「这张」的时候要问清是哪一张，'
+            '不要去猜当前图片的分析结果。',
+    };
+  }
+
   void _showError(String message) {
     if (!mounted) return;
     setState(() => _error = message);
@@ -1003,6 +1457,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       appBar: AppBar(
         title: const Text('AstroSophy'),
         actions: [
+          IconButton(
+            onPressed: _openNox,
+            tooltip: '$noxName 助手',
+            // 只有它是主色：另外三个是「去某个地方」的入口，而这一个是
+            // 「叫个人过来」。颜色是同一条信息，不必再用文字说一遍。
+            icon: const Icon(noxIcon, color: kMint),
+          ),
           IconButton(
             onPressed: () => _showOnboarding(),
             tooltip: '使用引导',
@@ -1041,6 +1502,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 const SizedBox(height: 20),
                 if (_bytes == null) _emptyPicker() else _imagePreview(),
+                // 后台还在跑的解析。放在选图区下面：它是「你刚才交代的那件事
+                // 还没完」，而用户回到首页第一眼要找的正是它。
+                if (_runningJobsNotice() case final notice?) ...[
+                  const SizedBox(height: 10),
+                  notice,
+                ],
                 if (_bytes != null) ...[
                   const SizedBox(height: 10),
                   _captureTimeCard(),
@@ -1371,41 +1838,122 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AspectRatio(
-            aspectRatio: 0.82,
-            child: _isRawName(_filename ?? '')
-                ? const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.raw_on, size: 42, color: kMint),
-                        SizedBox(height: 10),
-                        Text('相机 RAW · 将尝试读取内嵌预览'),
-                      ],
-                    ),
-                  )
-                : Image.memory(
-                    _bytes!,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, error, __) => Center(
-                      child: Text(
-                        '暂不支持此图片格式：$error',
-                        textAlign: TextAlign.center,
+          if (_cropping && !_isRawName(_filename ?? ''))
+            CropEditor(
+              bytes: _bytes!,
+              rect: _crop ?? CropRect.full,
+              onChanged: (rect) => setState(() => _crop = rect),
+            )
+          else
+            AspectRatio(
+              aspectRatio: 0.82,
+              child: _isRawName(_filename ?? '')
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.raw_on, size: 42, color: kMint),
+                          SizedBox(height: 10),
+                          Text('相机 RAW · 将尝试读取内嵌预览'),
+                        ],
+                      ),
+                    )
+                  : Image.memory(
+                      _bytes!,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, error, __) => Center(
+                        child: Text(
+                          '暂不支持此图片格式：$error',
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ),
-                  ),
-          ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
-            child: Text(
-              _filename ?? '已选图片',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _filename ?? '已选图片',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 10),
+                if (_cropping) ...[
+                  const Text(
+                    '拖动四个角选出要分析的范围。裁剪之后分析的、以及需要时'
+                    '上传的，都只有这一块——画面下方那条水印和信息条留框外就行。',
+                    style: TextStyle(fontSize: 11.5, color: Color(0xFFA6B5C8)),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _resetCrop,
+                          icon: const Icon(Icons.restart_alt, size: 17),
+                          label: const Text('整幅'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _applyCrop,
+                          icon: const Icon(Icons.crop_rounded, size: 17),
+                          label: const Text('应用裁剪'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => setState(() {
+                        _cropping = true;
+                        _crop = CropRect.full;
+                      }),
+                      icon: const Icon(Icons.crop_rounded, size: 17),
+                      label: const Text('裁剪范围'),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  void _resetCrop() => setState(() => _crop = CropRect.full);
+
+  /// 按选中的范围裁出新的图片字节，之后的解析只用这一块。
+  ///
+  /// 换掉的是**当前这张图**，而不是另存一张：用户的意图是「我要分析的是
+  /// 这一块」，不是「我多了一张图」。裁剪之后再解析、再保存，记录里存下来
+  /// 的也就是裁好的这一块——他拿到的东西和看到的东西是同一个。
+  Future<void> _applyCrop() async {
+    final bytes = _bytes;
+    final crop = _crop;
+    if (bytes == null || crop == null) return;
+    final cropped = cropImageBytes(bytes, crop);
+    if (cropped == null) {
+      setState(() => _cropping = false);
+      return;
+    }
+    setState(() => _cropping = false);
+    // 裁剪会把嵌入的 EXIF 一起丢掉，所以已经读到的拍摄时刻要显式带过去，
+    // 否则裁一刀就把「这张照片几点拍的」丢掉了——而月相和行星位置全靠它。
+    _setImage(cropped, _croppedName(_filename) ?? '裁剪后的图片', moment: _moment);
+  }
+
+  /// 裁剪之后文件名上留个记号，用户能看出这张图动过。保存时记录另按内容
+  /// 取名字（见 naming.dart），所以这里只影响显示。
+  String? _croppedName(String? name) {
+    if (name == null) return null;
+    final dot = name.lastIndexOf('.');
+    return dot <= 0 ? '$name (裁剪)' : '${name.substring(0, dot)} (裁剪)';
   }
 
   Widget _diagnosticsCard(SkyAnalysis analysis) => Card(
@@ -1623,11 +2171,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         wcs: solve?.wcs,
         arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
       );
-      final name = _filename ?? 'astrosophy';
-      final file = await saveAnnotatedPng(
-        png,
-        fileName: '${name.replaceAll(RegExp(r'\.[A-Za-z0-9]+$'), '')}_标注.png',
+      final name = suggestedObservationName(
+        analysis: analysis,
+        solve: solve,
+        moment: _moment?.local,
+        originalFilename: _filename,
       );
+      final file = await saveAnnotatedPng(png, fileName: '$name 标注.png');
       await shareExportedFile(file, text: 'AstroSophy 标注图');
     } catch (error) {
       messenger.showSnackBar(SnackBar(content: Text('导出失败：$error')));
@@ -1713,7 +2263,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final index = _selectedTarget;
     final String text;
     if (_selectedDeepSkyName != null) {
-      text = '深空天体 · $_selectedDeepSkyName';
+      final object = solve?.deepSkyObjects
+          .where((item) => item.name == _selectedDeepSkyName)
+          .firstOrNull;
+      text = '深空天体 · ${object == null ? _selectedDeepSkyName! : deepSkyCaption(object.name, object.category)}';
     } else if (index == null || index >= targets.length) {
       return const SizedBox.shrink();
     } else {
@@ -2027,10 +2580,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Widget _deepSkyRow(SkyObject object, SolveResult? solve) {
     final isHidden = _hiddenDeepSkyObjects.contains(object.name);
     final isSelected = _selectedDeepSkyName == object.name;
-    final hasChineseName = RegExp(r'[\u4e00-\u9fff]').hasMatch(object.name);
+    // 「有中文常用名」这件事现在是标题上看得见的：M 16 写成「M 16 鹰状星云」。
+    // 之前是拿「名字里有没有汉字」来判的，那对 M 16 这种编号根本不成立——
+    // 于是它在列表里是灰的，而报告里却写着鹰状星云。
+    final nickname = chineseNicknameOf(object.name);
     final angularSize = object.angularSizeArcmin;
     final details = <String>[
-      if (object.category.isNotEmpty) object.category,
+      // 昵称已经写进标题了，副标题里不再重复类型——「鹰状星云 · 星云」是废话。
+      if (nickname == null && object.category.isNotEmpty) object.category,
       if (angularSize != null && angularSize > 0)
         angularSize < 1
             ? '约 ${(angularSize * 60).round()}″'
@@ -2067,14 +2624,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             : const Color(0xFFFF7B8C),
       ),
       title: Text(
-        object.name,
+        deepSkyCaption(object.name, object.category),
         style: TextStyle(
           color: isHidden
               ? const Color(0xFF8192A8)
-              : hasChineseName
+              : nickname != null
                   ? const Color(0xFFFFDE77)
                   : null,
-          fontWeight: hasChineseName ? FontWeight.w700 : FontWeight.w500,
+          fontWeight: nickname != null ? FontWeight.w700 : FontWeight.w500,
         ),
       ),
       subtitle: details.isEmpty
@@ -2701,7 +3258,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ],
               ),
-              if (solve == null)
+              if (_moonOnly)
+                // 不解释的话，用户看到的就是「没有解开这片天区」——而真相是
+                // 他刚才自己选了「直接报告月亮」，这一次压根没去解。同一块
+                // 屏幕上两种截然不同的意思，必须说清是哪一种。
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: Text(
+                    '这次是按你的选择只报告月亮，没有做天区解算。'
+                    '想在这张图里找别的天体，重新解析时选「继续寻找其他天体」。',
+                  ),
+                )
+              else if (solve == null)
                 const Padding(
                   padding: EdgeInsets.only(top: 10),
                   child: Text(
@@ -2772,7 +3340,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 总结和一份拍摄建议，都删了：总结和上面那段说的是同一件事，建议则总是
   /// 那几条通用话——占着最好的位置，说的却不是用户此刻最想知道的。
   Widget _observationCard(SkyAnalysis analysis, SolveResult? solve) {
-    final moon = moonFactsOf(analysis, _moment?.utc);
+    final moon = moonFactsOf(analysis, _instantOf(_moment));
     final record = buildObservationRecord(analysis, solve, moon: moon);
     return Card(
       child: Padding(
@@ -3121,11 +3689,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               (entry) => ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text(
-                  entry.category.isEmpty
-                      ? entry.name
-                      : '${entry.name} · ${entry.category}',
-                ),
+                title: Text(deepSkyCaption(entry.name, entry.category)),
                 subtitle: Text(
                   [
                     entry.sizeLabel,
@@ -3156,7 +3720,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               const SectionTitle('Agent 解读', Icons.chat_bubble_outline_rounded),
               const SizedBox(height: 10),
               const Text(
-                '可查询当前报告、天体和本机记录；保存、改名、删除、在线解算或发送照片给视觉模型前会先征求确认。',
+                '可查询当前报告、天体和本机记录；保存、改名、删除、在线解算或把照片发给模型前会先征求确认。',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 10),
@@ -3378,6 +3942,16 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
       );
 }
 
+/// 认出月面之后等用户拍板的那一次提问。
+class _MoonQuestion {
+  _MoonQuestion(this.analysis);
+
+  final SkyAnalysis analysis;
+
+  /// true = 继续寻找其他天体，false = 直接报告月亮。
+  final completer = Completer<bool>();
+}
+
 /// 一个分组的编号项：在 [SkyAnalysis.numberedTargets] 里的下标，加上它属于哪一组。
 class _NumberedTarget {
   const _NumberedTarget(this.number, this.star);
@@ -3454,7 +4028,6 @@ class _SettingsFormState extends State<SettingsForm> {
   late final _lightModel = TextEditingController(text: widget.current.lightModel);
   late final _strongKey = TextEditingController(text: widget.current.strongKey);
   late final _strongModel = TextEditingController(text: widget.current.strongModel);
-  late final _visionModel = TextEditingController(text: widget.current.visionModel);
   late final _astrometryKey = TextEditingController(text: widget.astrometryKey);
   bool _obscureLight = true;
   bool _obscureStrong = true;
@@ -3493,7 +4066,6 @@ class _SettingsFormState extends State<SettingsForm> {
       _baseUrl.text = template.baseUrl;
       _lightModel.text = template.lightModel;
       _strongModel.text = template.strongModel;
-      _visionModel.clear();
     });
   }
 
@@ -3513,7 +4085,6 @@ class _SettingsFormState extends State<SettingsForm> {
       'lightModel': _lightModel.text.trim(),
       'strongKey': _strongKey.text.trim(),
       'strongModel': _strongModel.text.trim(),
-      'visionModel': _visionModel.text.trim(),
       'astrometryKey': _astrometryKey.text.trim(),
     };
     try {
@@ -3566,7 +4137,6 @@ class _SettingsFormState extends State<SettingsForm> {
       _lightModel,
       _strongKey,
       _strongModel,
-      _visionModel,
       _astrometryKey,
     ]) {
       controller.dispose();
@@ -3634,14 +4204,6 @@ class _SettingsFormState extends State<SettingsForm> {
                 obscure: _obscureStrong,
                 toggle: () => setState(() => _obscureStrong = !_obscureStrong),
               ),
-              _field('视觉模型名称（可选）', _visionModel),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 10),
-                child: Text(
-                  '用于图片水印/文字识别，需由服务商支持图像输入；留空时沿用当前可用模型。',
-                  style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
-                ),
-              ),
               _field(
                 'Astrometry.net API Key',
                 _astrometryKey,
@@ -3662,7 +4224,9 @@ class _SettingsFormState extends State<SettingsForm> {
                 ),
               ),
               const Text(
-                '密钥保存在本机安全存储。普通对话只发送测量摘要；视觉识别会先询问并发送预览图。',
+                '密钥保存在本机安全存储。普通对话只发送测量摘要；'
+                '视觉识别（找水印/文字）会先询问，并把预览图发给你上面配的模型——'
+                '那一步需要该模型支持图像输入。',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 16),

@@ -104,6 +104,128 @@ void main() {
     }, timeout: const Timeout(Duration(minutes: 2)));
   });
 
+  group('认出月面之后先问一句', () {
+    late SkyWorker worker;
+
+    setUpAll(() async {
+      worker = await SkyWorker.spawn(bundle: _RepositoryAssets());
+    });
+
+    tearDownAll(() async => worker.dispose());
+
+    /// 一张以月面为主的合成图：一片夜空加一个半径 45 像素的圆亮斑。
+    ///
+    /// 这个尺寸是实测出来的：它会被判成月面（占画面 5%，判据的门槛在
+    /// 0.5%），而真实那张月球照只占 1.1%。
+    Uint8List moonImage() {
+      final image = nightSky(width: 400, height: 300);
+      scatterStars(image, count: 40);
+      drawBlob(image, 200, 150, 45);
+      return encodePng(image);
+    }
+
+    test('选了「直接报告月亮」就不解算，也不再给「先去裁掉文字」那种建议', () async {
+      // 这是用户实报的 bug 原样复现：月亮已经认出来了（圈都画在屏幕上），
+      // 管线还是把照片当成星场送去 astrometry.net，排队几分钟后失败，回来
+      // 告诉用户「这张图看起来就不是以星场为主的照片，先去相册里裁掉文字、
+      // 地面和建筑再试一次」——而它早就知道那是月亮了。
+      var asked = false;
+      final outcome = await SkyPipeline(worker: worker).run(
+        moonImage(),
+        onMoonDetected: (analysis) async {
+          asked = true;
+          expect(analysis.isMoonShot, isTrue);
+          return false;
+        },
+      );
+
+      expect(asked, isTrue);
+      expect(outcome.moonOnly, isTrue);
+      expect(outcome.solve, isNull);
+      expect(
+        outcome.warnings.any((warning) => warning.contains('只报告月亮')),
+        isTrue,
+      );
+      // 月亮这条路上不该出现「这不是星场」和「本机没能认出这片天区」那套话。
+      expect(
+        outcome.warnings.any((warning) => warning.contains('裁掉文字')),
+        isFalse,
+      );
+      expect(
+        outcome.warnings.any((warning) => warning.contains('本机没能认出')),
+        isFalse,
+      );
+    });
+
+    test('没人回答时按「只报告月亮」处理', () async {
+      // 上传是这条路上唯一不可逆的动作。界面不在场（比如解析已放到后台、
+      // 用户翻到别处去了）就不能替用户点头。
+      final outcome = await SkyPipeline(worker: worker).run(moonImage());
+      expect(outcome.moonOnly, isTrue);
+      expect(outcome.solve, isNull);
+    });
+
+    test('选了「继续寻找其他天体」就照常往下解算', () async {
+      final outcome = await SkyPipeline(worker: worker).run(
+        moonImage(),
+        onMoonDetected: (_) async => true,
+      );
+      expect(outcome.moonOnly, isFalse);
+      // 合成图上没有真实星场，解算必然失败——这时才是该给解算失败建议的
+      // 时候。
+      expect(outcome.solve, isNull);
+      expect(
+        outcome.warnings.any((warning) => warning.contains('本机没能认出')),
+        isTrue,
+      );
+    });
+
+    test('进度里带上月亮标记，字里写明亮面占比', () async {      // 进度条左边那个标记就靠这个字段。它要在**问用户之前**就报上来——
+      // 用户是在看着进度条的时候被问到的，标记和问题是同一件事的两半。
+      final progresses = <PipelineProgress>[];
+      await SkyPipeline(worker: worker).run(
+        moonImage(),
+        onProgress: progresses.add,
+        onMoonDetected: (_) async => false,
+      );
+
+      final moonProgress =
+          progresses.where((progress) => progress.moon).toList();
+      expect(moonProgress, isNotEmpty);
+      expect(moonProgress.first.stage, contains('月面'));
+      expect(moonProgress.first.stage, contains('%'));
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('本机解算成功之后，进度上带出「照片没出过设备」这个结论', () async {
+      // 进度条换红色调就靠 solvedLocally 这个字段，而且判据必须是它、
+      // 不能去认阶段文案——文案是给人读的，改一句话就会悄悄改掉一条判断。
+      //
+      // 用真照片（M31 那张本机解得出来），因为这条结论只有在解算真的成功
+      // 时才会出现。
+      final progresses = <PipelineProgress>[];
+      final outcome = await SkyPipeline(worker: worker).run(
+        Uint8List.fromList(
+          File('assets/demo/demo_m31.jpg').readAsBytesSync(),
+        ),
+        onProgress: progresses.add,
+      );
+
+      expect(outcome.solve, isNotNull);
+      expect(outcome.solve!.source, SolveSource.local);
+      expect(
+        progresses.any((progress) => progress.solvedLocally),
+        isTrue,
+        reason: '本机解出来之后进度上该带上这个标记',
+      );
+      // 标记一旦出现就一直带着：后面几步也是「照片在本机」。
+      final firstSolved = progresses.indexWhere((p) => p.solvedLocally);
+      expect(
+        progresses.skip(firstSolved).every((p) => p.solvedLocally),
+        isTrue,
+      );
+    }, timeout: const Timeout(Duration(minutes: 5)));
+  });
+
   group('交给模型的测量摘要', () {
     test('如实区分本机解算和在线解算', () {
       final analysis = SkyAnalysis(

@@ -70,6 +70,47 @@ class ModelService {
     {
       'type': 'function',
       'function': {
+        'name': 'get_observation',
+        'description':
+            '读取本机某一条观测记录的详细内容：保存时的解读、解算坐标与比例尺、'
+                '拍摄时刻。回答「我那张土星解出来是什么」这类问题时用它，'
+                '而不是让用户自己去翻记录。不返回照片。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'observation_id': {
+              'type': 'string',
+              'description': '观测记录的 id，先用 list_observations 拿到。',
+            },
+          },
+          'required': ['observation_id'],
+          'additionalProperties': false,
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'open_screen',
+        'description':
+            '在应用里打开一个页面。纯界面动作，没有副作用，不需要用户确认。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'screen': {
+              'type': 'string',
+              'enum': ['history', 'settings'],
+              'description': 'history＝观星记录，settings＝API 设置。',
+            },
+          },
+          'required': ['screen'],
+          'additionalProperties': false,
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
         'name': 'save_current_observation',
         'description': '请求保存当前观测；应用会先向用户确认。',
         'parameters': {
@@ -130,8 +171,9 @@ class ModelService {
       'function': {
         'name': 'propose_non_sky_regions',
         'description':
-            '请求视觉模型检查当前照片中的水印、文字或界面区域并建议遮罩；'
-                '原图会发送到用户配置的模型，应用会先向用户确认。',
+            '请求模型检查当前照片中的水印、文字或界面区域并建议遮罩。'
+                '这一步会把预览图发到用户配置的模型服务，'
+                '所以那个模型必须支持图像输入；应用会先向用户确认。',
         'parameters': {
           'type': 'object',
           'properties': <String, Object?>{},
@@ -143,6 +185,14 @@ class ModelService {
 
   /// 带固定工具集的有限轮对话。所有工具执行都由应用处理，模型不能发起
   /// 任意网络请求、读文件或执行代码。
+  ///
+  /// [assistantName] 非空时助手会自称这个名字（应用里叫 Nox），
+  /// [appBrief] 是它对自己这个应用的了解——「熟悉常用操作」靠的就是这一段，
+  /// 而不是靠它去猜。为空时保持原来那句通用人设，一字不差。
+  ///
+  /// [history] 是之前几轮问答，顺序为旧到新，用来让助手记住对话。只放
+  /// `role` 和 `content`：把工具调用也回放进去会让上下文迅速膨胀，而这些
+  /// 细节本来就已经体现在它上一轮说过的话里了。
   static Future<String> chatWithTools({
     required String baseUrl,
     required String lightKey,
@@ -153,6 +203,10 @@ class ModelService {
     required String question,
     required AgentToolExecutor executeTool,
     AgentToolListener? onToolCall,
+    String? assistantName,
+    String? appBrief,
+    String contextLabel = '当前图像分析摘要',
+    List<Map<String, String>> history = const [],
     http.Client? httpClient,
   }) async {
     const maxToolCalls = 5;
@@ -164,6 +218,9 @@ class ModelService {
       else if (!routeStrong && strongKey.isNotEmpty)
         (strongKey, strongModel),
     ];
+    final persona = assistantName == null
+        ? '你是面向爱好者的天文图像助手。'
+        : '你是「$assistantName」，这个应用里的助手。${appBrief ?? ''}';
     final client = httpClient ?? http.Client();
     final errors = <String>[];
     var anyToolExecuted = false;
@@ -174,18 +231,21 @@ class ModelService {
           final messages = <Map<String, Object?>>[
             {
               'role': 'system',
-              'content':
-                  '你是面向爱好者的天文图像助手。只依据本机测量和工具结果回答，'
+              'content': '$persona'
+                  '只依据本机测量和工具结果回答，'
                       '明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，'
                       '也不得把仪器星等说成校准视星等。除只读查询外，保存、改名、删除、'
                       '联网解算和发送图片都属于有副作用的操作；只有用户明确要求时才可申请，'
                       '应用仍会在执行前单独确认。简洁使用中文，不要为了调用工具而调用工具。',
             },
+            for (final turn in history)
+              if (turn['role'] == 'user' || turn['role'] == 'assistant')
+                {'role': turn['role'], 'content': turn['content'] ?? ''},
             {
               'role': 'user',
               'content':
                   '问题：${question.trim().isEmpty ? '请概括照片能确认的天文信息和可靠性。' : question.trim()}\n'
-                      '当前图像分析摘要：${jsonEncode(report)}',
+                      '$contextLabel：${jsonEncode(report)}',
             },
           ];
           var toolCallCount = 0;

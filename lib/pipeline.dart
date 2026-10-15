@@ -15,7 +15,13 @@ import 'solver.dart';
 
 /// 一键解析的进度快照。
 class PipelineProgress {
-  const PipelineProgress(this.fraction, this.stage, {this.online = false});
+  const PipelineProgress(
+    this.fraction,
+    this.stage, {
+    this.online = false,
+    this.moon = false,
+    this.solvedLocally = false,
+  });
 
   /// 0–1，界面上的进度条直接用这个值。
   final double fraction;
@@ -29,6 +35,23 @@ class PipelineProgress {
   /// 是「照片已经传上去了」，等的东西和等的心态都不是一回事。
   final bool online;
 
+  /// 算到这一步时，画面上已经认出月面。
+  ///
+  /// 界面靠它在进度条左边挂一个标记：用户看到的进度条会一直往前走、字也会
+  /// 一直换，而「这是一个月亮」这件事是整条链路上最早定下来、也最该被看到的
+  /// 一个结论——它决定后面还跑不跑。
+  final bool moon;
+
+  /// 本机解算**已经成功**。
+  ///
+  /// 非空即「这张照片的天区是手机上算出来的」——它一次都没出过设备。界面靠它
+  /// 换进度条的配色：这是个值得让用户一眼看到的结论，而在这之前，同样一条
+  /// 进度条可能是「本机解算失败了，正准备往上传」。
+  ///
+  /// 判据用这个字段，不去认阶段文案。文案是给人读的，随时可能改一句话，而
+  /// 颜色一旦跟着文案走，改文案就会悄悄改掉一条判断——那种错查起来很费劲。
+  final bool solvedLocally;
+
   @override
   String toString() => '${(fraction * 100).toStringAsFixed(0)}% · $stage';
 }
@@ -40,6 +63,7 @@ class PipelineOutcome {
     required this.solve,
     required this.explanation,
     required this.warnings,
+    this.moonOnly = false,
   });
 
   final SkyAnalysis analysis;
@@ -51,6 +75,12 @@ class PipelineOutcome {
   /// 某一环没走通时的说明。链路不会因为一环失败就中断——本机解算不出结果
   /// 就回去问在线服务，解读失败也不影响已经算出来的坐标和测光。
   final List<String> warnings;
+
+  /// 认出月面之后，用户选了「直接报告月亮」。
+  ///
+  /// 这一次**没有**做解算，也没有上传照片。界面要据此把话说明白，而不是
+  /// 让用户以为「解算失败了」。
+  final bool moonOnly;
 }
 
 /// 本地链路与在线回退的编排。
@@ -93,11 +123,17 @@ class SkyPipeline {
   ///
   /// [moment] 是拍摄时刻（UTC）。给不出来就是 null——行星、彗星、小行星的位置
   /// 随日期变，没有时刻这一节不出结论，但其余各步照跑。
+  ///
+  /// [onMoonDetected] 是认出月面之后问用户的一句话，返回 true 表示「继续寻找
+  /// 其他天体」，false 表示「就报告月亮」。不传就当作用户不在场，按后者处理
+  /// ——**不上传**是这两条路里唯一不可逆的那个动作，没人看着的时候不能替用户
+  /// 做。
   Future<PipelineOutcome> run(
     Uint8List bytes, {
     void Function(PipelineProgress)? onProgress,
     String question = '',
     DateTime? moment,
+    Future<bool> Function(SkyAnalysis analysis)? onMoonDetected,
   }) async {
     final stages = _stages;
     final total = stages.fold<int>(0, (sum, stage) => sum + stage.weight);
@@ -109,6 +145,9 @@ class SkyPipeline {
       cursor += span;
     }
 
+    // 本机解算成没成功。成功后进度条就换成另一套配色，一路持续到最后。
+    var solvedLocally = false;
+
     void report(int index, double local, [String? text]) {
       if (index >= bounds.length) return;
       final (start, end) = bounds[index];
@@ -117,6 +156,7 @@ class SkyPipeline {
           start + (end - start) * local.clamp(0.0, 1.0),
           text ?? stages[index].name,
           online: stages[index].online,
+          solvedLocally: solvedLocally,
         ),
       );
     }
@@ -126,68 +166,112 @@ class SkyPipeline {
     report(0, 0);
     final analysis = await worker.analyze(bytes);
 
-    var index = 1;
-    report(index, 0, '正在本机解算天区');
-    SolveResult? solve;
-    try {
-      solve = await worker.solveLocal(
-        analysis,
-        onProgress: (local, stage) => report(index, local, stage),
+    // 认出月面就在这里停下来问一句，而不是接着往下解算。
+    //
+    // 这条路是实打实踩出来的：一张月球照被当成星场送去了 astrometry.net，
+    // 排队几分钟之后失败，回来还告诉用户「这张图看起来就不是以星场为主的
+    // 照片，先去相册里裁掉文字、地面和建筑再试一次」——可它其实**早就认出
+    // 月亮了**，圈都画在屏幕上了。
+    //
+    // 月亮是这个画面上唯一的、而且已经量出来的东西。它不该再把照片送出去：
+    // 月球没有任何恒星尺度上的点源，星表怎么对都对不上，上传只会白等一次
+    // 超时。所以这一句必须问在解算之前。
+    var moonOnly = false;
+    if (analysis.isMoonShot) {
+      final disc = analysis.moonDisc!;
+      onProgress?.call(
+        PipelineProgress(
+          bounds.first.$1,
+          '识别到月面 · 亮面 '
+          '${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%',
+          moon: true,
+        ),
       );
-    } catch (error) {
-      warnings.add('本机解算未能完成：$error');
+      moonOnly = !(await onMoonDetected?.call(analysis) ?? false);
+      if (moonOnly) {
+        warnings.add(
+          '这是一个以月面为主的画面，这次只报告月亮：月盘、亮面占比，'
+          '以及按拍摄时刻算出来的相名。月面比任何恒星亮上万倍，'
+          '这类照片里基本没有可用的星场，所以没有做星点检测，'
+          '也没有把照片交给在线解算。想在这张图里找别的天体的话，'
+          '重新解析时选「继续寻找其他天体」。',
+        );
+      }
     }
 
+    var index = 1;
+    SolveResult? solve;
     String? onlineError;
-    if (solve == null && _canUpload) {
-      index++;
+    if (moonOnly) {
+      // 用户选了只要月亮：跳过解算和上传，直接走到解读那一步。
+      index = 0;
+    } else {
+      report(index, 0, '正在本机解算天区');
       try {
-        solve = await AstrometryService.solve(
-          analysis: analysis,
-          apiKey: astrometryKey,
+        solve = await worker.solveLocal(
+          analysis,
           onProgress: (local, stage) => report(index, local, stage),
         );
       } catch (error) {
-        onlineError = '$error';
-        warnings.add('在线解算未能完成：$error');
+        warnings.add('本机解算未能完成：$error');
       }
-      // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
-      // 失败了只记一条提示，不把已经拿到手的解算结果丢掉。
       if (solve != null) {
+        // 成了。从这里开始「照片没出过手机」就是既成事实，不是承诺了。
+        solvedLocally = true;
+        report(index, 1, '本机解算成功');
+      }
+
+      if (solve == null && _canUpload) {
+        index++;
         try {
-          solve = await worker.decorate(solve);
+          solve = await AstrometryService.solve(
+            analysis: analysis,
+            apiKey: astrometryKey,
+            onProgress: (local, stage) => report(index, local, stage),
+          );
         } catch (error) {
-          warnings.add('星座标注未能完成：$error');
+          onlineError = '$error';
+          warnings.add('在线解算未能完成：$error');
+        }
+        // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
+        // 失败了只记一条提示，不把已经拿到手的解算结果丢掉。
+        if (solve != null) {
+          try {
+            solve = await worker.decorate(solve);
+          } catch (error) {
+            warnings.add('星座标注未能完成：$error');
+          }
         }
       }
-    }
-    if (solve == null) {
-      // 「星点不足」这种话用户看完还是不知道该干什么，所以这里给的是能照着
-      // 做的动作：换焦段、改曝光、去设置里开在线解算。判断依据全部来自已经
-      // 量出来的结果，不猜。
-      warnings.addAll(
-        buildSolveFailureAdvice(
-          analysis,
-          uploadAllowed: allowUpload,
-          hasApiKey: astrometryKey.trim().isNotEmpty,
-          onlineError: onlineError,
-        ),
-      );
-    } else if (moment != null) {
-      // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
-      // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
-      // 这一步只是几次星表查询，快到不值得为它占一段进度条。
-      try {
-        solve = await worker.annotateMovingBodies(analysis, solve, moment);
-      } catch (error) {
-        warnings.add('运动天体判定未能完成：$error');
+      if (solve == null) {
+        // 「星点不足」这种话用户看完还是不知道该干什么，所以这里给的是能照着
+        // 做的动作：换焦段、改曝光、去设置里开在线解算。判断依据全部来自已经
+        // 量出来的结果，不猜。
+        warnings.addAll(
+          buildSolveFailureAdvice(
+            analysis,
+            uploadAllowed: allowUpload,
+            hasApiKey: astrometryKey.trim().isNotEmpty,
+            onlineError: onlineError,
+          ),
+        );
+      } else if (moment != null) {
+        // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
+        // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
+        // 这一步只是几次星表查询，快到不值得为它占一段进度条。
+        try {
+          solve = await worker.annotateMovingBodies(analysis, solve, moment);
+        } catch (error) {
+          warnings.add('运动天体判定未能完成：$error');
+        }
       }
     }
 
     String? explanation;
     final settings = modelSettings;
     if (settings != null && settings.hasAnyModel) {
-      index++;
+      // 解读永远排在最后一段。解算那几段有没有跑过都不影响这件事的位置。
+      report(_stages.length - 1, 0, '正在生成解读');
       try {
         explanation = await ModelService.explain(
           baseUrl: settings.baseUrl,
@@ -195,7 +279,11 @@ class SkyPipeline {
           lightModel: settings.lightModel,
           strongKey: settings.strongKey,
           strongModel: settings.strongModel,
-          report: buildAgentReport(analysis, solve),
+          report: buildAgentReport(
+            analysis,
+            solve,
+            moon: moonFactsOf(analysis, moment),
+          ),
           question: question,
         );
       } catch (error) {
@@ -203,12 +291,22 @@ class SkyPipeline {
       }
     }
 
-    onProgress?.call(const PipelineProgress(1, '解析完成'));
+    // 最后这条也要带上 solvedLocally：不带的话进度条会在收尾的一瞬间从红
+    // 变回薄荷绿，像是「本机解算又没成功」——这正是测试抓到过一次的。
+    onProgress?.call(
+      PipelineProgress(
+        1,
+        '解析完成',
+        moon: analysis.isMoonShot,
+        solvedLocally: solvedLocally,
+      ),
+    );
     return PipelineOutcome(
       analysis: analysis,
       solve: solve,
       explanation: explanation,
       warnings: warnings,
+      moonOnly: moonOnly,
     );
   }
 }

@@ -1,4 +1,5 @@
-import 'history.dart' show SavedAnalysis;
+import 'package:astrosophy/history.dart' show SavedAnalysis;
+import 'package:astrosophy/models.dart' show SolveSource;
 
 typedef AgentActionHandler = Future<Object?> Function(
   String name,
@@ -58,6 +59,33 @@ class AgentTools {
               },
           ],
         };
+      case 'get_observation':
+        _checkArguments(arguments, const {'observation_id'});
+        final id = arguments['observation_id'];
+        if (id is! String || id.trim().isEmpty) {
+          throw const FormatException('需要给出观测记录的 id。');
+        }
+        final all = await loadHistory();
+        final found = all.where((item) => item.id == id.trim()).firstOrNull;
+        if (found == null) {
+          throw StateError('找不到 id 为 $id 的本机观测记录。');
+        }
+        return _observationDetail(found);
+      case 'open_screen':
+        // 换页面是纯界面动作：没有副作用、随时能退回来，所以**不用**确认。
+        // 把导航也塞进「确认」那套里，会让真正需要确认的那几件事（上传、
+        // 删除）显得没那么特殊。
+        _checkArguments(arguments, const {'screen'});
+        final screen = arguments['screen'];
+        if (screen is! String ||
+            !const {'history', 'settings'}.contains(screen)) {
+          throw const FormatException('可打开的页面只有 history 和 settings。');
+        }
+        final nav = handleAction;
+        if (nav == null) {
+          throw StateError('当前环境未启用此 Agent 操作。');
+        }
+        return nav('open_screen', arguments);
       case 'save_current_observation':
       case 'rename_observation':
       case 'delete_observation':
@@ -78,6 +106,38 @@ class AgentTools {
       default:
         throw ArgumentError.value(name, 'name', '未知的 Agent 工具');
     }
+  }
+
+  /// 一条观测记录的细读。
+  ///
+  /// 比 [listObservations] 那种一行摘要多给三样东西：保存下来的那份解读、
+  /// 解算出来的坐标与比例尺、以及这条记录当时算没算出天区。用户问「我上周
+  /// 那张土星是几点拍的、解出来是什么」时要的就是这些。
+  ///
+  /// **不给**原始测量数组（几百个星点的坐标）和图片：那些对回答没有帮助，
+  /// 却会把上下文一次占满，把真正有用的东西挤出去。
+  Map<String, Object?> _observationDetail(SavedAnalysis entry) {
+    final solve = entry.solve;
+    return {
+      'id': entry.id,
+      'name': entry.name,
+      'saved_at': entry.savedAt.toIso8601String(),
+      'quality': entry.quality,
+      'star_count': entry.starCount,
+      'is_starfield': entry.isStarfield,
+      'constellation': entry.constellation,
+      'solved': solve != null,
+      if (solve != null) 'solve': {
+        'center_ra_deg': solve.centerRa,
+        'center_dec_deg': solve.centerDec,
+        'arcsec_per_pixel': solve.arcsecPerPixel,
+        'field_of_view_deg': solve.fieldOfViewDegrees,
+        'matched_star_count': solve.matchedCount,
+        'source': solve.source == SolveSource.local ? 'local_offline' : 'astrometry_net',
+      },
+      if (entry.capture != null) 'capture_time': entry.capture!.timestamp,
+      'explanation_saved': entry.explanation,
+    };
   }
 
   Map<String, Object?> _findCatalogObjects(String query) {

@@ -25,15 +25,43 @@ String? chineseNicknameOf(String designation) {
   return _nicknames[key];
 }
 
+/// 从「M 16」或者「M 16 鹰状星云」里取出编号那一段，再查昵称。
+///
+/// 必须先抽出来再查：拿整串「M 16 鹰状星云」去查表是查不到的（表里只有
+/// `M16` 这个键），查不到就会以为它没有昵称，于是又拼一遍，得到
+/// 「M 16 鹰状星云 · 星团与星云」这种两截名字。
+String? _nicknameOfLabel(String text) {
+  final trimmed = text.trim();
+  final match = RegExp(r'^[A-Za-z]+\s?\d+').firstMatch(trimmed);
+  return chineseNicknameOf(match?.group(0) ?? trimmed);
+}
+
 /// 「M 31 仙女座大星系」；没有昵称时就是原来那个编号。
 ///
 /// 编号本身已经带昵称时不再拼一遍——在线星表回来的名字有可能已经写成
 /// 「M 31 仙女座大星系」这种，重复拼出来是「M 31 仙女座大星系 仙女座大星系」。
 String deepSkyLabel(String designation) {
-  final nickname = chineseNicknameOf(designation);
+  final nickname = _nicknameOfLabel(designation);
   if (nickname == null) return designation;
   if (designation.contains(nickname)) return designation;
   return '$designation $nickname';
+}
+
+/// 深空天体在界面上怎么写：有中文常用名就用它，没有才退回「编号 · 类型」。
+///
+/// 这条规则只在这里定义一次，因为同一个名字会在四个地方出现：图上标注、
+/// 图内亮点列表、画面中的深空天体卡、以及报告正文。四处各写一遍，迟早会有
+/// 一处漏掉——而漏掉的那一处看起来就是「这个 APP 一会儿认识它一会儿不」。
+/// 曾经就真的这样：报告里写着「M 16 鹰状星云」，图上的标注却是「M 16 ·
+/// 星团与星云」，同一个天体两张脸。
+String deepSkyCaption(String designation, String category) {
+  final nickname = _nicknameOfLabel(designation);
+  if (nickname != null) {
+    return designation.contains(nickname)
+        ? designation
+        : '$designation $nickname';
+  }
+  return category.isEmpty ? designation : '$designation · $category';
 }
 
 /// 编号比较时把空格、大小写和连字符都抹平：目录里写 `M 31`，用户和别的
