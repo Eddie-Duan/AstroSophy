@@ -88,6 +88,64 @@ void main() {
         throwsA(isA<FormatException>()),
       );
     });
+
+    test('nova 那份 minimal header 也读得出来（NAXIS=0，尺寸在 IMAGEW/IMAGEH）', () {
+      // 用户实报的：两张照片在 astrometry.net 上明明 Success，APP 这边却什么
+      // 都拿不到。取回那份真实的 wcs_file 看过，头是这样的——
+      //
+      //     NAXIS   = 0
+      //     IMAGEW  = 763
+      //     IMAGEH  = 1200
+      //
+      // 压根没有 NAXIS1/NAXIS2，而原实现只认那两个键，于是解析在最后一步抛
+      // 「解算结果缺少有效图像尺寸」，把一份已经到手的成功结果扔掉了。
+      final wcs = Wcs.parseFitsHeader(_fitsHeader({
+        'NAXIS': 0,
+        'IMAGEW': 763,
+        'IMAGEH': 1200,
+        'CTYPE1': 'RA---TAN-SIP',
+        'CTYPE2': 'DEC--TAN-SIP',
+        'CRVAL1': 327.854390781,
+        'CRVAL2': 47.1963689121,
+        'CRPIX1': 426.264457703,
+        'CRPIX2': 268.328874588,
+        // 真实那份的 CD 矩阵，量出来是 3.36″/px、像面转了约 84°。
+        'CD1_1': 9.63249696396e-05,
+        'CD1_2': 0.000927613154925,
+        'CD2_1': -0.000927188662473,
+        'CD2_2': 9.63477049217e-05,
+      }));
+      expect(wcs.width, 763);
+      expect(wcs.height, 1200);
+      expect(wcs.crval1, closeTo(327.854, 1e-3));
+      expect(wcs.crval2, closeTo(47.196, 1e-3));
+      expect(wcs.arcsecPerPixel, closeTo(3.36, 0.01));
+      // 中心坐标也要能算出来——只读出尺寸还不够，这一层的用途就是把目录星
+      // 投到画面上做标注。
+      final (ra, dec) = wcs.imageCenter;
+      expect(ra, closeTo(328.302, 0.01));
+      expect(dec, closeTo(47.269, 0.01));
+    });
+
+    test('两个键都在时以 IMAGEW/IMAGEH 为准', () {
+      // 真出现分歧时，nova 的自定义键才是它实际写出的那一帧的尺寸。
+      final wcs = Wcs.parseFitsHeader(_fitsHeader({
+        'NAXIS1': 10,
+        'NAXIS2': 20,
+        'IMAGEW': 763,
+        'IMAGEH': 1200,
+        'CRVAL1': 10.0,
+        'CRVAL2': 41.0,
+        'CRPIX1': 381.5,
+        'CRPIX2': 600.5,
+        'CD1_1': -0.001,
+        'CD1_2': 0.0,
+        'CD2_1': 0.0,
+        'CD2_2': 0.001,
+      }));
+      expect(wcs.width, 763);
+      expect(wcs.height, 1200);
+    });
   });
 
   group('Wcs.rescaledTo', () {

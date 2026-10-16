@@ -467,8 +467,27 @@ class Wcs {
       return value;
     }
 
-    final width = int.tryParse(values['NAXIS1'] ?? '');
-    final height = int.tryParse(values['NAXIS2'] ?? '');
+    // 尺寸优先看 `IMAGEW` / `IMAGEH`，而不是 `NAXIS1` / `NAXIS2`。
+    //
+    // 这不是「兼容两种写法」，是**nova 给的就是前者**：它的 wcs_file 是一份
+    // 「minimal header」，里面 `NAXIS = 0`，压根没有 NAXIS1/NAXIS2，尺寸只有
+    // IMAGEW/IMAGEH 两个自定义键。实测一份真实返回（Job 17108772）：
+    //
+    //     NAXIS   = 0
+    //     IMAGEW  = 763
+    //     IMAGEH  = 1200
+    //
+    // 原来只认 NAXIS1/NAXIS2，于是**在线解算成功也读不回来**：解析在最后一步
+    // 抛 FormatException，用户看到的是「在线解算未能完成」加一个空结果，而
+    // astrometry.net 的页面上明明写着 Success。两份报告都撞在这一行上。
+    //
+    // 不去读 SIP 的 A_*/B_* 系数也一样是有意的：SIP 是几角秒量级的多项式
+    // 修正（实测那一份里 A_2_0 是 4.5e-8），而这一层的用途是「中心坐标、像
+    // 素尺度、以及把目录星投到画面上做标注」，误差比星点质心小一个量级。
+    final width =
+        int.tryParse(values['IMAGEW'] ?? '') ?? int.tryParse(values['NAXIS1'] ?? '');
+    final height =
+        int.tryParse(values['IMAGEH'] ?? '') ?? int.tryParse(values['NAXIS2'] ?? '');
     if (width == null || height == null) throw const FormatException('解算结果缺少有效图像尺寸。');
     return Wcs(
       width: width,
