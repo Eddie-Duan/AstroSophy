@@ -2,6 +2,16 @@
 
 版本号取自 [`pubspec.yaml`](./pubspec.yaml) 的 `version`，对应的 Git 标签是 `v<版本名>`。推送标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建 release APK 并发布到 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases)。
 
+## [0.2.2] - 2026-10-16
+
+### 修复
+
+- **更新版本后 API Key 和观星仓库被清空**。原因是 release APK 一直用 **debug keystore** 签名，而构建机（GitHub runner）每次都是全新的一台，`~/.android/debug.keystore` 是那台机器现生成的——于是**每一版 APK 的签名都不一样**。Android 只允许同一把钥匙签名的包覆盖安装，签名一变就得先卸载，应用内存储（API Key、观测记录）跟着一起被清空。只有从 Releases 下载的包会这样；本机 `BUILD_APK.bat` 出来的包因为 keystore 固定，一直没问题。
+
+  现在 release 用正式签名凭据：CI 走环境变量（密码不落盘），本机走 `android/key.properties`（已加入 gitignore），两处都没有才退回 debug 签名，本机构建和 `flutter run` 照旧。release 流程在缺少凭据时**直接报错停下**，不退到 debug 签名——宁可这一次不发版，也不发出一个会清空用户数据的包。
+
+  **要换到正式签名，手机上现在这个包需要卸载重装一次**（旧签名无法覆盖），那是最后一次丢数据；之后签名固定，更新不再影响已存内容。keystore 和它的密码请自行备份：丢了就再也无法覆盖安装。
+
 ## [0.2.1] - 2026-10-16
 
 ### 新增
