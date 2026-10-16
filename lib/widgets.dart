@@ -511,6 +511,9 @@ class DetectedStarsPainter extends CustomPainter {
     //   * 彗星与小行星：**四角取景框 ＋ 十字**，浅蓝色。换形状而不是只换颜色，
     //     是因为这两类的来路不一样——那一套位置来自构建时抓的小天体目录，而不是
     //     行星那张近似根数表，精度和时效都不同；只靠深浅区分，色弱的人分不出来。
+    //   * 「星历算得出位置、图上没认出来」的那一类：**点线圆**，不画十字，颜色仍
+    //     按家族走（行星矮行星琥珀、小行星彗星浅蓝）。点线是这里最弱的一个记号，
+    //     说的也是最弱的一个结论：位置是算出来的，亮点压根没找到。
     //
     // 用虚线是有意的：图上的虚线记号一律表示「按表算，它在这儿」，不是「我看见了」。
     final bodyPaint = Paint()
@@ -539,13 +542,38 @@ class DetectedStarsPainter extends CustomPainter {
       color: const Color(0xFF7FD8FF),
     );
     for (final body in bodies) {
-      // 「位置算得出来、这张图上没认出来」的那一类什么都不画。
-      //
-      // 这一条不是省略，是实话：那种条目说的是「它今天在这张照片的这个位置上，
-      // 但亮度不够，这个器材拍不到」。给它画个记号就等于宣称看见了。
-      if (!body.detected) continue;
       final found = toCanvas(body.x, body.y);
       final major = body.kind.isMajorPlanet;
+      // 「位置算得出来、这张图上没认出来」的那一类画**点线圆**。
+      //
+      // 这一类以前什么都不画，理由是「画了就等于宣称看见了」。点线比虚线再退
+      // 一步，说的正是「这里只有一个算出来的位置，图上没有对应的亮点」，所以
+      // 那条理由照样成立。反过来不画才是更糟的选择：用户在列表里读到「它今天
+      // 在这张照片的这个位置上」，回到图上却找不到任何痕迹，只会以为是自己
+      // 看漏了——而这类条目的整个存在意义就是「不静默省略」。
+      if (!body.detected) {
+        _dottedCircle(
+          canvas,
+          found,
+          11,
+          major ? predictedPaint : smallBodyPredictedPaint,
+        );
+        final missed = TextPainter(
+          text: TextSpan(
+            text: '${body.name} · 图上没有对上',
+            style: major ? bodyLabelStyle : smallBodyLabelStyle,
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: destination.width * 0.55);
+        queue(
+          missed,
+          found,
+          priority: 0,
+          preferred: const Offset(14, -20),
+          force: true,
+        );
+        continue;
+      }
       final paint = major ? bodyPaint : smallBodyPaint;
       if (major) {
         _dashedCircle(canvas, found, 11, paint);
@@ -668,6 +696,26 @@ class DetectedStarsPainter extends CustomPainter {
         final end = math.min(start + 4, metric.length);
         canvas.drawPath(metric.extractPath(start, end), paint);
         start = end + 3;
+      }
+    }
+  }
+
+  /// 画一个点线圆。
+  ///
+  /// 给「星历算得出位置、图上却没认出来」的系内天体用。和另外两套形状都不撞：
+  /// 行星那条是**虚线**圆（位置算出来、亮点也找到了），小行星彗星那条是**四角
+  /// 框**；点线再退一步，表达的是「连亮点都没找到，只剩一个算出来的位置」。
+  ///
+  /// 点距按弧长切：点短（1.4）、间隔长（4.6），这样即使缩到很小的半径，看上去
+  /// 也是点而不是虚线的短划。
+  void _dottedCircle(Canvas canvas, Offset center, double radius, Paint paint) {
+    final path = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    for (final metric in path.computeMetrics()) {
+      var start = 0.0;
+      while (start < metric.length) {
+        final end = math.min(start + 1.4, metric.length);
+        canvas.drawPath(metric.extractPath(start, end), paint);
+        start = end + 4.6;
       }
     }
   }
@@ -916,7 +964,7 @@ class SkyProgressBar extends StatelessWidget {
   /// 提醒的是「这一步依赖外部服务」，而不是「出错了」。
   static const _onlineColours = <Color>[
     Color(0xFF8A6520),
-    Color(0xFFFFDE77),
+    kOnlineAmber,
     Color(0xFFFFF3C4),
   ];
 
@@ -1378,8 +1426,8 @@ class MagnitudeHistogram extends StatelessWidget {
         const SizedBox(height: 6),
         Text(
           calibrated
-              ? '横轴：标定星等（数值越大越暗）　纵轴：星数'
-              : '横轴：图内相对星等（未标定，只能比较亮度，不是真实星等）　纵轴：星数',
+              ? '横轴：标定星等（数值越大越暗）\n 纵轴：星数'
+              : '横轴：图内相对星等（未标定，不是真实星等）\n 纵轴：星数',
           style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
         ),
       ],

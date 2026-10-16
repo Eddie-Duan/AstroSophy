@@ -2516,9 +2516,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       '小行星和彗星是浅蓝色四角框加十字。'
                       '虚线和方框都在说同一件事：这个位置是算出来的，不是看出来的。'
                       '隐去只是不画，测量结果、报告和星表匹配一个字都不变。'
-                      '「系内天体」里写着「图上没有对上」的那几条本来就没有记号——'
-                      '它们说的是「按星历它在这张照片的这个位置上，但亮度不够，'
-                      '没能在图上认出来」。'
+                      '「系内天体」里写着「图上没有对上」的那几条画的是点线圆，'
+                      '位置就是星历算出来的那一个——它们说的是「按星历它在这张照片的'
+                      '这个位置上，但亮度不够，没能在图上认出来」，用的是这里最弱的'
+                      '一种记号。'
                       '「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——'
                       '判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。'
                       '拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星，'
@@ -2646,12 +2647,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   /// 图上要画标记的系内天体。
   ///
-  /// 和深空天体那一组同规格，但过滤条件不同：「没认出来」的那种（[detected]
-  /// 为假）**必须**滤掉。它的意思是「按星历它在这张照片的这个位置上，可图上
-  /// 没有找到能对上的亮点」——画了记号就等于宣称看见了，而这一条恰恰是没看见。
+  /// 「没认出来」的那种（[detected] 为假）也在这里面：它画的是点线圆，位置就是
+  /// 星历算出来的那一个。列进这一组是为了让它跟着显隐开关走——用户按了「从图上
+  /// 隐去」，两个记号都得消失，否则那个开关只做了一半的事。
   List<MovingBodySuspicion> _visibleMovingBodies(SolveResult? solve) => [
         for (final body in solve?.movingBodies ?? const <MovingBodySuspicion>[])
-          if (body.detected && !_hiddenMovingBodies.contains(body.name)) body,
+          if (!_hiddenMovingBodies.contains(body.name)) body,
       ];
 
   /// 这个天体在图上画不画圈。
@@ -2861,19 +2862,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 深空天体靠「目录里有这个天体、坐标对得上」，系内天体靠「星表里这个位置
   /// 没有星、而且星历说它就在这儿」——后者依赖拍摄时刻，前者不依赖。
   ///
-  /// 组里会出现两种条目：
+  /// 组里会出现两种条目，两种现在图上都有记号：
   ///
-  ///   * 图上有标记的（认出来了）——这一行有 − / +，能单独从图上收起来；
-  ///   * 「画面里还有，但没对上」的——**没有**加减号可给，和图上的深空天体那套
-  ///     一样：图上本来就没画，给一个按下去什么也不发生的开关只会让人更困惑。
+  ///   * 认出来了的——虚线圈或四角框，加一个星历位置的十字；
+  ///   * 「画面里还有，但没对上」的——点线圆，位置就是星历算出来的那一个。
+  ///
+  /// 两种都给 − / +。以前只有前一种有，理由是「图上本来就没画」；现在后一种也
+  /// 画了点线圆，再留一个按下去什么也不发生的开关就成了谎话。
   Widget _intraSolarGroup(SolveResult? solve) {
     const id = 'intraSolar';
     final bodies = solve?.movingBodies ?? const <MovingBodySuspicion>[];
     final collapsed = _collapsedGroups.contains(id);
-    // 只有真的画在图上的才配叫「可视化」，也才有显隐可谈。
+    // 只有真的画在图上的才配叫「可视化」，也才有显隐可谈。坐标不是有限数就没得画
+    // （画布上是 NaN，用户什么也看不到），这也顺带把「认出来了」和「没对上」两类
+    // 一并收进来——它们的 [MovingBodySuspicion.x] 都是可用的像素坐标。
     final markable = [
       for (final body in bodies)
-        if (body.detected) body,
+        if (body.x.isFinite && body.y.isFinite) body,
     ];
     final visible = markable
         .where((body) => !_hiddenMovingBodies.contains(body.name))
@@ -3018,27 +3023,25 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 11),
       ),
-      trailing: body.detected
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _batchButton(
-                  Icons.remove_circle_outline,
-                  '把 ${body.name} 的标记从图上隐去',
-                  !isHidden,
-                  () => setState(() => _hiddenMovingBodies.add(body.name)),
-                  dense: true,
-                ),
-                _batchButton(
-                  Icons.add_circle_outline,
-                  '显示 ${body.name} 的标记',
-                  isHidden,
-                  () => setState(() => _hiddenMovingBodies.remove(body.name)),
-                  dense: true,
-                ),
-              ],
-            )
-          : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _batchButton(
+            Icons.remove_circle_outline,
+            '把 ${body.name} 的标记从图上隐去',
+            !isHidden,
+            () => setState(() => _hiddenMovingBodies.add(body.name)),
+            dense: true,
+          ),
+          _batchButton(
+            Icons.add_circle_outline,
+            '显示 ${body.name} 的标记',
+            isHidden,
+            () => setState(() => _hiddenMovingBodies.remove(body.name)),
+            dense: true,
+          ),
+        ],
+      ),
     );
   }
 
@@ -3726,10 +3729,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 下面那排数字是「拍得怎么样」，再下面是各条细节卡。曾经这里还有一段
   /// 总结和一份拍摄建议，都删了：总结和上面那段说的是同一件事，建议则总是
   /// 那几条通用话——占着最好的位置，说的却不是用户此刻最想知道的。
+  /// 取主题里那张卡片的形状，只换描边。
+  ///
+  /// 圆角不在这里写死：主题改了圆角，这里跟着改，两边不会各说各话。
+  ShapeBorder _outlinedCard(BorderSide side) {
+    final base = Theme.of(context).cardTheme.shape;
+    if (base is OutlinedBorder) return base.copyWith(side: side);
+    return RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(20),
+      side: side,
+    );
+  }
+
   Widget _observationCard(SkyAnalysis analysis, SolveResult? solve) {
     final moon = moonFactsOf(analysis, _instantOf(_moment));
     final record = buildObservationRecord(analysis, solve, moon: moon);
+    // 在线解算的那一次，这张卡换琥珀色边框并在最前面说清照片去过哪儿。
+    //
+    // 颜色不是随手挑的：进度条上「琥珀＝照片已经交给在线解算」是同一套语义，
+    // 用户在这里认出的是同一个信号。一份天区识别结果从哪来，决定了它可信到什么
+    // 程度、以及照片到底出没出过这台设备——这是读这份报告之前就该知道的事，
+    // 所以它排在天体名单前面。
+    final online = solve?.source == SolveSource.online;
     return Card(
+      shape: online
+          ? _outlinedCard(const BorderSide(color: kOnlineAmber, width: 1.6))
+          : null,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -3749,6 +3774,29 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
               ],
             ),
+            if (online) ...[
+              const SizedBox(height: 10),
+              const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.cloud_upload_outlined,
+                      size: 15, color: kOnlineAmber),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '使用 Astrometry.net 在线解算：这张照片的分析预览已上传至 '
+                      'nova.astrometry.net，中心坐标与天体名来自该服务。'
+                      '本机解算没有成功，所以这一次照片出过设备。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.5,
+                        color: kOnlineAmber,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 10),
             MarkdownText(
               buildHeadlineMarkdown(analysis, solve, moon: moon),
@@ -4436,6 +4484,26 @@ class _SettingsFormState extends State<SettingsForm> {
   bool _obscureAstrometry = true;
   late bool _allowUpload = widget.allowUpload;
 
+  /// 快速模板：只预填 Base URL 和型号名，不含 Key。
+  ///
+  /// 型号名是写死的，会过期——服务商换名字比这个应用发版快。所以界面上那句提示
+  /// 明说「请在服务商处核对模型是否仍可用」；填错了也不会静默失败，调用会直接
+  /// 报 404 / `resource_not_found_error`。
+  ///
+  /// 下面每个值都来自各家官方文档，不凭印象写（**2026-10-16 核对**）：
+  ///
+  ///   * **百炼**：BASE_URL 取「OpenAI 兼容」页那一版。文档现在主推带
+  ///     `{WorkspaceId}` 的专属域名，但明确写了原域名可继续使用——模板没法预知
+  ///     用户的 WorkspaceId，所以填原域名。型号取官方「推荐模型」表里的
+  ///     `qwen3.8-flash`（轻量）与 `qwen3.8-max`（最强推理）。
+  ///   * **智谱**：端点取自「快速开始」，型号取自「模型概览」——旗舰 `glm-5.3`，
+  ///     轻量 `glm-5.3-flash`。
+  ///   * **Kimi**：BASE_URL 取自 chat 接口页，型号取自公开价目表——`kimi-k2.6`
+  ///     （轻量，K2 系列）与 `kimi-k3`（K3 系列）。
+  ///   * **混元**：BASE_URL 与型号都取自它的「OpenAI 兼容接口」页。那页只给出
+  ///     `hunyuan-turbos-latest` 这一个可直接引用的型号名，所以两个槽都填它——
+  ///     宁可重复，也不编一个没核对过的名字。该页同时声明混元正在迁往 TokenHub、
+  ///     旧控制台将下线，届时应按 TokenHub 的型号表更新。
   static const _apiTemplates = <_AgentApiTemplate>[
     _AgentApiTemplate(
       name: 'DeepSeek',
@@ -4460,6 +4528,30 @@ class _SettingsFormState extends State<SettingsForm> {
       baseUrl: 'https://api.siliconflow.cn/v1',
       lightModel: 'deepseek-ai/DeepSeek-V3',
       strongModel: 'deepseek-ai/DeepSeek-R1',
+    ),
+    _AgentApiTemplate(
+      name: '阿里云百炼',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      lightModel: 'qwen3.8-flash',
+      strongModel: 'qwen3.8-max',
+    ),
+    _AgentApiTemplate(
+      name: '智谱 GLM',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      lightModel: 'glm-5.3-flash',
+      strongModel: 'glm-5.3',
+    ),
+    _AgentApiTemplate(
+      name: 'Kimi',
+      baseUrl: 'https://api.moonshot.cn/v1',
+      lightModel: 'kimi-k2.6',
+      strongModel: 'kimi-k3',
+    ),
+    _AgentApiTemplate(
+      name: '腾讯混元',
+      baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
+      lightModel: 'hunyuan-turbos-latest',
+      strongModel: 'hunyuan-turbos-latest',
     ),
   ];
 
@@ -4553,10 +4645,10 @@ class _SettingsFormState extends State<SettingsForm> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SectionTitle('本机 API 设置', Icons.lock_outline),
+              const SectionTitle('本机 API-key 设置', Icons.lock_outline),
               const SizedBox(height: 14),
               const Text(
-                '快速模板（仅填写接口地址和模型名，不含 API Key）',
+                '快速模板',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const Align(
@@ -4611,17 +4703,15 @@ class _SettingsFormState extends State<SettingsForm> {
                 controlAffinity: ListTileControlAffinity.leading,
                 value: _allowUpload,
                 onChanged: (value) => setState(() => _allowUpload = value ?? false),
-                title: const Text('允许在必要时把分析预览图上传至 Astrometry.net'),
+                title: const Text('允许在必要时把图片上传至 Astrometry.net'),
                 subtitle: const Text(
-                  '默认关闭。手机本机解算失败、且这张图确实需要天区坐标时才会用到；'
-                  '不上传时不会使用在线解算服务。',
+                  '默认关闭，本机解算失败才会用到；\n'
+                  '请登录Astrometry.net获取APIKey。',
                   style: TextStyle(fontSize: 12, color: Color(0xFFA6B5C8)),
                 ),
               ),
               const Text(
-                '密钥保存在本机安全存储。普通对话只发送测量摘要；'
-                '视觉识别（找水印/文字）会先询问，并把预览图发给你上面配的模型——'
-                '那一步需要该模型支持图像输入。',
+                '密钥保存在本地安全存储。',
                 style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 16),

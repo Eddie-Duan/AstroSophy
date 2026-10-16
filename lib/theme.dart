@@ -10,3 +10,10 @@ import 'package:flutter/material.dart';
 const kBackground = Color(0xFF080E19);
 const kPanel = Color(0xFF101A2A);
 const kMint = Color(0xFF64D9BD);
+
+/// 「这一步把照片交给了在线服务」的颜色：琥珀。
+///
+/// 进度条上用它表示「正在上传/在线解算」，报告卡上用它表示「这份结果是在线算
+/// 的」。两处是同一件事，所以共用同一个常量——各自写一个色值，迟早会漂成两种
+/// 琥珀，而用户认的正是这个颜色本身。
+const kOnlineAmber = Color(0xFFFFDE77);
