@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -73,7 +74,23 @@ class AstroSophyApp extends StatelessWidget {
       builder: (context, language, _) => MaterialApp(
         title: 'AstroSophy',
         debugShowCheckedModeBanner: false,
-        // 让 Material 自带的文字（对话框按钮、日期控件之类）跟着走。
+        // 让 Material 自带的文字（返回键 tooltip、弹窗遮罩的无障碍标签、日期
+        // 控件之类）跟着走。
+        //
+        // 下面这几个 delegate 不是可选项：默认的 `DefaultMaterialLocalizations`
+        // 只承认 en，而 `locale` 一设成 zh、`supportedLocales` 一列出 zh，框架
+        // 就找不到任何支持 zh 的 delegate，`MaterialLocalizations` 于是**整个
+        // 缺席**。凡是真正用到它的地方（AppBar 的返回键 tooltip、`showDialog`
+        // 和 `showModalBottomSheet` 的遮罩标签）都会在构建时抛异常——表现是
+        // 页面一进去就「坏了」、按钮点了没反应。界面文案本身走我们自己的
+        // `strings_map.dart`，与这里无关；这里补的是框架那部分。
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          // Cupertino 那一份也要给：M3 里不少控件（下拉刷新、长按选择之类）
+          // 会从这里取字，缺了它框架同样会认定「这个 locale 没有全部支持」。
+          GlobalCupertinoLocalizations.delegate,
+        ],
         locale: Locale(language.code),
         supportedLocales: [
           for (final item in AppLanguage.values) Locale(item.code),
@@ -500,7 +517,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       (
         icon: Icons.help_outline_rounded,
         label: t('使用引导'),
-        detail: t('重看这五页，或者随时回到这里看这份说明'),
+        detail: t('重看引导，或者随时回到这里看这份说明'),
         accent: false,
       ),
       (
@@ -1649,6 +1666,28 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() => _error = message);
   }
 
+  /// 右上角那排图标里的一枚。
+  ///
+  /// 不用裸 `IconButton`：默认尺寸是 48×48，一排四个加上最右边那颗 API 胶囊，
+  /// 在 320dp 宽的屏上会把最右边两个（语言、API）挤出屏幕——实测溢出 60px，
+  /// 表现是「这两个按钮点不进去」。这里收到 40×44（Material 允许的最小触摸
+  /// 目标），一排才放得下。
+  Widget _topBarAction({
+    required VoidCallback onPressed,
+    required String tooltip,
+    required IconData icon,
+    Color? color,
+  }) =>
+      IconButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        iconSize: 22,
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints(minWidth: 40, minHeight: 44),
+        icon: Icon(icon, color: color),
+      );
+
   @override
   Widget build(BuildContext context) {
     final analysis = _analysis;
@@ -1659,33 +1698,34 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       appBar: AppBar(
         title: const Text('AstroSophy'),
         actions: [
-          IconButton(
+          _topBarAction(
             onPressed: _openNox,
             tooltip: t('{0} 助手', [noxName]),
             // 只有它是主色：另外几个是「去某个地方」的入口，而这一个是
             // 「叫个人过来」。颜色是同一条信息，不必再用文字说一遍。
-            icon: const Icon(noxIcon, color: kMint),
+            icon: noxIcon,
+            color: kMint,
           ),
-          IconButton(
+          _topBarAction(
             onPressed: () => _showOnboarding(),
             tooltip: t('使用引导'),
-            icon: const Icon(Icons.help_outline_rounded),
+            icon: Icons.help_outline_rounded,
           ),
-          IconButton(
+          _topBarAction(
             onPressed: _openHistory,
             tooltip: t('观星仓库'),
-            icon: const Icon(Icons.collections_bookmark_outlined),
+            icon: Icons.collections_bookmark_outlined,
           ),
-          IconButton(
+          _topBarAction(
             onPressed: _pickLanguage,
             tooltip: t('界面语言：{0}', [appLanguage.value.nativeName]),
-            icon: const Icon(Icons.translate_rounded),
+            icon: Icons.translate_rounded,
           ),
           // API 设置放在最右、而且不跟前面几个一样只画一个图标：它是这几个里面
           // 唯一一个「不配就用不起来」的入口（模型解读和在线解算都要 Key），
           // 用一个带字的胶囊把它从「随便逛逛」的图标里拎出来。
           Padding(
-            padding: const EdgeInsets.only(left: 4, right: 10),
+            padding: const EdgeInsets.only(left: 2, right: 6),
             child: _ApiEntry(onPressed: _settings),
           ),
         ],
@@ -1894,9 +1934,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           const SizedBox(height: 10),
           Row(
             children: [
-              Text(
-                t('支持JPG / PNG / TIFF / RAW 格式'),
-                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+              // 这行原来不设弹性，字一长（320dp 窄屏、或系统大字号）整行就溢出，
+              // 紧挨着的那个「？」被挤出屏幕——照看不误，但点不到。给它弹性，
+              // 宽裕时尺寸不变，挤的时候让文字先让位。
+              Flexible(
+                child: Text(
+                  t('支持JPG / PNG / TIFF / RAW 格式'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+                ),
               ),
               _HelpButton(
                 title: t('能不能读 RAW'),
@@ -3041,7 +3088,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(38, 2, 12, 10),
               child: Text(
-                t('这张照片里没有算得出位置的系内天体。（要有拍摄时刻才算得出来。）'),
+                t('无系内天体。'),
                 style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
               ),
             )
@@ -4522,7 +4569,7 @@ class _ApiEntry extends StatelessWidget {
             onTap: onPressed,
             customBorder: const StadiumBorder(),
             child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 9, vertical: 5),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -4532,7 +4579,7 @@ class _ApiEntry extends StatelessWidget {
                   Text(
                     'API',
                     style: TextStyle(
-                      fontSize: 12.5,
+                        fontSize: 12,
                       fontWeight: FontWeight.w700,
                       color: kMint,
                     ),
