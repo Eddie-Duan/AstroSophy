@@ -803,6 +803,7 @@ class SkyProgressBar extends StatelessWidget {
     this.online = false,
     this.moon = false,
     this.solvedLocally = false,
+    this.deep = false,
   });
 
   /// 0–1。
@@ -831,11 +832,29 @@ class SkyProgressBar extends StatelessWidget {
   /// 「不用再等了，结果已经出来了」。
   final bool solvedLocally;
 
+  /// 本机解算已经动用最深那层星表（整张表，G < 11）。
+  ///
+  /// 换成蓝色调，并在进度条左端挂一句「本地深度思考」。这一层的等待和前面
+  /// 两层完全不是一个量级——百万颗星的三角形索引要现建，几十秒起步——所以它
+  /// 需要一个不会让人以为「卡死了」的说明。用蓝色而不是琥珀或红：这一步仍然
+  /// 在手机上算，照片没出过设备，只是算得比前面几层狠。
+  final bool deep;
+
   /// 本机那几步的填充色：薄荷绿，和全应用的主强调色一致。
   static const _localColours = <Color>[
     Color(0xFF2E8C7A),
     kMint,
     Color(0xFFCFF6EA),
+  ];
+
+  /// 最深那层星表的填充色：蓝。
+  ///
+  /// 星空本来的颜色，也是这几档里最快意的一种——它说的是「还在本机，只是
+  /// 这次要算得久一点」。
+  static const _deepColours = <Color>[
+    Color(0xFF1D3F73),
+    Color(0xFF4C8DFF),
+    Color(0xFFC7DBFF),
   ];
 
   /// 在线那一段的填充色：琥珀。和「低可信 / 需要留意」用的是同一族颜色，
@@ -865,6 +884,12 @@ class SkyProgressBar extends StatelessWidget {
           // 的是「还要等多久」，这个标记说的是「等一下，这可能是另一回事」。
           if (moon) ...[
             const _MoonBadge(),
+            const SizedBox(width: 8),
+          ],
+          // 「本地深度思考」也挂在左边，理由和月亮标记一样：它是这一步最
+          // 需要先被看到的那句话——这次要算得久一点。
+          if (deep) ...[
+            const _DeepBadge(),
             const SizedBox(width: 8),
           ],
           Expanded(child: _bar()),
@@ -897,7 +922,9 @@ class SkyProgressBar extends StatelessWidget {
                               ? _solvedColours
                               : online
                                   ? _onlineColours
-                                  : _localColours,
+                                  : deep
+                                      ? _deepColours
+                                      : _localColours,
                         ),
                       ),
                       child: const CustomPaint(painter: _StarRushPainter()),
@@ -905,6 +932,37 @@ class SkyProgressBar extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// 进度条左边那句「本地深度思考」。
+///
+/// 只在动用最深那层星表时出现。和月亮标记同一个位置、同一种做法：先给一句
+/// 短语和一种颜色，再让进度条本身去说「还要等多久」。
+///
+/// 用文字而不是一个图标：这一步和其他步骤的区别不是「哪一类事情」，而是
+/// 「这次要算得久一点」——这是一句得读的话。
+class _DeepBadge extends StatelessWidget {
+  const _DeepBadge();
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1D3F73),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          child: Text(
+            '本地深度思考',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFFC7DBFF),
+              height: 1.1,
             ),
           ),
         ),

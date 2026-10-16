@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -13,8 +14,13 @@ import 'package:astrosophy/models.dart';
 /// 根目录，用 dart:io 读既简单，又不用先初始化 widget binding。
 ///
 /// [withGaia] 给 false 时不读 Gaia 补充层，得到的就是只有 Hipparcos 的那张
-/// 主星表——解算器分两层用星表，对照测试两边都得能造出来。
+/// 主星表——解算器分三层用星表，对照测试两边都得能造出来。
 StarCatalog loadTestCatalog({bool withGaia = true}) {
+  // 分层的界线跟着资产走，和 `StarCatalog.load` 读的是同一个字段：测试里
+  // 写死一个数，资产换了深度就测不出真东西了。
+  final meta = jsonDecode(
+    File('assets/catalog/catalog_meta.json').readAsStringSync(),
+  ) as Map<String, Object?>;
   return StarCatalog.parse(
     starsJson: File('assets/catalog/stars.json').readAsStringSync(),
     namesJson: File('assets/catalog/names.json').readAsStringSync(),
@@ -24,6 +30,7 @@ StarCatalog loadTestCatalog({bool withGaia = true}) {
         File('assets/catalog/constellation_grid.bin').readAsBytesSync(),
     gaiaBytes:
         withGaia ? File('assets/catalog/gaia.bin').readAsBytesSync() : null,
+    gaiaMidMagLimit: (meta['gaia_mid_mag_limit'] as num?)?.toDouble() ?? 9.0,
   );
 }
 

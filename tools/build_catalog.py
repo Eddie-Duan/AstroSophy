@@ -307,7 +307,23 @@ def fetch(
     url = f"{VIZIER}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=180) as response:
-        return response.read().decode("utf-8", errors="replace")
+        text = response.read().decode("utf-8", errors="replace")
+    # 回满就是被截断了，而 VizieR 不会说。
+    #
+    # 这个上限按行数算，和 `-out.max=unlimited` 无关：实测 G<11 的查询被切成
+    # 十段并行拉，十段全部停在 50001 行（含表头）上，拼起来就是一份「看着完整、
+    # 其实缺了大半」的星表——这种错会一路带到资产里，直到某片天区解不出来才
+    # 露头。完整的结果落在整数上的概率可以忽略，所以正好撞上就是被截了。
+    # 深于 G<10 的层请走 `tools/fetch_gaia.py`（ESA TAP + 盒子切分）。
+    data_rows = sum(
+        1 for line in text.splitlines() if line.strip() and not line.startswith("#")
+    )
+    if data_rows in (50000, 50001):
+        raise RuntimeError(
+            f"{source} 的返回正好停在 {data_rows} 行，这是 VizieR 的服务端上限，"
+            "内容已经被截断。深星表请用 tools/fetch_gaia.py 生成缓存。"
+        )
+    return text
 
 
 def parse_tsv(text: str) -> list[dict[str, str]]:
@@ -767,7 +783,7 @@ def build_deepsky_payload(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="assets/catalog", help="输出目录")
-    parser.add_argument("--mag-limit", type=float, default=7.5, help="保留的极限 V 星等")
+    parser.add_argument("--mag-limit", type=float, default=8.0, help="保留的极限 V 星等")
     parser.add_argument("--line-mag-limit", type=float, default=4.6,
                         help="参与生成星座连线的极限星等")
     parser.add_argument("--max-line-stars", type=int, default=12,
@@ -779,8 +795,11 @@ def main() -> int:
                         help="深空目录保留的最小长轴角分（Messier 不受此限）")
     parser.add_argument("--skip-deepsky", action="store_true",
                         help="不生成 deepsky.json（只更新恒星目录时用）")
-    parser.add_argument("--gaia-mag-limit", type=float, default=9.0,
+    parser.add_argument("--gaia-mag-limit", type=float, default=11.0,
                         help="Gaia 补充层保留的极限 G 星等（每深一等，星数约涨三倍）")
+    parser.add_argument("--gaia-mid-mag-limit", type=float, default=9.0,
+                        help="浅层补充与整层之间的界线：解算先用 V 星 + G 到这个限的星，"
+                             "解不出来才动用整层")
     parser.add_argument("--skip-gaia", action="store_true",
                         help="不生成 gaia.bin（只更新名字或深空目录时用）")
     parser.add_argument("--only-deepsky", action="store_true",
@@ -1066,9 +1085,15 @@ def main() -> int:
             "star_count": len(stars_payload),
             "constellation_order": abbreviations,
             "gaia_mag_limit": None if args.skip_gaia else args.gaia_mag_limit,
+            "gaia_mid_mag_limit": None if args.skip_gaia else args.gaia_mid_mag_limit,
             "gaia_count": gaia_count,
             "deepsky_mag_limit": None if args.skip_deepsky else args.deepsky_mag_limit,
             "deepsky_size_min": None if args.skip_deepsky else args.deepsky_size_min,
+            # 哪几类不看星等。光看 mag_limit 会以为这套筛选只有一条规则，而
+            # 目录里那些没有星等的星云正是靠这一项才留下来的。`--only-deepsky`
+            # 那条窄路一直写着它，主路径漏了很久——两条路都得写，否则「重跑
+            # 一遍」和「只重建深空目录」得到的 meta 不一样。
+            "deepsky_always_types": sorted(NO_MAGNITUDE_TYPES),
             "deepsky_count": len(deepsky_payload),
             "sources": [
                 "I/239/hip_main (ESA 1997, Hipparcos)",

@@ -22,6 +22,7 @@ class PipelineProgress {
     this.online = false,
     this.moon = false,
     this.solvedLocally = false,
+    this.deep = false,
   });
 
   /// 0–1，界面上的进度条直接用这个值。
@@ -52,6 +53,12 @@ class PipelineProgress {
   /// 判据用这个字段，不去认阶段文案。文案是给人读的，随时可能改一句话，而
   /// 颜色一旦跟着文案走，改文案就会悄悄改掉一条判断——那种错查起来很费劲。
   final bool solvedLocally;
+
+  /// 本机解算已经用上最深那层星表（整张表，G < 11）。
+  ///
+  /// 界面靠它换进度条的配色：这一层要现建百万颗星的索引，等的时间比前面
+  /// 两层高一个量级。和 [solvedLocally] 一样，判据是这个字段而不是阶段文案。
+  final bool deep;
 
   @override
   String toString() => '${(fraction * 100).toStringAsFixed(0)}% · $stage';
@@ -149,7 +156,7 @@ class SkyPipeline {
     // 本机解算成没成功。成功后进度条就换成另一套配色，一路持续到最后。
     var solvedLocally = false;
 
-    void report(int index, double local, [String? text]) {
+    void report(int index, double local, [String? text, bool deep = false]) {
       if (index >= bounds.length) return;
       final (start, end) = bounds[index];
       onProgress?.call(
@@ -158,6 +165,7 @@ class SkyPipeline {
           text ?? stages[index].name,
           online: stages[index].online,
           solvedLocally: solvedLocally,
+          deep: deep,
         ),
       );
     }
@@ -208,7 +216,8 @@ class SkyPipeline {
       try {
         solve = await worker.solveLocal(
           analysis,
-          onProgress: (local, stage) => report(index, local, stage),
+          onProgress: (progress) =>
+              report(index, progress.fraction, progress.stage, progress.deep),
         );
       } catch (error) {
         warnings.add('本机解算未能完成：$error');
@@ -473,8 +482,11 @@ class SkyWorker {
     switch (message.kind) {
       case 'progress':
         pending.onProgress?.call(
-          (message.value! as num).toDouble(),
-          message.stage ?? '',
+          SolveProgress(
+            (message.value! as num).toDouble(),
+            message.stage ?? '',
+            deep: message.deep,
+          ),
         );
       case 'done':
         _pending.remove(message.id);
@@ -502,7 +514,7 @@ class SkyWorker {
   Future<Object?> _request(
     String kind,
     Object? payload,
-    void Function(double, String)? onProgress,
+    void Function(SolveProgress)? onProgress,
   ) {
     if (_disposed) {
       return Future<Object?>.error(StateError('后台解算已经关闭。'));
@@ -529,7 +541,7 @@ class SkyWorker {
   /// 本机离线解算。解不出来返回 null，由上层决定要不要回退在线服务。
   Future<SolveResult?> solveLocal(
     SkyAnalysis analysis, {
-    void Function(double, String)? onProgress,
+    void Function(SolveProgress)? onProgress,
   }) async =>
       await _request('solve', analysis, onProgress) as SolveResult?;
 
@@ -563,7 +575,7 @@ class SkyWorker {
 class _Pending {
   _Pending(this.onProgress);
 
-  final void Function(double, String)? onProgress;
+  final void Function(SolveProgress)? onProgress;
   final completer = Completer<Object?>();
 }
 
@@ -623,8 +635,14 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
         case 'solve':
           final result = solver.solve(
             message.payload! as SkyAnalysis,
-            onProgress: (fraction, stage) => boot.reply.send(
-              _WorkerReply(message.id, 'progress', fraction, stage),
+            onProgress: (progress) => boot.reply.send(
+              _WorkerReply(
+                message.id,
+                'progress',
+                progress.fraction,
+                progress.stage,
+                progress.deep,
+              ),
             ),
           );
           boot.reply.send(_WorkerReply(message.id, 'done', result));
@@ -689,7 +707,7 @@ class _WorkerRequest {
 }
 
 class _WorkerReply {
-  const _WorkerReply(this.id, this.kind, [this.value, this.stage]);
+  const _WorkerReply(this.id, this.kind, [this.value, this.stage, this.deep = false]);
 
   final int id;
 
@@ -697,4 +715,7 @@ class _WorkerReply {
   final String kind;
   final Object? value;
   final String? stage;
+
+  /// 这条进度是不是来自最深那层星表，见 [SolveProgress.deep]。
+  final bool deep;
 }

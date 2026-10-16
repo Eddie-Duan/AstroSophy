@@ -19,11 +19,15 @@ import 'models.dart';
 ///   成员跑最小生成树生成，不是抄现成星图）。
 /// * `constellation_grid.bin` —— 360 × 181 的字节表，给出任意天区落在
 ///   哪个星座，用来回答「这张照片拍的是哪片天」。
-/// * `gaia.bin`  —— Gaia DR3 里亮于 G=9.0 的 13.7 万颗星，定长 7 字节一条。
-///   这一层只做背景：Hipparcos 全天平均每平方度一颗星，视场 4° 的照片里
-///   只有十来颗目录星，正好卡在解算出与解不出的边界上；补到两个星等之后
-///   同样的天区里有四倍目录星，解算才稳定。它们没有名字，星等是 G 不是 V，
-///   所以由 [CatalogStar.isGaia] 标出来，标注和测光那两处绕开。
+/// * `gaia.bin`  —— Gaia DR3 里亮于 G=11 的 120.6 万颗星，定长 7 字节一条，
+///   约 8 MB。这一层只做背景：Hipparcos 全天平均每平方度一颗星，视场 4° 的
+///   照片里只有十来颗目录星，正好卡在解算出与解不出的边界上；补到三个星等
+///   之后窄到 1.5° 的视场里也有几十颗目录星，解算才稳定。它们没有名字，
+///   星等是 G 不是 V，所以由 [CatalogStar.isGaia] 标出来，标注和测光那两处
+///   绕开。
+///
+/// 这一层在解算时被**当作两层用**：先只用其中 G < [gaiaMidMagLimit] 的那批
+/// （14 万颗，索引十来秒建好），解不出来才动用整层（索引要一分钟上下）。
 ///
 /// 这里只做「加载 + 查询」，不含算法；解算逻辑在 `solver.dart`。
 class StarCatalog {
@@ -33,11 +37,13 @@ class StarCatalog {
     required this.constellations,
     required this.constellationGrid,
     required this.magnitudeLimit,
+    required this.gaiaMidMagLimit,
   })  : byHip = {for (final star in stars) star.hip: star},
         _cells = SkyCellIndex<CatalogStar>(
           stars,
           ra: (star) => star.ra,
           dec: (star) => star.dec,
+          cellSizeDegrees: cellSizeForStars(stars.length),
         );
 
   /// 按 V 星等从亮到暗排好序的恒星表。
@@ -58,6 +64,14 @@ class StarCatalog {
   /// 星表的特征了。
   final double magnitudeLimit;
 
+  /// 补充层里的「浅」与「深」在这里分界，单位是 G 星等。
+  ///
+  /// 解算分三层试（见 [PlateSolver.solve]）：主星表 → 主星表 + G 到这个限的
+  /// 补充星 → 整张表。中间这一层的存在是为了**别为解得出解的图付深层的账**：
+  /// 整层（G<11，约 125 万颗）的三角形索引要建一分钟上下、常驻几十 MB，而
+  /// 窄视场里的多数目标用 G<9 那层就够了。
+  final double gaiaMidMagLimit;
+
   /// HIP 号索引，星表匹配后要拿它反查名字。
   final Map<int, CatalogStar> byHip;
 
@@ -71,6 +85,7 @@ class StarCatalog {
     required String constellationsJson,
     required Uint8List constellationGrid,
     Uint8List? gaiaBytes,
+    double gaiaMidMagLimit = 9.0,
   }) {
     final rawStars = (jsonDecode(starsJson) as List<Object?>);
     final rawNames = jsonDecode(namesJson) as Map<String, Object?>;
@@ -141,6 +156,7 @@ class StarCatalog {
       constellations: constellations,
       constellationGrid: constellationGrid,
       magnitudeLimit: mainLimit,
+      gaiaMidMagLimit: gaiaMidMagLimit,
     );
   }
 
@@ -151,6 +167,10 @@ class StarCatalog {
     final constellations =
         await bundle.loadString('assets/catalog/constellations.json');
     final grid = await bundle.load('assets/catalog/constellation_grid.bin');
+    // 分层的界线跟着星表资产走，不写死在代码里：星表换一版深度，界线就该
+    // 跟着换，而不是留下一个「代码说是 9 等、资产其实到 11 等」的哑巴状态。
+    final meta = await bundle.loadString('assets/catalog/catalog_meta.json');
+    final midLimit = (jsonDecode(meta) as Map<String, Object?>)['gaia_mid_mag_limit'];
     // Gaia 补充层缺了不该让整条链路起不来：它只是让稀疏天区也能解算，
     // 没有它退回原来的亮星表，功能少一点而已。
     final gaia = await bundle.load('assets/catalog/gaia.bin').then(
@@ -166,6 +186,7 @@ class StarCatalog {
         grid.lengthInBytes,
       ),
       gaiaBytes: gaia,
+      gaiaMidMagLimit: (midLimit as num?)?.toDouble() ?? 9.0,
     );
   }
 
@@ -246,17 +267,24 @@ class StarCatalog {
   }) {
     var radius = _initialSearchRadius;
     while (true) {
-      // 和 [starsNear] 同样的筛选，但不按星等排序：这里要的是最近，排序
-      // 留给 [_closest] 按角距做。建索引时这次排序是白花的。
-      final found = <CatalogStar>[];
+      // 和 [starsNear] 同样的筛选，但不按星等排序：这里要的是最近，排序留给
+      // 最后按角距做。建索引时那次按星等的排序是白花的。
+      //
+      // 角距连同星一起存下来，不留给比较器现算：一趟排序要把同一对星比十几
+      // 次，比较器里每比一次就是两次三角函数。百万颗星的深层索引里，每颗星
+      // 都要排一次几十颗的序，这一项比近邻搜索本身还贵。
+      final found = <(double, CatalogStar)>[];
       for (final star in _cells.within(ra, dec, radius)) {
         if (star.vMagnitude > magnitudeLimit) continue;
-        if (angularSeparationDegrees(ra, dec, star.ra, star.dec) <= radius) {
-          found.add(star);
-        }
+        final separation = angularSeparationDegrees(ra, dec, star.ra, star.dec);
+        if (separation <= radius) found.add((separation, star));
       }
       if (found.length > count || radius >= maxRadiusDegrees) {
-        return _closest(found, ra, dec, count);
+        if (found.length <= count) {
+          return [for (final entry in found) entry.$2];
+        }
+        found.sort((a, b) => a.$1.compareTo(b.$1));
+        return [for (final entry in found.take(count)) entry.$2];
       }
       final next = radius * 2;
       radius = next > maxRadiusDegrees ? maxRadiusDegrees : next;
@@ -267,22 +295,17 @@ class StarCatalog {
   /// 自己那一桶，所以这个值实际决定了单次查询的下限。
   static const _initialSearchRadius = 0.75;
 
-  static List<CatalogStar> _closest(
-    List<CatalogStar> stars,
-    double ra,
-    double dec,
-    int count,
-  ) {
-    if (stars.length <= count) return stars;
-    stars.sort((a, b) {
-      final first = angularSeparationDegrees(ra, dec, a.ra, a.dec);
-      final second = angularSeparationDegrees(ra, dec, b.ra, b.dec);
-      return first.compareTo(second);
-    });
-    return stars.sublist(0, count);
-  }
-
 }
+
+/// 星表有多密，分桶就该切多细。
+///
+/// 单次近邻查询要扫完相交桶里的**每一颗**星，所以「一个桶里平均几颗星」直接
+/// 决定了建索引的代价——而建索引是每颗星都要查一次。四万颗星的亮星表用 2° 桶
+/// （每桶四颗）刚好；百万颗星的表在同一个桶里塞两百多颗，全天建一次索引要多
+/// 花一分多钟，切成 1° 之后桶里回到三十颗，同样的活儿十几秒就跑完。
+///
+/// 再往细切（0.5°）桶里只剩七八颗，快不了多少，桶本身的内存却要翻两番。
+double cellSizeForStars(int count) => count > 200000 ? 1 : 2;
 
 /// 2° × 2° 的天区分桶索引：把「以某点为中心、某半径内的所有条目」从
 /// 「把整张表扫一遍」压成「只碰几桶」。
@@ -291,21 +314,32 @@ class StarCatalog {
 /// 角距越小，同样的搜索半径要横跨更多列才不会漏。全天 41394 颗星的亮星表
 /// 和两千多条的深空表共用这一份实现：两者的坐标语义完全一样，没有理由各写
 /// 一遍（天极附近那段收缩逻辑尤其不值得写第二遍）。
+///
+/// [cellSizeDegrees] 决定单次查询的下限：查询要扫完相交桶里的**每一颗**星，
+/// 而桶里有多少颗只看密度。4° 的视场、四万颗星的星表里，一个 2° 桶装四颗，
+/// 扫一遍比真实目标还便宜；可星表涨到百万颗之后，同一个桶装着两百多颗，建
+/// 索引时每颗星都要扫一遍，全天就是十亿次角距计算。所以星表规模上来之后
+/// 桶要跟着切细，见 [cellSizeForStars]。
 class SkyCellIndex<T> {
   SkyCellIndex(
     Iterable<T> items, {
     required double Function(T) ra,
     required double Function(T) dec,
-  }) {
+    double cellSizeDegrees = 2,
+  }) : _cellSize = cellSizeDegrees {
     for (final item in items) {
       final key = _cellKey(_raIndex(ra(item)), _decIndex(dec(item)));
       (_cells[key] ??= <T>[]).add(item);
     }
   }
 
-  final Map<int, List<T>> _cells = {};
+  final double _cellSize;
 
-  static const _cellSize = 2;
+  /// 赤经方向的桶数（全天一圈）与赤纬方向的桶数（半个天球加极点）。
+  late final int _raCells = (360 / _cellSize).round();
+  late final int _decCells = (180 / _cellSize).round();
+
+  final Map<int, List<T>> _cells = {};
 
   /// 落在以 (ra, dec) 为心、[radiusDegrees] 为半径的圆里的分桶条目。
   /// 调用方还要自己按真实角距筛一遍——桶是方的，圆要自己画。
@@ -322,7 +356,7 @@ class SkyCellIndex<T> {
     final baseRa = _raIndex(ra);
     for (var ddec = -decCells; ddec <= decCells; ddec++) {
       final cellDec = baseDec + ddec;
-      if (cellDec < 0 || cellDec > 180 ~/ _cellSize) continue;
+      if (cellDec < 0 || cellDec > _decCells) continue;
       final decLow = cellDec * _cellSize - 90;
       final decHigh = decLow + _cellSize;
       // 整行都在圆外时，这一圈的赤经分桶一个都不用看。
@@ -331,12 +365,12 @@ class SkyCellIndex<T> {
       // 越靠近天极，赤经方向的分桶被 cos(dec) 压得越窄，要多取几列才不漏。
       final shrink = math.cos((decLow + _cellSize / 2) * math.pi / 180).abs();
       final raCells = shrink < 1e-3
-          ? 90
-          : (radius / (_cellSize * shrink)).ceil().clamp(1, 90);
+          ? _raCells
+          : (radius / (_cellSize * shrink)).ceil().clamp(1, _raCells);
       for (var dra = -raCells; dra <= raCells; dra++) {
-        // 180 个 2° 赤经分桶；Dart 的 % 对正除数总返回非负值，不用再补 360。
-        final raIndex = (baseRa + dra) % 180;
-        final raLow = raIndex * _cellSize.toDouble();
+        // Dart 的 % 对正除数总返回非负值，不用再补 360。
+        final raIndex = (baseRa + dra) % _raCells;
+        final raLow = raIndex * _cellSize;
         if (_cellSeparation(ra, dec, nearestDec, raLow) > radius) continue;
         final bucket = _cells[_cellKey(raIndex, cellDec)];
         if (bucket != null) result.addAll(bucket);
@@ -350,32 +384,33 @@ class SkyCellIndex<T> {
   /// 分桶的两条边界互相垂直，所以「赤纬夹一下、赤经夹一下」得到的就是桶里
   /// 离查询点最近的那个点，不用再绕四条边走一遍。赤纬已经由调用方夹好，
   /// 这里只管赤经，并且要处理 0°/360° 的接缝。
-  static double _cellSeparation(
+  double _cellSeparation(
     double ra,
     double dec,
     double nearestDec,
     double raLow,
   ) {
     final centre = raLow + _cellSize / 2;
-    // ra 相对桶中心的带符号差，落在 [-180, 180)。桶只有 2° 宽，比半圈窄得
-    // 多，所以最近点就是把这个差值夹到 ±半宽上。
+    // ra 相对桶中心的带符号差，落在 [-180, 180)。桶比半圈窄得多，所以最近
+    // 点就是把这个差值夹到 ±半宽上。
     final offset = ((ra - centre) % 360 + 540) % 360 - 180;
+    final half = _cellSize / 2;
     final nearestRa =
-        offset.abs() <= _cellSize / 2 ? ra : centre + offset.clamp(-1.0, 1.0);
+        offset.abs() <= half ? ra : centre + offset.clamp(-half, half);
     return angularSeparationDegrees(ra, dec, nearestRa, nearestDec);
   }
 
-  static int _decIndex(double dec) {
+  int _decIndex(double dec) {
     final index = ((dec + 90) / _cellSize).floor();
-    return index.clamp(0, 180 ~/ _cellSize);
+    return index.clamp(0, _decCells);
   }
 
-  static int _raIndex(double ra) {
-    final index = (ra / _cellSize).floor() % 180;
-    return index < 0 ? index + 180 : index;
+  int _raIndex(double ra) {
+    final index = (ra / _cellSize).floor() % _raCells;
+    return index < 0 ? index + _raCells : index;
   }
 
-  static int _cellKey(int raIndex, int decIndex) => decIndex * 256 + raIndex;
+  int _cellKey(int raIndex, int decIndex) => decIndex * _raCells + raIndex;
 }
 
 /// Gaia 补充层的定长记录：赤经 3 字节、赤纬 3 字节、星等 1 字节。

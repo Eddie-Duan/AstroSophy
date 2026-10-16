@@ -85,7 +85,7 @@ void main() {
       final stages = <String>[];
       final solve = await worker.solveLocal(
         analysis,
-        onProgress: (_, stage) => stages.add(stage),
+        onProgress: (progress) => stages.add(progress.stage),
       );
 
       expect(solve, isNotNull);

@@ -295,21 +295,25 @@ void main() {
     });
 
     test('窄视场（智能望远镜级）也能本机解算', () {
-      // 银河北极：全天星最少的方向之一。1.9° 的对角线视场里连 Gaia 补充层
-      // 算上也只有个位数的目录星——但这正是智能望远镜（Seestar S50 对角线
-      // 1.45°、S30 2.44°）的视场，而这些机器拍的照片恰恰最不该被送去在线
-      // 解算。
+      // 银河北极：全天星最少的方向之一。1.9° 的对角线视场里，把 G<11 那一层
+      // 算上也只有二十几颗目录星，其中亮过 G<9 的只有个位数——浅层和中间层
+      // 都锚不住它。但这正是智能望远镜（Seestar S50 对角线 1.45°、S30 2.44°）
+      // 的视场，而这些机器拍的照片恰恰最不该被送去在线解算。
       //
       // 这里要的**不是**「凑不出解就返回 null」，而是「凑出来的必须是对的」：
       // 旧版用「视场 ≥ 3°」和「内点 ≥ 10」两条常数把这类图一律挡在门外，
       // 结果是七颗检出星全部都对上了目录星，却照样回退在线。
+      //
+      // 门槛从 15 放到 30：星表从 G<9 加深到 G<11 之后，同一片天区里的目录星
+      // 自然变多（15 → 23）。这个数守的仍然是「这是一片稀天区」，不是某个
+      // 具体的数——真正要紧的断言是下面那几条。
       final analysis = synthesiseField(
         catalog: catalog,
         centerRa: 192.86,
         centerDec: 27.13,
         degreesPerPixel: 0.0015,
       );
-      expect(analysis.stars.length, lessThan(15));
+      expect(analysis.stars.length, lessThan(30));
       final result = solver.solve(analysis);
       expect(result, isNotNull, reason: '窄视场里有目录星就该解出来');
       expect(result!.source, SolveSource.local);

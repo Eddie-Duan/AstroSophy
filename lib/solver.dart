@@ -8,6 +8,28 @@ import 'ephemeris.dart';
 import 'models.dart';
 import 'moving.dart';
 
+/// 解算进度的一次快照。
+///
+/// [deep] 说的是「这一步已经动用了整张星表那一层」——百万颗星的三角形索引
+/// 要现建，等待时间比前面两层高一个量级。界面据此换一套配色和一句说明：
+/// 同样是「本机在算」，用户等的其实是两件很不一样的事，提前说清楚，那几十
+/// 秒才不至于像是卡死了。
+///
+/// 判据用这个字段，不去认 [stage] 里的文案：文案是给人读的，随时会改，而
+/// 颜色一旦跟着文案走，改一句话就会悄悄改掉一条判断。
+class SolveProgress {
+  const SolveProgress(this.fraction, this.stage, {this.deep = false});
+
+  /// 0–1。
+  final double fraction;
+
+  /// 当前在做什么，写成人话。
+  final String stage;
+
+  /// 已经用上最深那层星表。
+  final bool deep;
+}
+
 /// 本机离线天区解算（lost-in-space plate solving）。
 ///
 /// 四步，全部在手机上完成，不需要联网：
@@ -32,10 +54,11 @@ import 'moving.dart';
 /// **像素距离**算。两者在 TAN 投影下相差 O(θ²)（θ 是离切点的角距），对
 /// 几度的视场只有万分之几，远小于指纹容差。省掉投影让索引构建快得多。
 ///
-/// **适用视场**：星表分两层用——浅层是 Hipparcos 到 V=8.0 的 41394 颗，
-/// 深层再补上 Gaia 的 13.7 万颗（G < 9.0）兜底，具体分工和实测见 [solve]。
-/// 视场里大约要有 20 颗目录星才能稳定解算，浅层对应视场直径约 4.5° 以上，
-/// 更窄的望远镜视场会落到深层。两层都解不出来时才该走在线解算。
+/// **适用视场**：星表分三层用——浅层是 Hipparcos 到 V=8.0 的 41394 颗，中间
+/// 层再补上 Gaia 里 G < 9 的那批（共约 17 万颗），最深那层用整张表（Gaia 到
+/// G < 11，共约 125 万颗）。三层的分工和实测代价见 [solve]。视场里大约要有
+/// 20 颗目录星才能稳定解算，浅层对应视场直径约 4.5° 以上，更窄的望远镜视场
+/// 会落到后面两层。三层都解不出来时才该走在线解算。
 class PlateSolver {
   PlateSolver(
     this.catalog, {
@@ -54,7 +77,6 @@ class PlateSolver {
   final int neighbours;
 
   _TriangleIndex? _cachedIndex;
-  _TriangleIndex? _cachedDeepIndex;
 
   /// 浅层索引：只用 Hipparcos（V ≤ 8）那批星。
   ///
@@ -66,35 +88,59 @@ class PlateSolver {
         neighbours: neighbours,
       );
 
-  /// 深层索引：把 Gaia 补充层一起放进来。
+  /// 中间层索引。
   ///
-  /// 只在浅层解不出来时才建，因为建它要好几秒、常驻几十 MB，而绝大多数
-  /// 照片根本用不上——星点稀到浅层凑不出三角形的天区才是它的用武之地。
-  _TriangleIndex get _deepIndex =>
-      _cachedDeepIndex ??= _TriangleIndex.build(
-        catalog,
-        pool: catalog.stars,
-        neighbours: _deepNeighbours,
-      );
+  /// 只在浅层解不出来时才建（见 [solve]），因为建它要十来秒、常驻几十 MB，
+  /// 而绝大多数照片根本用不上——星点稀到浅层凑不出三角形的天区才是它的
+  /// 用武之地。
+  _TriangleIndex? _cachedMidIndex;
+
+  /// 最深那一层的索引。
+  ///
+  /// 只在中间层也解不出来时才建：这一层是百万颗星，索引的代价比中间层高一个
+  /// 量级，多数窄视场目标（Seestar 那类机器拍的星云星团）在中间层就出结果了，
+  /// 不该为它们付这一份账。
+  _TriangleIndex? _cachedDeepIndex;
 
   /// 这一层的近邻取法要跟图内端一致，所以图内端组三角形时也得用同一个值。
   ///
-  /// 深层取 4 而不是 6，是因为星数从四万涨到十七万，每颗星的三角形数
-  /// C(5,3)=10 对 C(7,3)=35——深层的索引因此小了一个量级，建得更快、
-  /// 常驻内存也压得住。星点稀的天区里星本来就少，10 个三角形足够。
-  static const _deepNeighbours = 4;
+  /// 中间层取 4 而不是 6，是因为星数从四万涨到十七万，每颗星的三角形数
+  /// C(5,3)=10 对 C(7,3)=35——索引因此小了一个量级，建得更快、常驻内存也
+  /// 压得住。星点稀的天区里星本来就少，10 个三角形足够。
+  static const _midNeighbours = 4;
 
-  /// 有没有比浅层更深的星可用。Gaia 资产缺失时两层是同一批星，
+  /// 最深那一层的近邻取法。
+  ///
+  /// 这层的代价和它成正比：三角形数 ≈ 星数 × C(neighbours+1, 3)，而这一层是
+  /// 百万颗星，每多要一个近邻，索引就多几十 MB、建索引就多几十秒。所以它比
+  /// 中间层更省——**每颗星只出一个三角形**（C(3,3) = 1）。
+  ///
+  /// 这么省还够用，是因为稠密不等于好认：图内端在这一层也只用它最近的 2 个
+  /// 邻居组三角形，两侧用的是同一套近邻关系，一个三角形就够定位。拿最稀的
+  /// 天区实测（1.9° 视场里只有二十几颗目录星、其中亮过 G<9 的只有个位数），
+  /// 三个里解出两个，而且都是在第一档（8 颗）就解出来的；解不出的那个本来
+  /// 就没有别的本机办法，交给在线服务即可。
+  static const _deepNeighbours = 2;
+
+  /// 有没有比浅层更深的星可用。Gaia 资产缺失时各层是同一批星，
   /// 那就没必要再跑一遍。
-  bool get _hasDeeperLayer => catalog.stars.length > _shallowPool.length;
+  bool get _hasMidLayer => _midPool.length > _shallowPool.length;
+  bool get _hasDeepLayer => catalog.stars.length > _midPool.length;
 
   List<CatalogStar>? _cachedShallowPool;
+  List<CatalogStar>? _cachedMidPool;
 
   /// 浅层用的星：目录里非 Gaia 的那些。目录本身按星等排好序，过滤之后
   /// 顺序不变，所以这个池子仍然是「从亮到暗」的。
   List<CatalogStar> get _shallowPool => _cachedShallowPool ??= [
         for (final star in catalog.stars)
           if (!star.isGaia) star,
+      ];
+
+  /// 中间层用的星：非 Gaia 的，加上 Gaia 里亮过界线的那些。
+  List<CatalogStar> get _midPool => _cachedMidPool ??= [
+        for (final star in catalog.stars)
+          if (!star.isGaia || star.vMagnitude <= catalog.gaiaMidMagLimit) star,
       ];
 
   /// 提前把浅层索引建好。
@@ -105,20 +151,29 @@ class PlateSolver {
 
   /// 尝试解算。失败返回 null，由调用方决定要不要回退到在线服务。
   ///
-  /// 先用浅层星表试，解不出来再换深层星表重试一遍。分成两趟是因为三角形
-  /// 指纹要求两侧用同一套近邻关系：图内端只拿最亮的若干颗检出组三角形，
-  /// 目录端一旦掺进大量 8～9 等的暗星，同一颗亮星的近邻就换成了它旁边那些
-  /// 暗星，两侧枚举出来的根本不是同一批三角形——星多的天区会因此从「解得出」
-  /// 变成「解不出」。
+  /// 三层，从浅到深，前一层解出来就不碰后一层：
   ///
-  /// 实测过：把 Gaia 层直接并进唯一的那张星表，猎户座的合成图在 20″/px
-  /// 下失败、南天某天区也从 137ms 变成 60s 还不成功；而按两层走，这些天区
-  /// 在浅层就正常出结果，深层只服务那些浅层星数本来就不够的天区。
+  /// 1. **主星表**（Hipparcos，V ≤ 8，四万颗）。索引一秒上下，宽视场照片
+  ///    基本都在这一层出结果。
+  /// 2. **主星表 + Gaia 里 G ≤ [StarCatalog.gaiaMidMagLimit] 的那批**。窄视场
+  ///    和星点稀的天区靠它。
+  /// 3. **整张星表**（Gaia 到 G < 11，百万颗）。第三层里最难的窄视场——比如
+  ///    1.3° 视场里只有十来颗 G<9 星的 M 33——只有这一层才够密。
   ///
-  /// 同一层里还要再按「图内端取多少颗星」试几档，见 [_imageStarRungs]。
+  /// 分三层而不是一层，是因为三角形指纹要求两侧用同一套近邻关系：图内端只拿
+  /// 最亮的若干颗检出组三角形，目录端一旦掺进大量暗星，同一颗亮星的近邻就换成
+  /// 了它旁边那些暗星，两侧枚举出来的根本不是同一批三角形——星多的天区会因此
+  /// 从「解得出」变成「解不出」。实测：把 Gaia 直接并进唯一那张星表，猎户座的
+  /// 合成图在 20″/px 下失败、南天某天区也从 137ms 变成 60s 还不成功。
+  ///
+  /// 分三层而不是两层，是因为**后一层的代价是前一层的几倍**：整张表那一层的
+  /// 三角形索引是百万级、建一次一分钟上下、常驻几十 MB。多数窄视场目标在第二
+  /// 层就够了，不该为它们付第三层的账。
+  ///
+  /// 每一层里还要再按「图内端取多少颗星」试几档，见 [_imageStarRungs]。
   SolveResult? solve(
     SkyAnalysis analysis, {
-    void Function(double progress, String stage)? onProgress,
+    void Function(SolveProgress progress)? onProgress,
   }) {
     // 候选由分析层给：那边多收了一类「形似略拉长的亮源」。这里不再自己按
     // `isElongated` 过滤——展示用的拉长候选和能拿来解算的候选不是一回事，
@@ -127,7 +182,7 @@ class PlateSolver {
       ..sort((a, b) => b.flux.compareTo(a.flux));
     if (detections.length < _minimumDetections) return null;
 
-    onProgress?.call(0.05, '正在准备离线解算索引');
+    onProgress?.call(const SolveProgress(0.05, '正在准备离线解算索引'));
     final index = _index;
     if (index.triangleCount == 0) return null;
     // 索引是跨帧复用的，像面尺寸每帧都可能不同，所以每次解算都更新。
@@ -149,12 +204,56 @@ class PlateSolver {
     if (shallow != null) return shallow;
 
     // 浅层星表里这半天区根本没有几颗星，再往下就是唯一的路。
-    if (!_hasDeeperLayer) return null;
-    final deep = _deepIndex;
-    if (deep.triangleCount == 0) return null;
-    deep.frameWidth = analysis.width.toDouble();
-    deep.frameHeight = analysis.height.toDouble();
-    onProgress?.call(0.6, '正在加深星表再试一次');
+    if (_hasMidLayer) {
+      onProgress?.call(const SolveProgress(0.58, '正在加深星表再试一次'));
+      final mid = _forFrame(
+        _cachedMidIndex ??= _TriangleIndex.build(
+          catalog,
+          pool: _midPool,
+          neighbours: _midNeighbours,
+          onProgress: (fraction) => onProgress?.call(
+            SolveProgress(0.58 + 0.04 * fraction, '正在加深星表再试一次'),
+          ),
+        ),
+        analysis,
+      );
+      final solved = mid == null
+          ? null
+          : _matchWithRungs(
+              analysis,
+              mid,
+              detections,
+              rungs: _midImageStarRungs,
+              neighbours: _midNeighbours,
+              candidatesPerTriangle: _deepCandidatesPerTriangle,
+              verificationBudget: _deepVerificationBudget,
+              progressBase: 0.62,
+              progressSpan: 0.1,
+              onProgress: onProgress,
+            );
+      if (solved != null) return solved;
+    }
+
+    if (!_hasDeepLayer) return null;
+    // 到了这里说明前两层都不够密。这一层的索引是本工程里最贵的一件东西，
+    // 文案要让用户知道「还在跑、而且这次跑得久」，界面还会据此换一套配色
+    // （见 [SolveProgress.deep]）。
+    onProgress?.call(
+      const SolveProgress(0.72, '正在用最深的星表再试一次', deep: true),
+    );
+    final deep = _forFrame(
+      _cachedDeepIndex ??= _TriangleIndex.build(
+        catalog,
+        pool: catalog.stars,
+        neighbours: _deepNeighbours,
+        onProgress: (fraction) => onProgress?.call(
+          SolveProgress(0.72 + 0.06 * fraction, '正在用最深的星表建索引',
+              deep: true),
+        ),
+      ),
+      analysis,
+    );
+    if (deep == null) return null;
     return _matchWithRungs(
       analysis,
       deep,
@@ -163,10 +262,20 @@ class PlateSolver {
       neighbours: _deepNeighbours,
       candidatesPerTriangle: _deepCandidatesPerTriangle,
       verificationBudget: _deepVerificationBudget,
-      progressBase: 0.6,
-      progressSpan: 0.1,
+      progressBase: 0.78,
+      progressSpan: 0.12,
       onProgress: onProgress,
+      deep: true,
     );
+  }
+
+  /// 建索引时并不知道像面尺寸，解算前每帧都要补上——[_collectInliers] 靠它
+  /// 估计要取多大的天区。索引是空的就当这一层不存在。
+  _TriangleIndex? _forFrame(_TriangleIndex index, SkyAnalysis analysis) {
+    if (index.triangleCount == 0) return null;
+    index.frameWidth = analysis.width.toDouble();
+    index.frameHeight = analysis.height.toDouble();
+    return index;
   }
 
   /// 图内端参与组三角形的星数，从小到大试。
@@ -215,9 +324,19 @@ class PlateSolver {
   /// 把预算跑满才肯认输。
   static const _imageStarRungs = [8, 16, 24, 120];
 
-  /// 深层星表用的是同一串刻度：那一层的星多四倍，但「图内端比目录端多出
-  /// 多少颗」这件事和层数无关。窄视场反而最需要小档——深层本来就是给
+  /// 中间层星表用的是同一串刻度：那一层的星多四倍，但「图内端比目录端多出
+  /// 多少颗」这件事和层数无关。窄视场反而最需要小档——中间层本来就是给
   /// 「浅层星数不够」的天区兜底的，而窄视场正是这样的天区。
+  static const _midImageStarRungs = [8, 16, 24, 120];
+
+  /// 最深那一层的刻度。
+  ///
+  /// 和中间层同一串。这一层的星表又密了八倍，但「图内端比目录端多出多少颗」
+  /// 这件事和层数无关：同一片天区里，图内端只拿最亮的若干颗检出，目录端却也
+  /// 只有那几颗——多给图内端补星补的是目录里根本没有的星，一样顶掉真邻居。
+  ///
+  /// 实测这一层都是第一档就命中（那三个解出来的稀天区，匹配各花 1 秒上下），
+  /// 后面几档是留给「图里最亮的星不是目录里最亮的星」那种情形的。
   static const _deepImageStarRungs = [8, 16, 24, 120];
 
   /// 同一层索引上，按 [rungs] 逐档重试图内三角形。
@@ -234,15 +353,19 @@ class PlateSolver {
     required int verificationBudget,
     required double progressBase,
     required double progressSpan,
-    void Function(double progress, String stage)? onProgress,
+    void Function(SolveProgress progress)? onProgress,
+    bool deep = false,
   }) {
     for (var i = 0; i < rungs.length; i++) {
       final count = math.min(rungs[i], detections.length);
       if (count < _minimumDetections) continue;
       final stars = detections.take(count).toList(growable: false);
       onProgress?.call(
-        progressBase + progressSpan * i / rungs.length,
-        '正在匹配星图三角形',
+        SolveProgress(
+          progressBase + progressSpan * i / rungs.length,
+          '正在匹配星图三角形',
+          deep: deep,
+        ),
       );
       final result = _matchFrom(
         analysis,
@@ -257,6 +380,7 @@ class PlateSolver {
         // 宽视场上一直用的星数，含多少暗星、有多少碰巧撞上的机会都验过。
         expansionStars: rungs.last,
         onProgress: onProgress,
+        deep: deep,
       );
       if (result != null) return result;
     }
@@ -279,7 +403,8 @@ class PlateSolver {
     required int candidatesPerTriangle,
     required int verificationBudget,
     required int expansionStars,
-    void Function(double progress, String stage)? onProgress,
+    void Function(SolveProgress progress)? onProgress,
+    bool deep = false,
   }) {
     final imageTriangles = _imageTriangles(stars, neighbours);
     var verifications = 0;
@@ -365,11 +490,11 @@ class PlateSolver {
       }
     }
 
-    onProgress?.call(0.7, '正在精修天球坐标');
+    onProgress?.call(SolveProgress(0.7, '正在精修天球坐标', deep: deep));
     final wcs = _buildWcs(index, analysis, detections, best);
     if (wcs == null) return null;
 
-    onProgress?.call(0.88, '正在标定星等零点');
+    onProgress?.call(SolveProgress(0.88, '正在标定星等零点', deep: deep));
     return _buildResult(index, analysis, detections, best, wcs);
   }
 
@@ -404,9 +529,10 @@ class PlateSolver {
   /// 多看几个候选只是把它们排进队里，不会让噪声图更贵。
   static const _candidatesPerTriangle = 24;
 
-  /// 深层星表里的对应值。星密了四倍，同一个指纹上的假候选也多，所以要
+  /// 深层星表里的对应值。星又密了几倍，同一个指纹上的假候选也多，所以要
   /// 多看几个；验证预算跟着放大，不然真正的那个还没轮到、预算就先花光了。
-  /// 深层只在浅层失败后才跑，慢一点换的是「本来拿不到的结果」，值得。
+  /// 深层只在浅层和中层都失败后才跑，慢一点换的是「本来拿不到的结果」，值得。
+  /// 实测这一层的匹配是一秒上下，预算远没有花满——真正的代价在索引，不在验证。
   static const _deepCandidatesPerTriangle = 48;
   static const _deepVerificationBudget = 8000;
 
@@ -1350,6 +1476,7 @@ class _TriangleIndex {
     required this.keys,
     required this.order,
     required this.bucketStart,
+    required this.triangleCount,
   });
 
   final StarCatalog catalog;
@@ -1372,7 +1499,11 @@ class _TriangleIndex {
   /// 桶内部已经按 r3 排好。
   final Int32List bucketStart;
 
-  int get triangleCount => vertices.length ~/ 3;
+  /// 三角形个数。
+  ///
+  /// 不能拿 `vertices.length ~/ 3` 当个数：[vertices] 是按「每颗星最多几个
+  /// 三角形」的上界开好的，比实际用掉的长。见 [build]。
+  final int triangleCount;
 
   /// 建索引时并不知道像面尺寸，等第一帧图像进来时再补上，
   /// 用于 [_collectInliers] 估计要取多大的天区。
@@ -1410,6 +1541,7 @@ class _TriangleIndex {
     StarCatalog catalog, {
     required List<CatalogStar> pool,
     required int neighbours,
+    void Function(double fraction)? onProgress,
   }) {
     if (pool.isEmpty) {
       return _TriangleIndex._(
@@ -1419,6 +1551,7 @@ class _TriangleIndex {
         keys: Int32List(0),
         order: Int32List(0),
         bucketStart: Int32List(bucketCount + 1),
+        triangleCount: 0,
       );
     }
     // 池里最暗的那颗。近邻查询先用它当星等上限缩小扫描范围，再按池的
@@ -1441,12 +1574,28 @@ class _TriangleIndex {
       position[catalog.stars[i].hip] = i;
     }
 
-    final tripleVertices = <int>[];
-    final tripleKeys = <int>[];
-    final tripleR3 = <int>[];
-    final tripleR3Bucket = <int>[];
+    // 每颗星最多产出 C(neighbours+1, 3) 个三角形，先按这个上界把数组开好。
+    //
+    // 不用可增长的 List<int>：最深那层是百万颗星、百万个三角形，可增长数组每
+    // 扩容一次都要「新开一块 + 搬一遍」，峰值内存能到最终占用的一倍以上——在
+    // 手机上就是一次 OOM。按上界一次开好，浪费的部分是常数比例（实测约两成），
+    // 换来的是内存曲线平滑、峰值可预测。
+    final capacity = pool.length * _trianglesPerStar(neighbours);
+    final tripleVertices = Int32List(capacity * 3);
+    final tripleKeys = Int32List(capacity);
+    final tripleR3 = Int32List(capacity);
+    final tripleR3Bucket = Int32List(capacity);
+    var count = 0;
+
+    // 建索引是纯 CPU 的同步活儿，最深那层要几十秒。进度条在这段时间里一动
+    // 不动的话，用户看到的就是「卡死了」——所以每处理一小批就报一次。
+    final reportEvery = pool.length ~/ 40 + 1;
+    var processed = 0;
 
     for (final centre in pool) {
+      if (++processed % reportEvery == 0) {
+        onProgress?.call(processed / pool.length);
+      }
       final centreIndex = position[centre.hip]!;
       // 连同自己在内一共 neighbours + 1 颗，任取三颗组三角形。
       final near = catalog.nearestStars(
@@ -1490,25 +1639,44 @@ class _TriangleIndex {
               group[c].dec,
             );
             // 边 (a,b) 对面是 c，(b,c) 对面是 a，(a,c) 对面是 b。
-            final sides = <(double, int)>[
-              (dab, groupIndex[c]),
-              (dbc, groupIndex[a]),
-              (dac, groupIndex[b]),
-            ]..sort((x, y) => x.$1.compareTo(y.$1));
-            final shortest = sides[0].$1;
+            //
+            // 三条边按长短排一下。这里不建表再 sort：每个三角形都要走一遍，
+            // 最深那层就是几百万次，三次比较加几次交换比一次列表分配加一次
+            // 排序便宜得多。
+            var shortest = dab;
+            var middle = dbc;
+            var longest = dac;
+            var shortVertex = groupIndex[c];
+            var middleVertex = groupIndex[a];
+            var longVertex = groupIndex[b];
+            if (shortest > middle) {
+              (shortest, middle) = (middle, shortest);
+              (shortVertex, middleVertex) = (middleVertex, shortVertex);
+            }
+            if (middle > longest) {
+              (middle, longest) = (longest, middle);
+              (middleVertex, longVertex) = (longVertex, middleVertex);
+            }
+            if (shortest > middle) {
+              (shortest, middle) = (middle, shortest);
+              (shortVertex, middleVertex) = (middleVertex, shortVertex);
+            }
             if (shortest < _minimumSideDegrees) continue;
-            final r3 = sides[2].$1 / shortest;
+            final r3 = longest / shortest;
             if (r3 > _maximumRatio) continue;
-            tripleVertices.addAll(sides.map((side) => side.$2));
-            tripleKeys.add(_bucketOf(sides[1].$1 / shortest));
-            tripleR3.add((r3 * 1000000).round());
-            tripleR3Bucket.add(_r3BucketOf(r3));
+            final at = count * 3;
+            tripleVertices[at] = shortVertex;
+            tripleVertices[at + 1] = middleVertex;
+            tripleVertices[at + 2] = longVertex;
+            tripleKeys[count] = _bucketOf(middle / shortest);
+            tripleR3[count] = (r3 * 1000000).round();
+            tripleR3Bucket[count] = _r3BucketOf(r3);
+            count++;
           }
         }
       }
     }
 
-    final count = tripleKeys.length;
     // 把两级坐标压成一个整数键，一次计数排序就得到全局有序的顺序。
     // 键空间是 bucketCount × r3Steps，全是小整数，计数排序比通用排序
     // 快得多，而这份顺序正是查询时省掉「扫全桶找最像的几个」的底气。
@@ -1536,12 +1704,20 @@ class _TriangleIndex {
 
     return _TriangleIndex._(
       catalog: catalog,
-      vertices: Int32List.fromList(tripleVertices),
-      r3Quantized: Int32List.fromList(tripleR3),
+      // 这两个数组是按下界开好的，比实际用的长——`triangleCount` 才是准数。
+      vertices: tripleVertices,
+      r3Quantized: tripleR3,
       keys: keys,
       order: order,
       bucketStart: bucketStart,
+      triangleCount: count,
     );
+  }
+
+  /// 一颗星最多能产出多少个三角形：连同自己在内 neighbours + 1 颗，任取三颗。
+  static int _trianglesPerStar(int neighbours) {
+    final n = neighbours + 1;
+    return n * (n - 1) * (n - 2) ~/ 6;
   }
 
   /// 索引顶点对应的目录星。

@@ -30,9 +30,9 @@ void main() {
         expect(star.hip, lessThan(0));
         expect(star.ra, inInclusiveRange(0, 360));
         expect(star.dec, inInclusiveRange(-90, 90));
-        // 打包时按 G < 9.0 截取，0.05 等一格会取到 9.0 这个端点。
+        // 打包时按 G < 11.0 截取，0.05 等一格会取到 11.0 这个端点。
         expect(star.vMagnitude, greaterThan(0));
-        expect(star.vMagnitude, lessThanOrEqualTo(9.0));
+        expect(star.vMagnitude, lessThanOrEqualTo(11.0));
       }
     });
 
@@ -75,6 +75,24 @@ void main() {
         reason: '星表 = 主星表 + 补充层，两个数都要和 meta 对得上',
       );
       expect(catalog.magnitudeLimit, closeTo(8.0, 0.1));
+    });
+
+    test('分层界线写在资产里，和代码里那份默认值对得上', () {
+      final meta = jsonDecode(
+        File('assets/catalog/catalog_meta.json').readAsStringSync(),
+      ) as Map<String, Object?>;
+      final mid = (meta['gaia_mid_mag_limit']! as num).toDouble();
+      final deep = (meta['gaia_mag_limit']! as num).toDouble();
+      // 中间层必须比整层浅，否则第三层就是白建的——它唯一的存在理由就是
+      // 「中间层解不出来的才轮到它」。
+      expect(mid, lessThan(deep));
+      final catalog = loadTestCatalog();
+      expect(catalog.gaiaMidMagLimit, mid);
+      expect(
+        catalog.stars.where((star) => star.isGaia).length,
+        greaterThan(catalog.stars.where((star) => star.isGaia && star.vMagnitude <= mid).length),
+        reason: '补充层里得有比界线更暗的星，否则第三层没有任何新东西',
+      );
     });
 
     test('补充层的星没有名字，也不计入星座归属', () {

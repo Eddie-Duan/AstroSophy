@@ -1057,7 +1057,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                           ? const Color(0xFFFF6B6B)
                           : progress.online
                               ? const Color(0xFFFFDE77)
-                              : kMint,
+                              : progress.deep
+                                  ? const Color(0xFF4C8DFF)
+                                  : kMint,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1069,6 +1071,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 online: progress.online,
                 moon: progress.moon,
                 solvedLocally: progress.solvedLocally,
+                deep: progress.deep,
               ),
               if (progress.solvedLocally) ...[
                 const SizedBox(height: 8),
