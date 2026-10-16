@@ -76,7 +76,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('观星记录'),
+          title: const Text('观星仓库'),
           actions: [
             if (_totalBytes > 0)
               Padding(

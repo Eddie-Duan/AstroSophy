@@ -67,6 +67,37 @@ void main() {
       });
     });
 
+    test('昴星团的亮成员都有中文星官名', () {
+      // 昴星团是全天空最容易认出来的目标之一，用户拍完一张 M 45，屏幕上却
+      // 只有一颗星有名字（从前就只收了 η Tau 一颗），比一颗都没有还费解。
+      //
+      // 编号按传统排法，**不按弗兰斯蒂德编号从小到大**：昴宿三落在 21 Tau、
+      // 昴宿四落在 20 Tau。这条「倒着走」是传统排法的原样，照编号顺序顺手
+      // "修正"过来，就把两颗星的名字对调了——所以这里逐颗钉死。
+      const expected = {
+        17499: ('Electra', '昴宿一'),
+        17531: ('Taygeta', '昴宿二'),
+        17579: ('Asterope', '昴宿三'),
+        17573: ('Maia', '昴宿四'),
+        17608: ('Merope', '昴宿五'),
+        17702: ('Alcyone', '昴宿六'),
+        17847: ('Atlas', '昴宿七'),
+        17489: ('Celaeno', '昴宿增九'),
+        17851: ('Pleione', '昴宿增十二'),
+      };
+      expected.forEach((hip, want) {
+        final star = catalog.byHip[hip];
+        expect(star, isNotNull, reason: 'HIP $hip 应该在星表里');
+        final name = catalog.nameOf(star!);
+        expect(name?.chinese, want.$2, reason: 'HIP $hip 的中文名');
+        expect(name?.english, want.$1, reason: 'HIP $hip 的西名');
+      });
+      // 18 Tau 只有星官名，没有通行的西名。西名留空，不编一个出来。
+      final unnamed = catalog.nameOf(catalog.byHip[17527]!);
+      expect(unnamed?.chinese, '昴宿增八');
+      expect(unnamed?.english, isNull);
+    });
+
     test('天区归属能回答「这张照片拍的是哪个星座」', () {
       expect(catalog.constellationAt(_orionRa, _orionDec)?.abbreviation, 'Ori');
       expect(catalog.constellationAt(201.3, -11.2)?.abbreviation, 'Vir');
@@ -263,11 +294,15 @@ void main() {
       expect(solver.solve(tooFew), isNull);
     });
 
-    test('视场窄到目录星不够时不硬凑结果', () {
-      // 银河北极：全天星最少的方向之一。连 Gaia 补充层算上，1.5° 视场里
-      // 也只有个位数的星，凑不出可以互相验证的三角形。这里必须老老实实
-      // 返回 null 让上层回退在线解算，而不是给一个看起来像模像样、
-      // 实际上错得离谱的坐标。
+    test('窄视场（智能望远镜级）也能本机解算', () {
+      // 银河北极：全天星最少的方向之一。1.9° 的对角线视场里连 Gaia 补充层
+      // 算上也只有个位数的目录星——但这正是智能望远镜（Seestar S50 对角线
+      // 1.45°、S30 2.44°）的视场，而这些机器拍的照片恰恰最不该被送去在线
+      // 解算。
+      //
+      // 这里要的**不是**「凑不出解就返回 null」，而是「凑出来的必须是对的」：
+      // 旧版用「视场 ≥ 3°」和「内点 ≥ 10」两条常数把这类图一律挡在门外，
+      // 结果是七颗检出星全部都对上了目录星，却照样回退在线。
       final analysis = synthesiseField(
         catalog: catalog,
         centerRa: 192.86,
@@ -275,7 +310,22 @@ void main() {
         degreesPerPixel: 0.0015,
       );
       expect(analysis.stars.length, lessThan(15));
-      expect(solver.solve(analysis), isNull);
+      final result = solver.solve(analysis);
+      expect(result, isNotNull, reason: '窄视场里有目录星就该解出来');
+      expect(result!.source, SolveSource.local);
+      final centreError = angularSeparationDegrees(
+        result.centerRa,
+        result.centerDec,
+        192.86,
+        27.13,
+      );
+      expect(centreError, lessThan(0.01),
+          reason: '解出的中心偏离真值 $centreError°——宁可返回 null 也不能给错坐标');
+      // 0.0015 度/像素 = 5.4 角秒/像素。
+      expect(result.arcsecPerPixel, closeTo(5.4, 0.2));
+      final agreement = wcsAgreement(analysis, result.wcs!, catalog);
+      expect(agreement, greaterThan(0.9),
+          reason: '只有 ${(agreement * 100).toStringAsFixed(0)}% 的星点落回目录星');
     });
 
     test('随机噪声点不会被解成星座', () {
@@ -300,6 +350,37 @@ void main() {
         ),
       );
       // 误检一个「解」比解不出来糟糕得多：用户会拿到一张标满错误星名的图。
+      expect(solver.solve(garbage), isNull);
+    });
+
+    test('窄视场里的噪声同样不会被解成星座', () {
+      // 窄视场放宽了两条常数：视场下限从 3° 降到 1°，内点门槛也从固定十颗
+      // 改成按这张图的概率算（视场稀、像面大时可以降到六颗）。这正是假解
+      // 最可能钻进来的缝——所以要单独盯住它。
+      //
+      // 门槛之所以敢放宽，是因为「图内星点撞上目录星」的概率随像面面积
+      // 下降：1.9° 视场里目录星只有十几颗，四千次候选里凑出三个额外内点的
+      // 期望不到万分之一。这条用例就是把这个结论钉死。
+      final analysis = synthesiseField(
+        catalog: catalog,
+        centerRa: 192.86,
+        centerDec: 27.13,
+        degreesPerPixel: 0.0015,
+      );
+      final random = math.Random(90210);
+      final garbage = analysis.copyWith(
+        stars: List.generate(
+          60,
+          (index) => DetectedStar(
+            random.nextDouble() * 1024,
+            random.nextDouble() * 768,
+            1000 - index.toDouble(),
+            5.0,
+            0.9,
+            1.0,
+          ),
+        ),
+      );
       expect(solver.solve(garbage), isNull);
     });
   });

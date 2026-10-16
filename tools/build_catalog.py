@@ -215,6 +215,25 @@ PROPER_STAR_NAMES = {
     "ζ UMa": ("Mizar", "开阳"),
     "80 UMa": ("Alcor", "辅"),
     "η Tau": ("Alcyone", "昴宿六"),
+    # 昴星团（M 45）其余的亮成员。七颗正星是昴宿一～昴宿七，另两颗亮的增星
+    # 一并收进来——爱好者认出「这是昴星团」之后，屏幕上却只有一颗星有名字，
+    # 比一个名字都没有还费解。
+    #
+    # 编号按传统排法（《儀象考成》一路，Stellarium 的中国星空文化同源），
+    # **不按弗兰斯蒂德编号从小到大**：昴宿三落在 21 Tau、昴宿四落在 20 Tau。
+    # 这个「倒着走」是真的，不是笔误——照编号顺序顺手改过来，就把两颗星的名字
+    # 对调了。
+    #
+    # 18 Tau 只有星官名、没有通行的西名，西名留空而不是编一个。
+    "17 Tau": ("Electra", "昴宿一"),
+    "19 Tau": ("Taygeta", "昴宿二"),
+    "21 Tau": ("Asterope", "昴宿三"),
+    "20 Tau": ("Maia", "昴宿四"),
+    "23 Tau": ("Merope", "昴宿五"),
+    "27 Tau": ("Atlas", "昴宿七"),
+    "16 Tau": ("Celaeno", "昴宿增九"),
+    "28 Tau": ("Pleione", "昴宿增十二"),
+    "18 Tau": ("", "昴宿增八"),
     "β UMa": ("Merak", "北斗二"),
     "γ UMa": ("Phecda", "北斗三"),
     "δ UMa": ("Megrez", "北斗四"),
@@ -897,7 +916,11 @@ def main() -> int:
         proper = PROPER_STAR_NAMES.get(designation) or \
             PROPER_STAR_NAMES.get(re.sub(r"[¹²³⁴⁵]", "", designation))
         if proper:
-            star["en"], star["zh"] = proper
+            # 有星官名、没有通行西名的星（18 Tau 这种）留空，不编一个出来。
+            if proper[0]:
+                star["en"] = proper[0]
+            if proper[1]:
+                star["zh"] = proper[1]
 
     # ---- 4. 输出恒星表 ----------------------------------------------------
     abbreviations = sorted(CONSTELLATION_NAMES)

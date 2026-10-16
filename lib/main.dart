@@ -32,6 +32,29 @@ import 'widgets.dart';
 
 void main() => runApp(const AstroSophyApp());
 
+/// 星点列表里的三组，顺序就是显示顺序。
+const groupIds = <String>['named', 'unnamed', 'streaks'];
+
+/// 一进结果页就既收起、又隐去圆圈的那两组。
+///
+/// 亮星是「我到底拍到了什么」的答案，一进结果页就该看见。另外两组动辄几十
+/// 项，一上来全画上、全展开，真正重要的那几颗立刻淹在里面。想看也容易：各自
+/// 的 + 就在组标题右边。
+const secondaryTargetGroups = <String>{'unnamed', 'streaks'};
+
+/// 一进结果页时哪几组收起。
+///
+/// 画面里有深空天体时只展开深空天体：那些才是按下快门的目标，而星点动辄
+/// 几十项，全展开就把主角淹了。
+///
+/// 画面里**没有**深空天体时反过来，展开亮星组：这时候列表里只剩星点，按上面
+/// 那套全收起来，用户打开面板看到的是一片空白加三个折叠条，像是什么都没算
+/// 出来。两种情况的默认值必须分开算，不能用一个常数。
+Set<String> initialCollapsedGroups({required int deepSkyObjectCount}) =>
+    deepSkyObjectCount == 0
+        ? {...secondaryTargetGroups}
+        : {'named', ...secondaryTargetGroups};
+
 class AstroSophyApp extends StatelessWidget {
   const AstroSophyApp({super.key});
 
@@ -152,18 +175,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   DateTime? _instantOf(CaptureMoment? moment) =>
       moment?.utcAt(moment.local.timeZoneOffset);
 
-  /// 三组星点在代码里的名字。数组顺序就是列表里的显示顺序。
-  static const _groupIds = <String>['named', 'unnamed', 'streaks'];
-
-  /// 一开始既收起、又隐去圆圈的那两组。
-  ///
-  /// 亮星是「我到底拍到了什么」的答案，一进结果页就该看见。另外两组动辄几十
-  /// 项，一上来全画上、全展开，真正重要的那几颗立刻淹在里面。想看也容易：各
-  /// 自的 + 就在组标题右边。
-  static const _secondaryGroups = <String>{'unnamed', 'streaks'};
-
   /// 图上不画圆圈的分组。只是不画——测量、星表匹配和报告都不受它影响。
-  final _hiddenGroups = <String>{..._secondaryGroups};
+  final _hiddenGroups = <String>{...secondaryTargetGroups};
 
   /// 单独隐去、单独显示的那些编号。
   ///
@@ -181,8 +194,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 深空天体没有星点编号，显隐按目录名称单独管理。
   final _hiddenDeepSkyObjects = <String>{};
 
-  /// 默认只展开深空天体；其余星点分组保持折叠。
-  final _collapsedGroups = <String>{'named', ..._secondaryGroups};
+  /// 哪几组是收起的。**一进结果页的默认值由 [initialCollapsedGroups] 给**，
+  /// 之后跟着用户点。
+  final _collapsedGroups = <String>{...secondaryTargetGroups};
+
+  /// 一进结果页时哪几组收起。判据见 [initialCollapsedGroups]。
+  Set<String> _initialCollapsedGroups() =>
+      initialCollapsedGroups(deepSkyObjectCount: _sortedDeepSkyObjects(_solve).length);
 
   /// 看图区的缩放/平移状态。
   final _viewer = TransformationController();
@@ -285,10 +303,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     _viewer.value = Matrix4.identity();
     _hiddenGroups
       ..clear()
-      ..addAll(_secondaryGroups);
+      ..addAll(secondaryTargetGroups);
     _collapsedGroups
       ..clear()
-      ..addAll({'named', ..._secondaryGroups});
+      ..addAll(_initialCollapsedGroups());
     // 逐项设定记的是编号，而编号是「这张图上的第几号」。换一张图之后同一
     // 个编号指的是另一颗星，留着就会莫名其妙地少画几个圈。
     _hiddenTargets.clear();
@@ -530,11 +548,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   }
 
   void _applyOutcome(PipelineOutcome outcome) {
+    // 换了一份新的测量结果，面板上「哪几组展开着」的默认值可能就变了——
+    // 有没有深空天体决定了一进结果页该展开哪一组，见 [_initialCollapsedGroups]。
+    // 认身份而不是认内容：进度回调里每次都会走到这里，按内容比就变成每来
+    // 一次进度就把用户的展开/收起抹掉一遍。
+    final isNewAnalysis = !identical(_analysis, outcome.analysis);
     _analysis = outcome.analysis;
     _solve = outcome.solve;
     _explanation = outcome.explanation;
     _warnings = outcome.warnings;
     _moonOnly = outcome.moonOnly;
+    if (isNewAnalysis) _resetPanelState();
   }
 
   /// 任务那边有动静了。
@@ -553,6 +577,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   /// 「保存并退出」：解析交给后台，这一屏松开手。
   ///
+  /// 名字里的「并退出」是字面意思：点完就该回到刚打开 APP 的样子，而不是
+  /// 留在工作台上再让用户去点一次「退出」。所以这里和 [_exit] 走同一段
+  /// 清场逻辑，唯一的差别是正在跑的那次解析**不掐掉**——它已经答应过用户
+  /// 「算完自动存进观星记录」，回到首页会有一条横幅盯着它。
+  ///
   /// 这是这个页面唯一一个「还能反悔」的动作——用户走开以后随时可以从首页那
   /// 条横幅回到这次解析，只要它还在跑。
   void _detachJob() {
@@ -561,11 +590,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     // 还挂着的月面提问先收回来：人都不看了，不能让它等着一个永远不来的回答。
     if (_moonQuestion != null) _answerMoon(false);
     _jobCenter.detach(job);
-    setState(() {
-      _job = null;
-      _progress = null;
-      _moonQuestion = null;
-    });
+    _clearWorkspace();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('已放到后台继续解析，完成后会自动存进观星记录'),
@@ -1048,7 +1073,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               if (progress.solvedLocally) ...[
                 const SizedBox(height: 8),
                 const Text(
-                  '天区已经在手机上算出来了，照片没有离开过这台设备。',
+                  '天区已在手机上算出来',
                   style: TextStyle(fontSize: 11.5, color: Color(0xFFFF9A9A)),
                 ),
               ],
@@ -1073,11 +1098,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                '解析继续在后台跑，完成后自动存进观星记录；这期间可以去看别的图。',
-                style: TextStyle(fontSize: 11.5, color: Color(0xFFA6B5C8)),
               ),
             ],
           ),
@@ -1133,20 +1153,22 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           const SizedBox(height: 8),
           Text(
             '月盘占画面 ${(disc.discAreaFraction * 100).toStringAsFixed(2)}%，'
-            '亮面 ${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%。'
-            '要接着找别的天体吗？',
+            '亮面 ${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%。',
             style: const TextStyle(fontSize: 13, height: 1.5),
           ),
-          const SizedBox(height: 4),
-          Text(
-            uploads
-                ? '继续寻找会去做星点解算。月亮上没有任何恒星尺度的点源，'
-                    '本机多半解不出来，那时会把预览图上传到 Astrometry.net 排队。'
-                : '继续寻找会去做星点解算。月亮上没有任何恒星尺度的点源，'
-                    '本机多半解不出来；没开在线解算的话，这一趟就是白等。',
-            style: const TextStyle(fontSize: 12, height: 1.5, color: Color(0xFFA6B5C8)),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _HelpButton(
+              title: '「继续寻找」会发生什么',
+              message: uploads
+                  ? '会去做星点解算。月亮上没有任何恒星尺度的点源，本机多半解'
+                      '不出来，那时会把预览图上传到 Astrometry.net 排队。'
+                  : '会去做星点解算。月亮上没有任何恒星尺度的点源，本机多半解'
+                      '不出来；没开在线解算的话，这一趟就是白等。',
+            ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
           Row(
             children: [
               Expanded(
@@ -1308,6 +1330,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       if (_moonQuestion != null) _answerMoon(false);
       _jobCenter.detach(previous);
     }
+    _clearWorkspace();
+  }
+
+  /// 把工作台清回「刚打开 APP 的样子」。
+  ///
+  /// 「退出」和「保存并退出」共用这一段：两者之间唯一的差别是正在跑的那次
+  /// 解析留不留着，清场本身必须一模一样。各写一份的话，早晚有一边漏掉一个
+  /// 字段，出来的就是「这张图的坐标配着那张图的星点」那种最难查的错。
+  void _clearWorkspace() {
     setState(() {
       _job = null;
       _bytes = null;
@@ -1319,6 +1350,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _error = null;
       _warnings = const [];
       _progress = null;
+      _moonQuestion = null;
       _savedId = null;
       _selectedTarget = null;
       _showProcessed = false;
@@ -1471,7 +1503,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           ),
           IconButton(
             onPressed: _openHistory,
-            tooltip: '观星记录',
+            tooltip: '观星仓库',
             icon: const Icon(Icons.collections_bookmark_outlined),
           ),
           IconButton(
@@ -1532,6 +1564,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ],
                 if (analysis != null) ...[
                   const SizedBox(height: 18),
+                  // 顺序按「用户此刻想知道什么」排：这张拍到了什么 → 拍得
+                  // 怎么样 → 具体是哪些星 → 装备能拍到多暗。
+                  //
+                  // 「拍到了什么」放在图片**上面**：那是打开这一屏的第一个
+                  // 问题，而看图是接下来才做的事。先给答案，再给证据。
+                  _observationCard(analysis, solve),
+                  const SizedBox(height: 14),
                   // 上半屏看图、下半屏点星点，两块必须同时在视野里：点第 10
                   // 号亮点却看不到图上的 ⑩，这套编号就没有意义了。所以这块
                   // 是固定高度的，不随页面滚动拆开。下面那些卡片才需要滚。
@@ -1542,10 +1581,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     ),
                     child: _interactivePanel(analysis, solve),
                   ),
-                  const SizedBox(height: 14),
-                  // 顺序按「用户此刻想知道什么」排：这张拍到了什么 →
-                  // 拍得怎么样 → 具体是哪些星 → 装备能拍到多暗。
-                  _observationCard(analysis, solve),
                   const SizedBox(height: 12),
                   _magnitudeCard(analysis, solve),
                   if (solve != null && solve.namedStars.isNotEmpty) ...[
@@ -1681,9 +1716,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          const Text(
-            'JPG / PNG / TIFF · 支持尝试读取相机 RAW 内嵌预览 · 没有照片就点「演示图」',
-            style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+          const Row(
+            children: [
+              Text(
+                'JPG / PNG / TIFF · 也试读相机 RAW 内嵌预览',
+                style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+              ),
+              _HelpButton(
+                title: '能不能读 RAW',
+                message: '整份 RAW 不解码，只读相机嵌在里面的那张 JPEG 预览——'
+                    '它足够检出星点。读不到就请在相机应用里导出 JPG/PNG。',
+              ),
+            ],
           ),
         ],
       );
@@ -1720,9 +1764,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    known
-                        ? _momentNote(moment)
-                        : '可以手动设置拍摄时间；行星、彗星和小行星的位置会随时间变化。',
+                    known ? _momentNote(moment) : '是拍行星和小行星的前提',
                     style: const TextStyle(
                       color: Color(0xFF8192A8),
                       fontSize: 11,
@@ -1731,6 +1773,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ],
               ),
             ),
+            if (!known)
+              const _HelpButton(
+                title: '为什么要拍摄时间',
+                message: '行星、彗星和小行星的位置随时间变化，没有拍摄时刻就没法'
+                    '判断画面上多出来的那个亮点是什么。时区没读到就按本机时区算。',
+              ),
             TextButton(
               onPressed: _pickCaptureTime,
               child: Text(known ? '修改时间' : '设置时间'),
@@ -1882,8 +1930,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const SizedBox(height: 10),
                 if (_cropping) ...[
                   const Text(
-                    '拖动四个角选出要分析的范围。裁剪之后分析的、以及需要时'
-                    '上传的，都只有这一块——画面下方那条水印和信息条留框外就行。',
+                    '拖四个角选范围',
                     style: TextStyle(fontSize: 11.5, color: Color(0xFFA6B5C8)),
                   ),
                   const SizedBox(height: 10),
@@ -2668,8 +2715,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           // 「又大又没星等」的天体图上本来就没画圈（判据见
           // [worthMarkingOnImage]），所以这里没有加减号可给——给了一个按下去
           // 什么也不会发生的开关，比没有开关更让人困惑。
-          if (markable) ...[
-            _batchButton(
+          if (markable) ...[            _batchButton(
               Icons.remove_circle_outline,
               '把 ${object.name} 的标记从图上隐去',
               !isHidden,
@@ -2687,7 +2733,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             const Padding(
               padding: EdgeInsets.only(left: 6),
               child: Text(
-                '图上不画圈',
+                '弥漫星体',
                 style: TextStyle(fontSize: 11, color: Color(0xFF8192A8)),
               ),
             ),
@@ -2917,7 +2963,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       setState(() {
         _hiddenGroups
           ..clear()
-          ..addAll(hidden ? _groupIds : const <String>[]);
+          ..addAll(hidden ? groupIds : const <String>[]);
         // 留着逐项设定的话，「全部显示回来」就会漏掉用户之前单独收起来的那
         // 几颗——按钮上是「所有」，那就得真的是所有。
         _hiddenTargets.clear();
@@ -3245,7 +3291,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SectionTitle('这片天在哪儿', Icons.travel_explore),
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  SectionTitle('这片天在哪儿', Icons.travel_explore),
+                  _HelpButton(
+                    title: '全天图怎么看',
+                    message: '十字是这张照片的中心，黄圈示意视场大小。横轴赤经向左'
+                        '增大，绿线是天赤道。',
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               AllSkyFinder(
                 centerRa: solve.centerRa,
@@ -3254,17 +3310,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                '十字是这张照片的中心：${formatRa(solve.centerRa)} · '
-                '${formatDec(solve.centerDec)}',
+                '${formatRa(solve.centerRa)} · ${formatDec(solve.centerDec)}'
+                '${solve.fieldOfViewDegrees > 0 ? '   ·   视场对角 ${formatFieldOfView(solve.fieldOfViewDegrees)}' : ''}',
                 style: const TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                solve.fieldOfViewDegrees > 0
-                    ? '黄圈示意视场大小（对角 ${formatFieldOfView(solve.fieldOfViewDegrees)}）。'
-                        '横轴赤经向左增大，绿线是天赤道。'
-                    : '横轴赤经向左增大，绿线是天赤道。',
-                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
               ),
             ],
           ),
@@ -3296,19 +3344,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 // 屏幕上两种截然不同的意思，必须说清是哪一种。
                 const Padding(
                   padding: EdgeInsets.only(top: 10),
-                  child: Text(
-                    '这次是按你的选择只报告月亮，没有做天区解算。'
-                    '想在这张图里找别的天体，重新解析时选「继续寻找其他天体」。',
-                  ),
+                  child: Text('这次只报告了月亮，没有解算天区。'),
                 )
               else if (solve == null)
                 const Padding(
                   padding: EdgeInsets.only(top: 10),
-                  child: Text(
-                    '还没有解开这片天区。点上面的「一键解析」；'
-                    '如果本机星点太少或视场太窄，需要在设置里填写 '
-                    'Astrometry.net API Key 并授权上传，交给在线解算。',
-                  ),
+                  child: Text('还没解开这片天区，点上面的「一键解析」。'),
                 )
               else ...[
                 const SizedBox(height: 10),
@@ -3562,11 +3603,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SectionTitle('视场内的恒星', Icons.table_chart_outlined),
-            const SizedBox(height: 6),
-            const Text(
-              '星名根据已匹配的恒星目录和解算位置标注。',
-              style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                SectionTitle('视场内的恒星', Icons.table_chart_outlined),
+                _HelpButton(
+                  title: '星名和星等从哪来',
+                  message: '星名按已匹配的目录星和解算位置标注；星等是这张照片'
+                      '量出来的仪器星等，减去星等零点之后才是标定值。',
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             SingleChildScrollView(
@@ -3751,11 +3797,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             children: [
               const SectionTitle('Agent 解读', Icons.chat_bubble_outline_rounded),
               const SizedBox(height: 10),
-              const Text(
-                '可查询当前报告、天体和本机记录；保存、改名、删除、在线解算或把照片发给模型前会先征求确认。',
-                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
-              ),
-              const SizedBox(height: 10),
               TextField(
                 controller: _questionController,
                 decoration: const InputDecoration(
@@ -3825,7 +3866,7 @@ class DemoPickerSheet extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
               child: Text(
-                '${demoImages.length} 张都是真实拍摄的照片，可以直接走完整的解析流程。',
+                '${demoImages.length} 张真实拍摄的照片',
                 style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
             ),
@@ -4000,7 +4041,7 @@ class _TargetGroups {
   final List<_NumberedTarget> unnamed;
   final List<_NumberedTarget> streaks;
 
-  /// 按组名取那一组。组名只在 [AnalysisScreen] 的 `_groupIds` 里，
+  /// 按组名取那一组。组名只在 [AnalysisScreen] 的 `groupIds` 里，
   /// painter 那边只认编号，靠这里来回翻译。
   List<_NumberedTarget> of(String id) => switch (id) {
         'named' => named,
@@ -4211,14 +4252,7 @@ class _SettingsFormState extends State<SettingsForm> {
                     ),
                 ],
               ),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text(
-                  '模板值可编辑；请按服务商控制台确认当前可用的模型名称及兼容接口地址。'
-                  '填入你自己的 Key 后保存即可启用 Agent。',
-                  style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
-                ),
-              ),
+              const SizedBox(height: 12),
               _field('模型 API Base URL', _baseUrl),
               _field('轻量模型名称', _lightModel),
               _field(

@@ -140,7 +140,7 @@ class ModelService {
             'screen': {
               'type': 'string',
               'enum': ['history', 'settings'],
-              'description': 'history＝观星记录，settings＝API 设置。',
+              'description': 'history＝观星仓库，settings＝API 设置。',
             },
           },
           'required': ['screen'],

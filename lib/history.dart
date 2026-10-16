@@ -28,6 +28,7 @@ class SavedAnalysis {
     required this.processedFile,
     required Map<String, Object?> rawAnalysis,
     this.isStarfield = true,
+    this.isMoon = false,
     this.capture,
   }) : _rawAnalysis = rawAnalysis;
 
@@ -60,6 +61,14 @@ class SavedAnalysis {
   /// 见 [_decode]。
   final bool isStarfield;
 
+  /// 这张照片走的是月面分支——用户认了「这就是月亮」，没再往下找别的天体。
+  ///
+  /// 它必须**单独**记一笔，不能靠「星点数为零」推断出来：那条推理会把它和
+  /// 「什么都没检出」归成一类，而这两件事的结果天差地别——前者拿到的是月盘
+  /// 圆心、亮面占比、相名和盈亏，一应俱全。老记录里没这个字段，缺省时回头
+  /// 看存档里有没有月盘数据。
+  final bool isMoon;
+
   /// 拍摄时间。存的是预览图，重新读 EXIF 读不出来，所以时间得跟着记录一起
   /// 存——不然从历史里再打开一条记录，行星那一节的结论就没了。老记录里没
   /// 有这个字段，读出来是 null。
@@ -70,7 +79,12 @@ class SavedAnalysis {
   ///
   /// 分三档而不是两档，是因为中间那一档最容易被误解：星点检测到了、天区没
   /// 解算出来，既不是成功也不是失败，用户需要知道「图有用，只是没定位」。
+  ///
+  /// 月面单独走第一档：它没有星点、没有坐标，但该报的都报出来了（月盘圆心、
+  /// 亮面占比、相名、盈亏），对用户来说和「解算成功」是一回事。按星点数去
+  /// 归类只会让它显示成「未能解析」——那是在说这张图白拍了。
   RecordOutcome get outcome {
+    if (isMoon) return RecordOutcome.ok;
     if (!isStarfield || starCount == 0) return RecordOutcome.failed;
     return solve == null ? RecordOutcome.partial : RecordOutcome.ok;
   }
@@ -201,6 +215,8 @@ class HistoryStore {
           // 星空判定也要留在摘要里：历史列表要分「解算成功 / 只是检测到星点 /
           // 这压根不像星空」三档，而一二档的区别只看 solved，二三档得看它。
           'starfield': analysis.isLikelyStarfield,
+          // 月面分支单独记一笔，理由见 [SavedAnalysis.isMoon]。
+          'moon': analysis.isMoonShot,
         },
         'analysis': rawAnalysis,
         'solve': solve?.toJson(),
@@ -223,6 +239,7 @@ class HistoryStore {
       processedFile: processedFile,
       rawAnalysis: rawAnalysis,
       isStarfield: analysis.isLikelyStarfield,
+      isMoon: analysis.isMoonShot,
       capture: capture != null && !capture.isEmpty ? capture : null,
     );
   }
@@ -266,6 +283,7 @@ class HistoryStore {
       // 改个名字不能顺手把「这张解没解出来」也一起丢了，卡片描边的颜色
       // 全靠它。
       isStarfield: entry.isStarfield,
+      isMoon: entry.isMoon,
     );
   }
 
@@ -340,6 +358,9 @@ class HistoryStore {
       // 这个字段是后加的，早先存下的记录里没有。缺省按「星点数为零才算不是
       // 星空」兜底：老记录里唯一确定的事实就是星点数。
       isStarfield: summary['starfield'] as bool? ?? starCount > 0,
+      // 后加的字段。老记录里没有 summary 里那一份，就回头看测量结果里有没有
+      // 月盘——「有月盘」和「走了月面分支」是同一件事。
+      isMoon: summary['moon'] as bool? ?? rawAnalysis['moon_disc'] is Map,
       capture: json['capture'] is Map
           ? CaptureMetadata.fromJson(
               Map<String, Object?>.from(json['capture']! as Map),

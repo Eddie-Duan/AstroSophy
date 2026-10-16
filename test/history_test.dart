@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:astrosophy/analysis.dart';
 import 'package:astrosophy/history.dart';
 import 'package:astrosophy/models.dart';
+import 'package:astrosophy/moon_disc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -17,6 +18,7 @@ SkyAnalysis analysisOf({
   String quality = '良好',
   bool isStarfield = true,
   double noise = 0.02,
+  MoonDisc? moonDisc,
 }) =>
     SkyAnalysis(
       width: 800,
@@ -48,6 +50,7 @@ SkyAnalysis analysisOf({
       isLikelyStarfield: isStarfield,
       starfieldConfidence: 0.93,
       brightFlatFraction: 0.02,
+      moonDisc: moonDisc,
     );
 
 SolveResult solveOf() => const SolveResult(
@@ -307,8 +310,58 @@ void main() {
       expect(listed['不像星空']!.outcome, RecordOutcome.failed);
     });
 
-    test('老记录没有星空判定字段时按星点数兜底', () async {
+    test('月亮走月面分支，也算「已解算」', () async {
+      // 月面照片没有星点、也没有天区坐标，但月盘圆心、亮面占比、相名和盈亏
+      // 全都报出来了——对用户来说这就是算成功了。按星点数去归类只会落到
+      // 「未能解析」，那是在告诉他这张图白拍了。
+      final moon = await store.save(
+        name: '月亮',
+        analysis: analysisOf(
+          starCount: 0,
+          isStarfield: false,
+          moonDisc: const MoonDisc(
+            centerX: 400,
+            centerY: 300,
+            radiusPixels: 180,
+            litPixels: 64000,
+            frameArea: 480000,
+          ),
+        ),
+        solve: null,
+        explanation: null,
+      );
+      expect(moon.outcome, RecordOutcome.ok);
+      // 也要能从磁盘读回来，不能只活在内存里的那个对象上。
+      expect((await store.list()).single.outcome, RecordOutcome.ok);
+    });
+
+    test('老记录没有月亮字段时，回头认测量结果里的月盘', () async {
       final saved = await store.save(
+        name: '月亮',
+        analysis: analysisOf(
+          starCount: 0,
+          isStarfield: false,
+          moonDisc: const MoonDisc(
+            centerX: 400,
+            centerY: 300,
+            radiusPixels: 180,
+            litPixels: 64000,
+            frameArea: 480000,
+          ),
+        ),
+        solve: null,
+        explanation: null,
+      );
+      // 模拟这份档案是加 moon 字段之前存下的：把摘要里那一项删掉。
+      final file = File(p.join(store.directory.path, '${saved.id}.json'));
+      final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+      (json['summary']! as Map).remove('moon');
+      file.writeAsStringSync(jsonEncode(json));
+
+      expect((await store.list()).single.outcome, RecordOutcome.ok);
+    });
+
+    test('老记录没有星空判定字段时按星点数兜底', () async {      final saved = await store.save(
         name: '老记录',
         analysis: analysisOf(),
         solve: null,

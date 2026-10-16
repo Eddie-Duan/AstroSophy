@@ -192,15 +192,33 @@ class PlateSolver {
   /// 大档留给「图里最亮的星不是目录里最亮的星」的情形——画面里有大片星云、
   /// 过曝的亮星盘，或者一颗亮行星杵在那里的时候。
   ///
-  /// 中间不再多插几档：实测 24 和 48 要么一起成功、要么一起失败（M31 是
+  /// 起点从 24 降到 8，是因为窄视场把上面的算术推到了另一个极端。四张
+  /// Seestar 照片（对角线视场 1.45° 和 2.44°）实测：
+  ///
+  /// | 图内端 | IC 5146 | NGC 281 | M 20 | M 33 |
+  /// | --- | --- | --- | --- | --- |
+  /// | 8 颗 | 解出 6 | 失败 | 失败 | 失败 |
+  /// | 12 颗 | 解出 7 | 失败 | 解出 11 | 失败 |
+  /// | 16 颗 | 解出 7 | 失败 | 解出 13 | 失败 |
+  /// | 24 颗 | 假解 | 解出 11 | 解出 16 | 失败 |
+  /// | 120 颗 | 失败 | 失败 | 假解 | 失败 |
+  ///
+  /// 视场越窄，落在画面里的目录星越少（IC 5146 那一带只有十来颗），而
+  /// 深叠加出来的照片里检出动辄几千颗。图内端取 24 颗，等于往里塞了十几颗
+  /// 目录里根本没有的暗星——真邻居被顶掉，一个正确三角形都枚举不出来。
+  /// 取 8 到 16 颗时，图内端几乎全是目录星，邻居关系这才对得上。所以小档
+  /// 必须存在，而且必须排在前面。
+  ///
+  /// 不再多插几档：24 和 48 实测要么一起成功、要么一起失败（M31 是
   /// 24/48/80 都成、96 以上都不成；Vesta 是 32 以下都成、36 以上都不成），
   /// 多一档只是多花一次验证预算，换不来新的天区。失败的那一档很贵——它要
   /// 把预算跑满才肯认输。
-  static const _imageStarRungs = [24, 120];
+  static const _imageStarRungs = [8, 16, 24, 120];
 
-  /// 深层星表用的是同一组刻度：那一层的星多四倍，但「图内端比目录端多出
-  /// 多少颗」这件事和层数无关。
-  static const _deepImageStarRungs = [24, 120];
+  /// 深层星表用的是同一串刻度：那一层的星多四倍，但「图内端比目录端多出
+  /// 多少颗」这件事和层数无关。窄视场反而最需要小档——深层本来就是给
+  /// 「浅层星数不够」的天区兜底的，而窄视场正是这样的天区。
+  static const _deepImageStarRungs = [8, 16, 24, 120];
 
   /// 同一层索引上，按 [rungs] 逐档重试图内三角形。
   ///
@@ -230,10 +248,14 @@ class PlateSolver {
         analysis,
         index,
         stars,
+        detections,
         _DetectionGrid(stars),
         neighbours: neighbours,
         candidatesPerTriangle: candidatesPerTriangle,
         verificationBudget: verificationBudget,
+        // 解定下来之后可以把内点补到最大那一档的规模——那一档正是旧版在
+        // 宽视场上一直用的星数，含多少暗星、有多少碰巧撞上的机会都验过。
+        expansionStars: rungs.last,
         onProgress: onProgress,
       );
       if (result != null) return result;
@@ -242,14 +264,21 @@ class PlateSolver {
   }
 
   /// 拿着某一层索引跑一遍完整的匹配、内点验证和坐标精修。
+  ///
+  /// [stars] 是这一档参与组三角形的星（最亮的若干颗），[detections] 是全部
+  /// 检出候选。两者分开是因为它们回答的是两个不同的问题：组三角形只敢用最亮
+  /// 的那几颗（见 [_imageStarRungs]），而「这个解到底对上了多少颗星」要在
+  /// [expansionStars] 那一档的规模上回答，见 [_expandInliers]。
   SolveResult? _matchFrom(
     SkyAnalysis analysis,
     _TriangleIndex index,
     List<DetectedStar> stars,
+    List<DetectedStar> detections,
     _DetectionGrid grid, {
     required int neighbours,
     required int candidatesPerTriangle,
     required int verificationBudget,
+    required int expansionStars,
     void Function(double progress, String stage)? onProgress,
   }) {
     final imageTriangles = _imageTriangles(stars, neighbours);
@@ -276,8 +305,8 @@ class PlateSolver {
             attempt < fits.length && attempt < _permutationAttempts;
             attempt++) {
           final fit = fits[attempt];
-          final inliers = _collectInliers(index, grid, fit);
-          if (inliers.length < _minimumInliers) continue;
+          final inliers = _collectInliers(index, grid, fit, stars.length);
+          if (inliers.isEmpty) continue;
           final refined = _fitSimilarity(
             [for (final i in inliers) _complexOf(stars[i.detectionIndex])],
             [
@@ -300,12 +329,62 @@ class PlateSolver {
     }
     if (best == null) return null;
 
+    // 解已经定下来了，这时候再把内点补全。
+    //
+    // 组三角形用最亮的 8 颗是为了让图内端的近邻关系和目录端对得上（见
+    // [_imageStarRungs]），但「找到了」和「对上了多少颗」是两件事：小档
+    // 定下来的变换拿去投影目录星，能把视场里所有亮到能被检出、又确实在目录
+    // 里的星都对上。不补的话，报告里的「匹配到 N 颗星」、星等零点和散布就
+    // 只按那 8 颗算——那 8 颗的职责是找到解，不是给出最终那份测量。
+    //
+    // 补的上限是 [expansionStars]，也就是最大那一档的规模。一次投影加查表
+    // 而已，比再搜一遍三角形便宜几个数量级。
+    final expanded = _expandInliers(
+      index,
+      detections.take(expansionStars).toList(growable: false),
+      best,
+    );
+    if (expanded.length > best.inliers.length) {
+      final refit = _fitSimilarity(
+        [
+          for (final inlier in expanded)
+            _complexOf(detections[inlier.detectionIndex]),
+        ],
+        [
+          for (final inlier in expanded)
+            _Complex.from(index.skyPointOf(inlier.catalogVertex, best.reference)),
+        ],
+        best.flip,
+      );
+      if (refit != null) {
+        refit.reference = best.reference;
+        refit.inliers = expanded;
+        best = refit;
+      } else {
+        best.inliers = expanded;
+      }
+    }
+
     onProgress?.call(0.7, '正在精修天球坐标');
-    final wcs = _buildWcs(index, analysis, stars, best);
+    final wcs = _buildWcs(index, analysis, detections, best);
     if (wcs == null) return null;
 
     onProgress?.call(0.88, '正在标定星等零点');
-    return _buildResult(index, analysis, stars, best, wcs);
+    return _buildResult(index, analysis, detections, best, wcs);
+  }
+
+  /// 解定下来之后，把内点补全到给的一批检出星点上。
+  ///
+  /// 这一步**不设门槛**：门槛是给「还没认定的候选」用的，而这里数的是那个
+  /// 已经认定的解到底对上了多少颗星。
+  List<_Inlier> _expandInliers(
+    _TriangleIndex index,
+    List<DetectedStar> detections,
+    _Fit fit,
+  ) {
+    final candidates = _catalogCandidates(index, fit);
+    if (candidates.isEmpty) return const [];
+    return _matchInliers(index, candidates, _DetectionGrid(detections), fit);
   }
 
   static const _minimumDetections = 4;
@@ -338,17 +417,155 @@ class PlateSolver {
 
   /// 判定一个解成立所需的最少内点数。
   ///
-  /// 这个数不能定小。一次候选变换由三组对应关系完全确定，剩下的图内星点
-  /// 每落进某颗目录星附近三个像素以内就算一个内点。安全起见算一下：在
-  /// 400×320 的像面上、视场里有二十来颗目录星时，一个候选蒙到六个内点的
-  /// 概率约是千分之二。乘以 [verificationBudget] 四千次候选，一张纯随机的
-  /// 图几乎必然能凑出一个「解」——用户会拿到一张每个星名都标错的图，
-  /// 比解不出来糟糕得多。
+  /// 这个数不能是常数。
   ///
-  /// 十是量出来的：随机点凑出的假解恰好卡在六个，而真实天区（含只有
-  /// 十七个检出星点的窄视场）都在十七个以上，两边差着两倍有余。
+  /// 假解是怎么来的？一个候选变换由三组对应关系**定义**，所以那三颗星必然算
+  /// 内点；剩下的图内星点每落进某颗目录星附近 [_inlierTolerancePixels] 个像素
+  /// 以内就再算一个。假解能凑到几个「额外的」内点，取决于「撞上一颗目录星」
+  /// 这件事有多容易发生：
+  ///
+  ///     p ≈ 图内星点数 × π·容差² / 像面面积
+  ///
+  /// 试验次数就是这条候选要考虑的目录星数。两张图可以差出两三个数量级：
+  ///
+  /// * 400×320 的小图、视场里八十颗目录星：p ≈ 2×10⁻²，四千次候选里冒出一个
+  ///   五六个内点的假解几乎是必然——这就是原来那个常数 10 想挡的东西；
+  /// * 675×1200 的智能望远镜照片、视场里只有十几颗目录星：p ≈ 3×10⁻⁴，
+  ///   再多凑三个内点要靠运气，概率不到十万分之一。
+  ///
+  /// 所以门槛按这张图自己的概率算：取最小的「额外内点数」，使得四千次候选里
+  /// 蒙出这么多额外内点的期望低于 [_falseAcceptBudget]。宽视场那次算出来仍然
+  /// 是九、十（和原来量出来的常数一致），窄视场那次降到六——正是智能望远镜的
+  /// 视场，一颗目录星都不该浪费。
+  ///
+  /// 下限 [_minimumExtraInliers] 是给「p 恰好算得很小」留的保险：定义变换的
+  /// 那三颗之外，至少还要有三颗独立地撞上目录星，才认这个解。
+  int _inlierFloor({
+    required int imageStars,
+    required int catalogStars,
+    required double areaPixels,
+  }) {
+    final seed = _definingCorrespondences;
+    final trials = catalogStars - seed;
+    if (trials <= 0) return _minimumInliers;
+    final hit = (imageStars * math.pi * _inlierTolerancePixels *
+            _inlierTolerancePixels /
+            areaPixels)
+        .clamp(0.0, 1.0);
+    if (hit <= 0) return _minimumInliers;
+    // 期望假解数 = 组合数 × p^extra × 候选总数。
+    final allowance = _falseAcceptBudget / _verificationBudget;
+    var combination = 1.0; // C(trials, extra)
+    for (var extra = 1; extra <= trials; extra++) {
+      combination = combination * (trials - extra + 1) / extra;
+      if (combination * math.pow(hit, extra) <= allowance) {
+        // 上限压在 [_minimumInliers] 上：这道门只在天区稀疏时放宽，
+        // 任何一张图都不会比过去更严。
+        final needed = math.max(extra, _minimumExtraInliers);
+        return seed + math.min(needed, _minimumInliers - seed);
+      }
+    }
+    return _minimumInliers;
+  }
+
+  /// 定义一次候选变换的那三组对应关系——它们必然算内点。
+  static const _definingCorrespondences = 3;
+
+  /// 除了那三颗以外，至少还要撞上几颗才认。
+  static const _minimumExtraInliers = 3;
+
+  /// 一张图上容忍的「假解期望数」。除以 [_verificationBudget] 之后是单次
+  /// 候选的假解概率上限。
+  static const _falseAcceptBudget = 1e-3;
+
+  /// 门槛的上限。
+  ///
+  /// 十是原来量出来的那个固定门槛：四百乘三百二十的小图上、视场里八十颗
+  /// 目录星时，[`_inlierFloor`] 算出来正好也是十。留着它当上限，是为了让
+  /// 宽视场、目录密的老行为一个字节都不变——新的算法只允许在天区稀疏的
+  /// 时候放宽，绝不在任何一张图上比过去更严。
   static const _minimumInliers = 10;
+
+  /// 找到一个足够强的解就不再往下扫了。
   static const _strongInliers = 15;
+
+  /// 变换落点附近那一圈目录星，按亮到暗排——真的对应关系都在最亮的这批里。
+  List<int> _catalogCandidates(_TriangleIndex index, _Fit fit) {
+    final scale = fit.a.abs; // 度/像素
+    if (scale <= 0 || !scale.isFinite) return const [];
+
+    // 先看变换把像面中心送到了天上哪里，再以那里为中心取一圈目录星。
+    final centreSky = fit.apply(
+      _Complex(index.frameWidth / 2, index.frameHeight / 2),
+    );
+    final (centreRa, centreDec) =
+        _TriangleIndex.unproject(centreSky, fit.reference);
+    if (!centreRa.isFinite || !centreDec.isFinite) return const [];
+    final diagonalDegrees = math.sqrt(
+      index.frameWidth * index.frameWidth +
+          index.frameHeight * index.frameHeight,
+    ) *
+        scale;
+    return index.starsNearSky(
+      centreRa,
+      centreDec,
+      diagonalDegrees / 2 + 0.5,
+      limit: _maximumCatalogCandidates,
+    );
+  }
+
+  /// 把这些目录星投影回图像，数有多少颗落在检出星点附近。
+  ///
+  /// [floor] 是早退用的下限：剩下的目录星全中也不够，这一条候选已经没戏。
+  /// 目录星按亮到暗排，真的对应关系靠前，所以这一刀通常只砍在假候选上——
+  /// 而假候选是绝大多数。
+  List<_Inlier> _matchInliers(
+    _TriangleIndex index,
+    List<int> candidates,
+    _DetectionGrid grid,
+    _Fit fit, {
+    int floor = 1,
+  }) {
+    final inliers = <_Inlier>[];
+    final used = <int>{};
+    var seen = 0;
+    for (final vertex in candidates) {
+      seen++;
+      if (inliers.length + (candidates.length - seen) < floor) break;
+      final world = index.skyPointOf(vertex, fit.reference);
+      final pixel = fit.invert(_Complex.from(world));
+      if (!pixel.isFinite) continue;
+      // 容差按像素给：星点定位精度大约就是这个量级。
+      final match = grid.nearest(
+        pixel.real,
+        pixel.imaginary,
+        _inlierTolerancePixels,
+        used,
+      );
+      if (match == null) continue;
+      used.add(match.index);
+      inliers.add(_Inlier(match.index, vertex, match.distance));
+    }
+    return inliers.length < floor ? const [] : inliers;
+  }
+
+  /// 验一条候选：门槛由 [_inlierFloor] 按这张图自己的概率算出来；够不着门槛
+  /// 就返回空表，调用方只当「这次候选没戏」。
+  List<_Inlier> _collectInliers(
+    _TriangleIndex index,
+    _DetectionGrid grid,
+    _Fit fit,
+    int imageStars,
+  ) {
+    final candidates = _catalogCandidates(index, fit);
+    final floor = _inlierFloor(
+      imageStars: imageStars,
+      catalogStars: candidates.length,
+      areaPixels: index.frameWidth * index.frameHeight,
+    );
+    if (candidates.length < floor) return const [];
+    return _matchInliers(index, candidates, grid, fit, floor: floor);
+  }
 
   /// 一个候选最多试几种顶点对应。排在前面的是残差小的，正常三角形第一个
   /// 就能过；只有接近等腰、形状本身有歧义时才会往后试。
@@ -358,10 +575,22 @@ class PlateSolver {
   /// 颗，但正确的解一定落在最亮的那批上——检出星点本身也是挑最亮的。
   static const _maximumCatalogCandidates = 80;
 
-  /// 合理的视场范围。解出来的视场小到 3° 以下，说明目录星根本不够密；
-  /// 大到 60° 以上，说明拟合出来的尺度是错的。两种都直接判为失败，
-  /// 免得把一组假的对应关系送到内点验证里去。
-  static const _minimumFieldDegrees = 3.0;
+  /// 合理的视场范围。
+  ///
+  /// 上限 60° 是防错：解出来的视场大到这个地步，说明拟合出来的尺度是错的。
+  ///
+  /// 下限原来是 3°，理由是「比这更窄的天区里目录星不够密」。这个理由本身
+  /// 没错，但拿它当**硬门槛**是错的：智能望远镜（Seestar S50 的对角线视场
+  /// 只有 1.45°、S30 是 2.44°）拍的每一张照片都落在门槛外，于是这些机器拍
+  /// 的图一张都解不出来——哪怕三角形其实已经对上了。实测四张 Seestar 照片，
+  /// 把这一条放开之后 NGC 281 和 M 20 立刻就解出了正确的坐标（内点 11 和
+  /// 13～18 个）。
+  ///
+  /// 目录星够不够密，本来就由内点验证自己回答：真正的守卫是
+  /// [_inlierFloor]——它是按这张图的像面大小和视场里的目录星数算出来的。
+  /// 视场小到目录星不够时，那条判据自然会把假解挡掉。所以这里只留一个
+  /// 「尺度不至于离谱」的下限。
+  static const _minimumFieldDegrees = 1.0;
   static const _maximumFieldDegrees = 60.0;
 
   /// 图内三角形，构造方式和索引端严格一致：最亮的若干颗当种子，每颗连同
@@ -562,60 +791,6 @@ class PlateSolver {
     }
     fit.residual = worst;
     return fit;
-  }
-
-  /// 把目录星投影回图像，数有多少颗落在检出星点附近。
-  List<_Inlier> _collectInliers(
-    _TriangleIndex index,
-    _DetectionGrid grid,
-    _Fit fit,
-  ) {
-    final scale = fit.a.abs; // 度/像素
-    if (scale <= 0 || !scale.isFinite) return const [];
-
-    // 先看变换把像面中心送到了天上哪里，再以那里为中心取一圈目录星。
-    final centreSky = fit.apply(
-      _Complex(index.frameWidth / 2, index.frameHeight / 2),
-    );
-    final (centreRa, centreDec) =
-        _TriangleIndex.unproject(centreSky, fit.reference);
-    if (!centreRa.isFinite || !centreDec.isFinite) return const [];
-    final diagonalDegrees = math.sqrt(
-      index.frameWidth * index.frameWidth +
-          index.frameHeight * index.frameHeight,
-    ) *
-        scale;
-    final candidates = index.starsNearSky(
-      centreRa,
-      centreDec,
-      diagonalDegrees / 2 + 0.5,
-      limit: _maximumCatalogCandidates,
-    );
-
-    final inliers = <_Inlier>[];
-    final used = <int>{};
-    var seen = 0;
-    for (final vertex in candidates) {
-      seen++;
-      // 剩下的目录星全中也不够门槛，这一条候选已经没戏了。目录星按亮到暗
-      // 排，真的对应关系靠前，所以这一刀通常只砍在假候选上——而假候选是
-      // 绝大多数。
-      if (inliers.length + (candidates.length - seen) < _minimumInliers) break;
-      final world = index.skyPointOf(vertex, fit.reference);
-      final pixel = fit.invert(_Complex.from(world));
-      if (!pixel.isFinite) continue;
-      // 容差按像素给：星点定位精度大约就是这个量级。
-      final match = grid.nearest(
-        pixel.real,
-        pixel.imaginary,
-        _inlierTolerancePixels,
-        used,
-      );
-      if (match == null) continue;
-      used.add(match.index);
-      inliers.add(_Inlier(match.index, vertex, match.distance));
-    }
-    return inliers;
   }
 
   /// 像素容差取 3 像素：星点本身的定位精度约半像素，再留出畸变和
