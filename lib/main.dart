@@ -115,8 +115,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 而对不上的表现是「按钮忽然点不动了」。
   bool get _running => _job?.running ?? false;
 
-  /// 这次解析是「只报告月亮」。
+  /// 这次解析是「只报告月亮」——用户自己选的那条路。
+  ///
+  /// 只在**刚跑完的那一次**有意义，所以要设 [_isMoonReport] 之外另立一个：
+  /// 「这张图是月亮」和「用户当时选了直接报告月亮」是两件事，而屏幕上那句话
+  /// 得看是哪一种。
   bool _moonOnly = false;
+
+  /// 这一屏报的是不是「一张月亮照，而且没解算天区」。
+  ///
+  /// 判据用的是**照片本身**（有月盘）＋ 没有解算结果，不是那个会话里的
+  /// [_moonOnly]：从观星仓库里重新打开一条月面记录时，那个开关早就没了（或者
+  /// 正好留着上一次运行的值），而「这张图是不是月亮」一直都在 `moonDisc` 里。
+  ///
+  /// 不这样的话，重新打开一条月面记录会走到下面那个 `solve == null` 的分支，
+  /// 屏幕上写着「还没解开这片天区，点上面的『一键解析』」——用户刚看过一张
+  /// 算得好好的月亮，却被告知什么都没识别出来。
+  bool get _isMoonReport => _analysis?.moonDisc != null && _solve == null;
 
   /// 正在裁剪选中的那张图。
   bool _cropping = false;
@@ -1418,6 +1433,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _warnings = const [];
         _progress = null;
         _savedId = entry.id;
+        // 从仓库里翻出来的记录不属于「刚跑完的那一次」，清掉这个开关，
+        // 月面那句提示就会用「这是月面链路」那一种说法。判据见 [_isMoonReport]。
+        _moonOnly = false;
         _selectedTarget = null;
         _showProcessed = false;
         _showConstellations = true;
@@ -2527,10 +2545,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           const Divider(height: 1),
           Expanded(
             child: targets.isEmpty && deepSkyObjects.isEmpty && movingBodies.isEmpty
-                ? const Center(
-                    child: Text(
-                      '没有检出目标。',
-                      style: TextStyle(color: Color(0xFF8192A8)),
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Text(
+                        // 月面照片上当然「没有检出目标」——那条链路压根不在月面上
+                        // 找点源。照直写「没有检出目标」，用户会以为这张图白拍了，
+                        // 而其实月盘、亮面占比、相名都算出来了，只是画在图上了。
+                        analysis.moonDisc != null
+                            ? '这是月面照片：星点、深空天体和系内天体都不在月面上找。'
+                                '月盘的位置和亮面占比已经标在图上了。'
+                            : '没有检出目标。',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Color(0xFF8192A8)),
+                      ),
                     ),
                   )
                 : ListView(
@@ -3608,13 +3636,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ],
               ),
-              if (_moonOnly)
+              if (_isMoonReport)
                 // 不解释的话，用户看到的就是「没有解开这片天区」——而真相是
-                // 他刚才自己选了「直接报告月亮」，这一次压根没去解。同一块
-                // 屏幕上两种截然不同的意思，必须说清是哪一种。
-                const Padding(
-                  padding: EdgeInsets.only(top: 10),
-                  child: Text('这次只报告了月亮，没有解算天区。'),
+                // 这一次压根没去解。同一块屏幕上两种截然不同的意思，必须说清。
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    // 分两句是因为「这一次」在两条路上指的不同的东西：刚跑完
+                    // 的那次是用户自己选的；从仓库里翻出来的那条，用户早忘了
+                    // 当时点过什么，说「这是月面链路」才对他有用。
+                    _moonOnly
+                        ? '这次只报告了月亮，没有解算天区。'
+                        : '这张照片走的是月面链路，没有解算天区。',
+                  ),
                 )
               else if (solve == null)
                 const Padding(

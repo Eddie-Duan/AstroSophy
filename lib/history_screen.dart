@@ -214,7 +214,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${entry.starCount} 个点源 · ${entry.quality}',
+                      // 月面照片的点源数恒为零，写出来像是「什么都没拍到」；
+                      // 换成那轮月亮的实际读数才说明得了这一条记录是什么。
+                      entry.isMoon
+                          ? _moonLine(entry)
+                          : '${entry.starCount} 个点源 · ${entry.quality}',
                       style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 11),
                     ),
                     const SizedBox(height: 2),
@@ -239,6 +243,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
         ),
       );
+
+  /// 月面记录那一行副标题。
+  ///
+  /// 亮面占比读不出来（老记录里没有月盘数据）时退回「月面照片」四个字，
+  /// 不编一个数——这一行是给用户扫一眼用的，编出来的数会被当成量过的结果。
+  String _moonLine(SavedAnalysis entry) {
+    final fraction = entry.moonIlluminatedFraction;
+    if (fraction == null) return '月面照片 · ${entry.quality}';
+    return '月面 · 亮面约 ${(fraction * 100).round()}% · ${entry.quality}';
+  }
 
   /// 改名。
   ///
@@ -333,7 +347,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
 /// 免得某一种颜色在缩略图上抢戏。绿色没用 `kMint`——它是整个 APP 的主色，
 /// 满屏的薄荷绿卡片反而让「成功」不再特别。
 Color outcomeColor(RecordOutcome outcome) => switch (outcome) {
-      RecordOutcome.ok => const Color(0xFF4FD1A5),
+      // 月面和「已解算」同一个颜色，理由见 [RecordOutcome.moon]：对用户来说
+      // 这两种都是「这条记录有内容」，区别只在角标上的字。
+      RecordOutcome.ok || RecordOutcome.moon => const Color(0xFF4FD1A5),
       RecordOutcome.partial => const Color(0xFFE8C36A),
       RecordOutcome.failed => const Color(0xFFE0708A),
     };

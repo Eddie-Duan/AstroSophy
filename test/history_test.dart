@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:astrosophy/analysis.dart';
@@ -310,10 +311,11 @@ void main() {
       expect(listed['不像星空']!.outcome, RecordOutcome.failed);
     });
 
-    test('月亮走月面分支，也算「已解算」', () async {
+    test('月亮走月面分支，单独一档，不并进「已解算」', () async {
       // 月面照片没有星点、也没有天区坐标，但月盘圆心、亮面占比、相名和盈亏
-      // 全都报出来了——对用户来说这就是算成功了。按星点数去归类只会落到
-      // 「未能解析」，那是在告诉他这张图白拍了。
+      // 全都报出来了——它绝不该落到「未能解析」（那是在说这张图白拍了）。
+      // 可也不该并进「已解算」：那张照片一次天区解算都没跑过，是用户自己
+      // 选的「直接报告月亮」，标成「已解算」是在说一件没发生的事。
       final moon = await store.save(
         name: '月亮',
         analysis: analysisOf(
@@ -330,9 +332,25 @@ void main() {
         solve: null,
         explanation: null,
       );
-      expect(moon.outcome, RecordOutcome.ok);
+      expect(moon.outcome, RecordOutcome.moon);
+      expect(moon.outcome.label, '月面');
+      // 列表上那一行副标题：点源数恒为零，写出来像是「什么都没拍到」。
+      expect(moon.moonIlluminatedFraction, closeTo(64000 / (math.pi * 180 * 180), 1e-6));
       // 也要能从磁盘读回来，不能只活在内存里的那个对象上。
-      expect((await store.list()).single.outcome, RecordOutcome.ok);
+      final listed = (await store.list()).single;
+      expect(listed.outcome, RecordOutcome.moon);
+      expect(listed.moonIlluminatedFraction, isNotNull);
+    });
+
+    test('不是月面的记录没有亮面读数列', () async {
+      final plain = await store.save(
+        name: '星空',
+        analysis: analysisOf(),
+        solve: solveOf(),
+        explanation: null,
+      );
+      expect(plain.outcome, RecordOutcome.ok);
+      expect(plain.moonIlluminatedFraction, isNull);
     });
 
     test('老记录没有月亮字段时，回头认测量结果里的月盘', () async {
@@ -358,7 +376,7 @@ void main() {
       (json['summary']! as Map).remove('moon');
       file.writeAsStringSync(jsonEncode(json));
 
-      expect((await store.list()).single.outcome, RecordOutcome.ok);
+      expect((await store.list()).single.outcome, RecordOutcome.moon);
     });
 
     test('老记录没有星空判定字段时按星点数兜底', () async {      final saved = await store.save(

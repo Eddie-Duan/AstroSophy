@@ -209,5 +209,27 @@ void main() {
       // 月亮几分钟就挪出星座边界，「在哪个星座」这件事对它没有意义。
       expect(markdown, isNot(contains('天区未识别')));
     });
+
+    test('忘了传 moon 参数也不能写成「天区未识别」', () {
+      // 用户实报的：从观星仓库里打开一条月面记录，标题写成「天区未识别」，
+      // 看着像这张图白拍了。走的是另一条渲染路径，那条路上没人传 moon——
+      // 而「这张图是不是月亮」明明就写在照片自己的月盘字段里。
+      final analysis = analysisOf(
+        moonDisc: const MoonDisc(
+          centerX: 137,
+          centerY: 455,
+          radiusPixels: 45.3,
+          litPixels: 5600,
+          frameArea: 595200,
+        ),
+      );
+      final markdown = buildHeadlineMarkdown(analysis, null);
+      expect(markdown.split('\n').first, '## 月亮');
+      expect(markdown, contains('亮面占比'));
+      expect(markdown, isNot(contains('天区未识别')));
+      // 没有拍摄时刻就给不出相名，但图上量出来的那个数照给——它就是月盘
+      // 自己的 lit / πr²，和上一条测试里那个手写的 86.1% 不是同一个来源。
+      expect(markdown, contains('86.9%'));
+    });
   });
 }

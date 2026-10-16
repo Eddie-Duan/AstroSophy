@@ -32,8 +32,19 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build apk --release
-      - name: Name the APK after the version
-        run: cp build/app/outputs/flutter-apk/app-release.apk "astrosophy-$VERSION.apk"
+      - name: Collect the APK
+        run: |
+          # 产物名由 android/app/build.gradle.kts 定为 AstroSophy.apk。这里做的是
+          # 把它收进 dist/，顺便兜一次名字——Gradle 插件哪天又按 app-release.apk
+          # 输出的话，跟着变的是脚本，不是用户拿到的文件名。
+          mkdir -p dist
+          if [ -f build/app/outputs/flutter-apk/AstroSophy.apk ]; then
+            src=build/app/outputs/flutter-apk/AstroSophy.apk
+          else
+            src=build/app/outputs/flutter-apk/app-release.apk
+          fi
+          cp "$src" dist/AstroSophy.apk
+          ls -l dist
       - name: Take the changelog entry for this version
         run: |
           awk -v heading="## [$VERSION]" '
@@ -55,4 +66,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "AstroSophy $VERSION" \
             "${notes[@]}" \
-            "astrosophy-$VERSION.apk"
+            "dist/AstroSophy.apk"

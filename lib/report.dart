@@ -232,20 +232,26 @@ String buildHeadlineMarkdown(
 }) {
   final lines = <String>[];
 
-  if (moon != null) {
+  // 月面那一段的判据是**照片本身有没有月盘**，不是调用方有没有把 facts 传进来。
+  // 只认参数的话，任何一处忘了传（比如从观星仓库里重新打开一条记录时的某条
+  // 渲染路径）都会掉到下面去，标题写成「天区未识别」——而那张照片根本不是
+  // 「没识别出来」，它走的是月面链路，压根没去解。少一个参数就多一句假话，
+  // 这种默认值不值得留。
+  final moonFacts = moon ?? moonFactsOf(analysis, null);
+  if (moonFacts != null) {
     // 月面照片没有星场可报，「在哪个星座」对月亮没有意义——月亮几分钟就挪
     // 出星座边界。它有自己的三件事：相、亮面占比、占多大。
-    lines.add('## ${moon.phaseName ?? '月亮'}');
+    lines.add('## ${moonFacts.phaseName ?? '月亮'}');
     lines.add('');
-    lines.add('- 亮面占比 ==${moon.measuredPercent}==（图上量的）');
-    if (moon.ephemerisPercent != null) {
-      lines.add('- 按拍摄时刻算 ==${moon.ephemerisPercent}==');
+    lines.add('- 亮面占比 ==${moonFacts.measuredPercent}==（图上量的）');
+    if (moonFacts.ephemerisPercent != null) {
+      lines.add('- 按拍摄时刻算 ==${moonFacts.ephemerisPercent}==');
     }
     final disc = analysis.moonDisc!;
     lines.add('- 月盘占画面 ==${(disc.discAreaFraction * 100).toStringAsFixed(2)}%==');
-    if (moon.caution != null) {
+    if (moonFacts.caution != null) {
       lines.add('');
-      lines.add('> ${moon.caution}');
+      lines.add('> ${moonFacts.caution}');
     }
     return lines.join('\n');
   }

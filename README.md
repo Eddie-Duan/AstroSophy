@@ -35,7 +35,7 @@ flutter pub get
 flutter run
 ```
 
-双击 [`BUILD_APK.bat`](./BUILD_APK.bat) 可生成 release APK。正式发行版在 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases) 页面下载，推送 `v*` 标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建并发布，各版变更见 [`CHANGELOG.md`](./CHANGELOG.md)。
+双击 [`BUILD_APK.bat`](./BUILD_APK.bat) 可生成 release APK，产物是 `build/app/outputs/flutter-apk/AstroSophy.apk`。正式发行版在 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases) 页面下载，文件名同样是 `AstroSophy.apk`；推送 `v*` 标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建并发布，各版变更见 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 没有真机或还没拍过星空，可以在选图界面点「演示图」，用内置的五张演示照片走一遍完整流程——四张星空（含一张土星、一张灶神星所在的天区）和一张月球照。
 

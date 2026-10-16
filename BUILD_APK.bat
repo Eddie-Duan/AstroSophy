@@ -19,5 +19,18 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-echo APK created at build\app\outputs\flutter-apk\app-release.apk
+rem The output name comes from android\app\build.gradle.kts (AstroSophy.apk).
+rem This is a second net: if the Gradle plugin ever names it app-release.apk
+rem again, the script still hands over the agreed name instead of something
+rem that quietly changes between versions.
+set "APK=build\app\outputs\flutter-apk\AstroSophy.apk"
+if not exist "%APK%" if exist "build\app\outputs\flutter-apk\app-release.apk" (
+    move /y "build\app\outputs\flutter-apk\app-release.apk" "%APK%" >nul
+)
+if not exist "%APK%" (
+    echo APK was built, but not at the expected path. Look in build\app\outputs\flutter-apk\.
+    pause
+    exit /b 1
+)
+echo APK created at %APK%
 pause

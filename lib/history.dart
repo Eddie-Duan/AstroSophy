@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -74,17 +75,34 @@ class SavedAnalysis {
   /// 有这个字段，读出来是 null。
   final CaptureMetadata? capture;
 
+  /// 月面照片的亮面占比（图上量的），0–1。不是月面照片返回 null。
+  ///
+  /// 从存档里的月盘数据现算，不另存一份：`lit_pixels / (π r²)` 就是定义式
+  /// （为什么数像素就是准的，见 [MoonDisc.illuminatedFraction]），而历史列表
+  /// 要的只是「这条记录里那轮月亮长什么样」。
+  double? get moonIlluminatedFraction {
+    final disc = _rawAnalysis['moon_disc'];
+    if (disc is! Map) return null;
+    final radius = (disc['radius_pixels'] as num?)?.toDouble();
+    final lit = (disc['lit_pixels'] as num?)?.toDouble();
+    if (radius == null || lit == null || radius <= 0) return null;
+    return (lit / (math.pi * radius * radius)).clamp(0.0, 1.0);
+  }
+
   /// 这一条算得怎么样。历史列表据此给卡片描边，让用户一眼分出「这张解出来了」
   /// 和「这张什么都没算出来」。
   ///
-  /// 分三档而不是两档，是因为中间那一档最容易被误解：星点检测到了、天区没
-  /// 解算出来，既不是成功也不是失败，用户需要知道「图有用，只是没定位」。
+  /// 分四档而不是两档，是因为中间那两档最容易被误解：星点检测到了、天区没
+  /// 解算出来，既不是成功也不是失败，用户需要知道「图有用，只是没定位」；
+  /// 月面照片更特殊——它没有星点、没有坐标，但该报的都报出来了（月盘圆心、
+  /// 亮面占比、相名、盈亏）。
   ///
-  /// 月面单独走第一档：它没有星点、没有坐标，但该报的都报出来了（月盘圆心、
-  /// 亮面占比、相名、盈亏），对用户来说和「解算成功」是一回事。按星点数去
-  /// 归类只会让它显示成「未能解析」——那是在说这张图白拍了。
+  /// 月面**单独一档**，不能并进「已解算」：那张照片一次天区解算都没跑过
+  /// （用户自己选的「直接报告月亮」），把它标成「已解算」是在说一件没发生
+  /// 的事。按星点数去归类更糟——那会让它显示成「未能解析」，等于说这张图
+  /// 白拍了。
   RecordOutcome get outcome {
-    if (isMoon) return RecordOutcome.ok;
+    if (isMoon) return RecordOutcome.moon;
     if (!isStarfield || starCount == 0) return RecordOutcome.failed;
     return solve == null ? RecordOutcome.partial : RecordOutcome.ok;
   }
@@ -119,6 +137,12 @@ enum RecordOutcome {
 
   /// 星点检测成功，但天区没解算出来——图还是有用的，只是不知道拍的是哪儿。
   partial('仅检测到星点'),
+
+  /// 月面照片，走的是月面链路：没有坐标，但月盘、亮面占比、相名都有。
+  ///
+  /// 单独一档的理由见 [SavedAnalysis.outcome]。描边和 [ok] 同一个颜色——对
+  /// 用户来说这两种都是「这条记录有内容」，区别只在角标上那两个字。
+  moon('月面'),
 
   /// 几乎没检出星点，或者那张图根本不像星空照片。
   failed('未能解析');
