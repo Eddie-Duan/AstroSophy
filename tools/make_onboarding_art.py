@@ -126,6 +126,19 @@ ART = (
             "no gradient, no texture, no shading"
         ),
     },
+    {
+        "name": "astrosophy_onboarding_language",
+        "page": "第 5 页 · 选择语言",
+        # 换一种画法。前四页是「四页四种风格」，加了第五页也得接得住这个节奏，
+        # 否则翻到最后一张会像是把第二张又画了一遍。
+        "style": "digital_illustration",
+        "prompt": (
+            "flat digital illustration: a small round globe with two overlapping "
+            "speech bubbles beside it, one bubble holds a tiny four-pointed star "
+            "and the other a tiny crescent moon, clean geometric shapes, "
+            + PALETTE + ", centered, " + NO_TEXT + ", " + NO_FLUFF
+        ),
+    },
 )
 
 # 无头浏览器：Chrome 和 Edge 的渲染引擎是同一个，谁在就用谁。

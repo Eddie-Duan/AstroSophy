@@ -42,6 +42,7 @@ flutter:
     - assets/brand/astrosophy_onboarding_local.png
     - assets/brand/astrosophy_onboarding_result.png
     - assets/brand/astrosophy_onboarding_keep.png
+    - assets/brand/astrosophy_onboarding_language.png
     # 内置亮星目录，由 tools/build_catalog.py 离线生成，供本机解算使用。
     - assets/catalog/stars.json
     - assets/catalog/names.json

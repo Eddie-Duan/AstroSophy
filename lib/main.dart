@@ -382,6 +382,42 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
   }
 
+  /// 右上角那枚「翻译」图标：切界面语言。
+  ///
+  /// 换语言要写存储，所以留在这一层（引导页那一步写的是同一个 key）。语言本身
+  /// 是全局的 `ValueNotifier`，赋值那一刻整棵树就重建，不必再 setState。
+  Future<void> _pickLanguage() async {
+    final picked = await showDialog<AppLanguage>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t('界面语言')),
+        contentPadding: const EdgeInsets.symmetric(vertical: 6),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final language in AppLanguage.values)
+              ListTile(
+                dense: true,
+                // 用这门语言自己的写法称呼它：找「English」的人未必认得「英语」。
+                title: Text(language.nativeName),
+                trailing: language == appLanguage.value
+                    ? const Icon(Icons.check_rounded, color: kMint, size: 20)
+                    : null,
+                onTap: () => Navigator.of(context).pop(language),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == appLanguage.value) return;
+    appLanguage.value = picked;
+    try {
+      await _storage.write(key: 'language', value: picked.code);
+    } on Exception catch (error) {
+      _showError(t('无法保存设置：{0}', [error]));
+    }
+  }
+
   /// 认出月面之后问用户一句，返回回答。
   ///
   /// 界面不在场时（比如解析被放到后台、用户已经翻到别的地方去了）没有人能
@@ -422,9 +458,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         MaterialPageRoute(
           builder: (_) => OnboardingPage(
             isReplay: !firstLaunch,
-            onDone: () {
+            onDone: (language) {
               if (navigator.canPop()) navigator.pop();
-              unawaited(_markOnboarded());
+              unawaited(_finishOnboarding(language));
             },
           ),
         ),
@@ -432,6 +468,65 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     } on Exception catch (error) {
       _showError(t('无法打开新手引导：{0}', [error]));
     }
+  }
+
+  /// 引导结束：存下选的语言、记下「看过了」，然后把右上角那几个图标的说明摆出来。
+  ///
+  /// 说明单独一步而不是塞进引导的某一页，是因为它要指着**真实界面**上的位置讲；
+  /// 画在引导页的插画里，用户回到主页还是认不出哪个图标是哪个。
+  Future<void> _finishOnboarding(AppLanguage language) async {
+    appLanguage.value = language;
+    try {
+      await _storage.write(key: 'language', value: language.code);
+    } on Exception {
+      // 存不下最多是下次启动又回到默认语言，不值得为此打断用户。
+    }
+    await _markOnboarded();
+    if (!mounted) return;
+    await _showTopBarHint();
+  }
+
+  /// 右上角那几个图标分别是什么。首次看完引导后自动出现，之后可以从「使用引导」
+  /// 里再看一遍。
+  Future<void> _showTopBarHint() async {
+    if (!mounted) return;
+    final entries = <({IconData icon, String label, String detail, bool accent})>[
+      (
+        icon: noxIcon,
+        label: t('{0} 助手', [noxName]),
+        detail: t('问它这张照片拍到了什么，也能让它保存、改名、删除记录'),
+        accent: true,
+      ),
+      (
+        icon: Icons.help_outline_rounded,
+        label: t('使用引导'),
+        detail: t('重看这五页，或者随时回到这里看这份说明'),
+        accent: false,
+      ),
+      (
+        icon: Icons.collections_bookmark_outlined,
+        label: t('观星仓库'),
+        detail: t('保存过的观测都在这里，可以重看、改名、删除'),
+        accent: false,
+      ),
+      (
+        icon: Icons.translate_rounded,
+        label: t('界面语言'),
+        detail: t('中文和英文随时切换，改完立刻生效'),
+        accent: false,
+      ),
+      (
+        icon: Icons.tune_rounded,
+        label: t('API 设置'),
+        detail: t('填模型 Key 才能用 AI 解读；Astrometry.net Key 用于窄视场在线解算'),
+        accent: false,
+      ),
+    ];
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.72),
+      builder: (context) => _TopBarHint(entries: entries),
+    );
   }
 
   /// 写下「看过了」。写失败最多让用户下次再看一遍引导，不值得为此弹错误框。
@@ -1567,7 +1662,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           IconButton(
             onPressed: _openNox,
             tooltip: t('{0} 助手', [noxName]),
-            // 只有它是主色：另外三个是「去某个地方」的入口，而这一个是
+            // 只有它是主色：另外几个是「去某个地方」的入口，而这一个是
             // 「叫个人过来」。颜色是同一条信息，不必再用文字说一遍。
             icon: const Icon(noxIcon, color: kMint),
           ),
@@ -1582,11 +1677,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             icon: const Icon(Icons.collections_bookmark_outlined),
           ),
           IconButton(
-            onPressed: _settings,
-            tooltip: t('API 设置'),
-            icon: const Icon(Icons.tune_rounded),
+            onPressed: _pickLanguage,
+            tooltip: t('界面语言：{0}', [appLanguage.value.nativeName]),
+            icon: const Icon(Icons.translate_rounded),
           ),
-          const SizedBox(width: 8),
+          // API 设置放在最右、而且不跟前面几个一样只画一个图标：它是这几个里面
+          // 唯一一个「不配就用不起来」的入口（模型解读和在线解算都要 Key），
+          // 用一个带字的胶囊把它从「随便逛逛」的图标里拎出来。
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 10),
+            child: _ApiEntry(onPressed: _settings),
+          ),
         ],
       ),
       body: SafeArea(
@@ -4397,6 +4498,156 @@ class _TargetGroups {
       };
 }
 
+/// 右上角最右边那个入口：API 设置。
+///
+/// 故意不跟前面几个一样只画一个图标：这个应用里「填 Key」是唯一一件不配就用不
+/// 起来的事（AI 解读和窄视场在线解算都要它），值得占一个字的位置。胶囊形状也
+/// 和 AppBar 上那排圆形图标一眼分得开——用户第一次看到就知道它不是「去某个
+/// 地方看看」，而是「先去把这事办了」。
+class _ApiEntry extends StatelessWidget {
+  const _ApiEntry({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: t('API 设置'),
+        child: Material(
+          color: kMint.withValues(alpha: 0.14),
+          shape: StadiumBorder(
+            side: BorderSide(color: kMint.withValues(alpha: 0.55)),
+          ),
+          child: InkWell(
+            onTap: onPressed,
+            customBorder: const StadiumBorder(),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.tune_rounded, size: 15, color: kMint),
+                  SizedBox(width: 5),
+                  // 'API' 是这三门语言里都不用翻译的三个字母，刻意不套 t()。
+                  Text(
+                    'API',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: kMint,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// 右上角那排图标分别是什么。
+///
+/// 摆成一张贴着右上角的卡片，而不是在图标上画一圈高亮：引导页刚关掉时那排图标
+/// 才第一次出现在用户眼前，这时该说的是「它们是干什么的」，而不是「请点这里」。
+/// 卡片里每一行都用**和 AppBar 上完全相同的图标和文字**，用户回到界面能一一对上。
+class _TopBarHint extends StatelessWidget {
+  const _TopBarHint({required this.entries});
+
+  final List<({IconData icon, String label, String detail, bool accent})> entries;
+
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.topRight,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 56, 12, 16),
+            child: Material(
+              color: kPanel,
+              borderRadius: BorderRadius.circular(18),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 340),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFF33455F)),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.north_east_rounded,
+                              size: 15, color: kMint),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              t('右上角这几个图标'),
+                              style: const TextStyle(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      for (final entry in entries) ...[
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              entry.icon,
+                              size: 17,
+                              color: entry.accent ? kMint : const Color(0xFF8192A8),
+                            ),
+                            const SizedBox(width: 9),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    entry.label,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 1),
+                                  Text(
+                                    entry.detail,
+                                    style: const TextStyle(
+                                      fontSize: 11.5,
+                                      height: 1.45,
+                                      color: Color(0xFFA6B5C8),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (entry != entries.last) const SizedBox(height: 9),
+                      ],
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: Text(t('知道了')),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
 class _HelpButton extends StatelessWidget {
   const _HelpButton({required this.title, required this.message});
 
@@ -4455,7 +4706,6 @@ class _SettingsFormState extends State<SettingsForm> {
   bool _obscureStrong = true;
   bool _obscureAstrometry = true;
   late bool _allowUpload = widget.allowUpload;
-  late AppLanguage _language = widget.language;
 
   /// 快速模板：只预填 Base URL 和型号名，不含 Key。
   ///
@@ -4547,7 +4797,11 @@ class _SettingsFormState extends State<SettingsForm> {
     final values = {
       // 授权是个开关不是密钥，空值也照样写进去。
       'allowUpload': _allowUpload ? 'true' : 'false',
-      'language': _language.code,
+      // 语言不归这一页管：它在主页右上角改（`_pickLanguage`）。这里写的是**当前
+      // 的值**，不是本页某次初始化时的快照——否则用户从右上角换完语言、再进来
+      // 随便保存一次设置，就会被这一行悄悄改回去。这里保存的是同一个 key，所以
+      // 两边不会打架。
+      'language': appLanguage.value.code,
       'modelBaseUrl': _baseUrl.text.trim(),
       'lightKey': _lightKey.text.trim(),
       'lightModel': _lightModel.text.trim(),
@@ -4664,27 +4918,9 @@ class _SettingsFormState extends State<SettingsForm> {
                 toggle: () => setState(() => _obscureStrong = !_obscureStrong),
               ),
               const SizedBox(height: 8),
-              // 语言放在最上面那块设置里、API Key 之前：它是唯一一个「改完立刻
-              // 影响整屏」的选项，而下面那些都要配好 Key 才有用。
-              DropdownButtonFormField<AppLanguage>(
-                initialValue: _language,
-                decoration: InputDecoration(
-                  labelText: t('界面语言'),
-                  border: const OutlineInputBorder(),
-                ),
-                items: [
-                  for (final item in AppLanguage.values)
-                    DropdownMenuItem(
-                      value: item,
-                      // 用这门语言自己的写法称呼它：找「繁體中文」的人未必认得
-                      // 「Traditional Chinese」。
-                      child: Text(item.nativeName),
-                    ),
-                ],
-                onChanged: (value) =>
-                    setState(() => _language = value ?? _language),
-              ),
-              const SizedBox(height: 16),
+              // 语言不在这里：它搬到了主页右上角（`_pickLanguage`）。放在设置里
+              // 意味着「想换语言」要先进一个写着 API 的页面，而它是唯一一个
+              // 改完立刻影响整屏的选项，值得直接摆在看得见的地方。
               _field(
                 'Astrometry.net API Key',
                 _astrometryKey,
