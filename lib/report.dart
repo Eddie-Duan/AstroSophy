@@ -5,6 +5,7 @@ import 'deepsky_names.dart';
 import 'models.dart';
 import 'moon.dart';
 import 'smallbodies.dart';
+import 'solver.dart';
 
 /// 报告层：把测量结果翻译成两类东西——给人看的，和给模型看的。
 ///
@@ -704,11 +705,13 @@ List<String> buildAdvice(
 ///
 /// [uploadAllowed] / [hasApiKey] 决定「开在线解算」这条建议是能立刻照做，
 /// 还是得先去设置里配；[onlineError] 非空表示在线那一步已经试过并失败了。
+/// [attempt] 是这次本机解算的过程记录，见 [describeSolveAttempt]。
 List<String> buildSolveFailureAdvice(
   SkyAnalysis analysis, {
   required bool uploadAllowed,
   required bool hasApiKey,
   String? onlineError,
+  SolveTrace? attempt,
 }) {
   final advice = <String>[];
   final compact = analysis.compactSources.length;
@@ -734,6 +737,12 @@ List<String> buildSolveFailureAdvice(
       '换更广的焦段（或加 0.5× 减焦镜）更容易成功。',
     );
   }
+
+  // 先把「该做什么」说完，再摆这次到底试了什么。顺序不能反：用户第一眼看
+  // 到的应该是动作，不是数字；而数字紧跟其后，是因为下一句「在线也失败了」
+  // 到底可不可信，就看得出这几层是不是真跑过。
+  final detail = describeSolveAttempt(attempt);
+  if (detail != null) advice.add(detail);
 
   if (uploadAllowed && hasApiKey) {
     advice.add(
@@ -768,8 +777,36 @@ List<String> buildSolveFailureAdvice(
   return advice;
 }
 
-/// 这个深空天体值不值得在**图上**画一个圈。
+/// 本机解算「试了什么、差多少」的一行取证。
 ///
+/// 这一行是为一次查不出原因的失败加的：同一张图、同一份代码，用户在自己手机
+/// 上失败、桌面上却解得出。两种可能的原因——星表资产没读全、天区本身对不上
+/// ——对用户是同一句「没找到」。把实际试过的星数和内点数写出来，两者立刻分得
+/// 开：某层星数不对就是资产，星数对得上、内点差一点就是判据太紧。
+///
+/// 没有记录（连一层都没跑到，比如检出星点本身就太少）时返回 null：那时候
+/// 前面那些「点源太少」的话已经把原因说清了，再添一行数字只是噪声。
+String? describeSolveAttempt(SolveTrace? trace) {
+  if (trace == null || trace.layers.isEmpty) return null;
+  final layers = [
+    for (final layer in trace.layers)
+      '${layer.label} ${layer.starCount} 颗（试 ${layer.rungsTried} 档）',
+  ];
+  final buffer = StringBuffer('本机解算未成功：${layers.join('、')}；');
+  if (trace.bestRequired == 0) {
+    // 一次内点都没数到：三角形候选连验证那一步都没走到。
+    buffer.write('候选三角形一个都没能对上内点。');
+  } else {
+    buffer.write(
+      '最多数到 ${trace.bestInliers} 颗内点，'
+      '需要 ${trace.bestRequired} 颗。',
+    );
+  }
+  return buffer.toString();
+}
+
+/// 这个深空天体值不值得在**图上**画一个圈。
+
 /// 两条同时成立才不画：**又大又没星等**。
 ///
 ///   * 「大」＝ 直径超过像场对角线的 [_markSizeLimit]。到这个尺寸，那个圆已经

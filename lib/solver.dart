@@ -31,6 +31,58 @@ class SolveProgress {
   final bool deep;
 }
 
+/// 一次本机解算「试了什么、差多少」的记录。
+///
+/// 解不出来时用户看到的不能只是「没找到」。这张照片是浅层、中间层、最深层
+/// 一层层试过来的，每层里还按「图内端取多少颗星」试了好几档；「星表资产读
+/// 坏了」和「天区本身对不上」在用户那里是同一句话，在这份记录里却长得完全
+/// 不一样——前者某一层的星数会明显不对，后者是每层都试到了、内点数就是够
+/// 不着门槛。要让判据有据可依，就只能把实际试过的记下来。
+class SolveTrace {
+  /// 按实际尝试的顺序记下的每一层。没轮到的层不在里面。
+  final List<SolveLayerAttempt> layers = <SolveLayerAttempt>[];
+
+  /// 所有层里最多数到的内点数，以及那一刻要求的下限。
+  int bestInliers = 0;
+  int bestRequired = 0;
+
+  /// 开一层，返回的记录由调用方在跑那一层时更新。
+  SolveLayerAttempt startLayer(String label, int starCount) {
+    final layer = SolveLayerAttempt(label: label, starCount: starCount);
+    layers.add(layer);
+    return layer;
+  }
+
+  /// 记下一次验证数到的内点数和当时的下限。数内点是整条链路里唯一会给出
+  /// 「差几颗」这个数字的地方，所以就在这里收。
+  void noteInliers(int count, int floor) {
+    if (count > bestInliers) {
+      bestInliers = count;
+      bestRequired = floor;
+    }
+    if (layers.isEmpty) return;
+    final layer = layers.last;
+    if (count > layer.bestInliers) layer.bestInliers = count;
+  }
+}
+
+/// [SolveTrace] 里的一层。
+class SolveLayerAttempt {
+  SolveLayerAttempt({required this.label, required this.starCount});
+
+  /// 「浅层」「中间层」「最深层」。
+  final String label;
+
+  /// 这一层星表里有多少颗星。资产读坏了就从这里看出来。
+  final int starCount;
+
+  /// 实际跑过的档位数（图内端取 8/16/24/120 颗那几档）。
+  int rungsTried = 0;
+
+  /// 这一层里最多数到的内点数。
+  int bestInliers = 0;
+}
+
 /// 本机离线天区解算（lost-in-space plate solving）。
 ///
 /// 四步，全部在手机上完成，不需要联网：
@@ -84,6 +136,12 @@ class PlateSolver {
   final int neighbours;
 
   _TriangleIndex? _cachedIndex;
+
+  /// 最近一次 [solve] 的过程记录。解不出来时上层拿它解释「差在哪」
+  /// （见 `report.dart` 的 `describeSolveAttempt`）。每次 [solve] 开头换新的。
+  SolveTrace? get lastTrace => _lastTrace;
+
+  SolveTrace? _lastTrace;
 
   /// 浅层索引：只用 Hipparcos（V ≤ 8）那批星。
   ///
@@ -182,6 +240,7 @@ class PlateSolver {
     SkyAnalysis analysis, {
     void Function(SolveProgress progress)? onProgress,
   }) {
+    final trace = _lastTrace = SolveTrace();
     // 候选由分析层给：那边多收了一类「形似略拉长的亮源」。这里不再自己按
     // `isElongated` 过滤——展示用的拉长候选和能拿来解算的候选不是一回事，
     // 判据写在 `SkyAnalysis.solveCandidates` 上，只留一处。
@@ -207,6 +266,7 @@ class PlateSolver {
       progressBase: 0.25,
       progressSpan: 0.35,
       onProgress: onProgress,
+      layer: trace.startLayer('浅层', _shallowPool.length),
     );
     if (shallow != null) return shallow;
 
@@ -237,6 +297,7 @@ class PlateSolver {
               progressBase: 0.62,
               progressSpan: 0.1,
               onProgress: onProgress,
+              layer: trace.startLayer('中间层', _midPool.length),
             );
       if (solved != null) return solved;
     }
@@ -273,6 +334,7 @@ class PlateSolver {
       progressSpan: 0.12,
       onProgress: onProgress,
       deep: true,
+      layer: trace.startLayer('最深层', catalog.stars.length),
     );
   }
 
@@ -360,12 +422,14 @@ class PlateSolver {
     required int verificationBudget,
     required double progressBase,
     required double progressSpan,
+    required SolveLayerAttempt layer,
     void Function(SolveProgress progress)? onProgress,
     bool deep = false,
   }) {
     for (var i = 0; i < rungs.length; i++) {
       final count = math.min(rungs[i], detections.length);
       if (count < _minimumDetections) continue;
+      layer.rungsTried++;
       final stars = detections.take(count).toList(growable: false);
       onProgress?.call(
         SolveProgress(
@@ -679,6 +743,7 @@ class PlateSolver {
       used.add(match.index);
       inliers.add(_Inlier(match.index, vertex, match.distance));
     }
+    _lastTrace?.noteInliers(inliers.length, floor);
     return inliers.length < floor ? const [] : inliers;
   }
 

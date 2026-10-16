@@ -4,6 +4,7 @@ import 'package:astrosophy/analysis.dart';
 import 'package:astrosophy/astrometry.dart';
 import 'package:astrosophy/models.dart';
 import 'package:astrosophy/report.dart';
+import 'package:astrosophy/solver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 造一个各项指标都能单独调的 [SkyAnalysis]。深空相关的判断只读几个字段，
@@ -180,6 +181,62 @@ void main() {
       );
       expect(trailed.last, contains('44 条'));
       expect(trailed.last, contains('缩短单张曝光'));
+    });
+  });
+
+  group('解算失败的取证', () {
+    test('把试过的层和差几颗内点写出来', () {
+      // 这一行的由来：同一张图、同一份代码，用户在手机上解不出、桌面上却解
+      // 得出。两种原因——星表没读全、判据太紧——对用户是同一句「没找到」，
+      // 只好把实际试过的写出来让两者分得开。
+      final trace = SolveTrace();
+      trace.startLayer('浅层', 41394).rungsTried = 4;
+      trace.startLayer('中间层', 170212).rungsTried = 4;
+      trace.startLayer('最深层', 1205907).rungsTried = 4;
+      trace.bestInliers = 7;
+      trace.bestRequired = 10;
+
+      expect(
+        describeSolveAttempt(trace),
+        '本机解算未成功：浅层 41394 颗（试 4 档）、'
+        '中间层 170212 颗（试 4 档）、最深层 1205907 颗（试 4 档）；'
+        '最多数到 7 颗内点，需要 10 颗。',
+      );
+    });
+
+    test('连内点都没数到时不说「需要 0 颗」', () {
+      final trace = SolveTrace();
+      trace.startLayer('浅层', 41394).rungsTried = 4;
+
+      final line = describeSolveAttempt(trace);
+      expect(line, contains('一个都没能对上内点'));
+      expect(line, isNot(contains('需要 0 颗')));
+    });
+
+    test('没跑到任何一层就不添这一行', () {
+      // 检出星点本身就太少时，前面那句「点源太少」已经把原因说清了，
+      // 再补一行空数字只是噪声。
+      expect(describeSolveAttempt(SolveTrace()), isNull);
+      expect(describeSolveAttempt(null), isNull);
+    });
+
+    test('取证行排在「该做什么」之后，不抢第一句', () {
+      final trace = SolveTrace();
+      trace.startLayer('浅层', 41394).rungsTried = 4;
+      trace.bestInliers = 7;
+      trace.bestRequired = 10;
+
+      final advice = buildSolveFailureAdvice(
+        analysisOf(stars: starsOf(200)),
+        uploadAllowed: false,
+        hasApiKey: false,
+        attempt: trace,
+      );
+
+      expect(advice, hasLength(3));
+      expect(advice.first, contains('不是星点太少'));
+      expect(advice[1], contains('浅层 41394 颗'));
+      expect(advice.last, contains('设置'));
     });
   });
 

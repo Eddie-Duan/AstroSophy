@@ -622,13 +622,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   void _detachJob() {
     final job = _job;
     if (job == null) return;
-    // 还挂着的月面提问先收回来：人都不看了，不能让它等着一个永远不来的回答。
     if (_moonQuestion != null) _answerMoon(false);
     _jobCenter.detach(job);
     _clearWorkspace();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('已放到后台继续解析，完成后会自动存进观星记录'),
+        content: Text('后台运行，自动存进仓库。'),
       ),
     );
   }
@@ -927,7 +926,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           analysis.preview,
           exclusions: exclusions,
         );
-        final adjustedSolve = await worker.solveLocal(adjustedAnalysis);
+        final (adjustedSolve, _) = await worker.solveLocal(adjustedAnalysis);
         _ensureCurrentAnalysis(analysis);
         if (mounted) {
           setState(() {
@@ -3664,7 +3663,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               else if (solve == null)
                 const Padding(
                   padding: EdgeInsets.only(top: 10),
-                  child: Text('还没解开这片天区，点上面的「一键解析」。'),
+                  child: Text('解析失败。'),
                 )
               else ...[
                 const SizedBox(height: 10),

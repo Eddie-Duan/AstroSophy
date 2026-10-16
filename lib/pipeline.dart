@@ -238,17 +238,20 @@ class SkyPipeline {
     var index = 1;
     SolveResult? solve;
     String? onlineError;
+    SolveTrace? localTrace;
     if (moonOnly) {
       // 用户选了只要月亮：跳过解算和上传，直接走到解读那一步。
       index = 0;
     } else {
       report(index, 0, '正在本机解算天区');
       try {
-        solve = await worker.solveLocal(
+        final (result, trace) = await worker.solveLocal(
           analysis,
           onProgress: (progress) =>
               report(index, progress.fraction, progress.stage, progress.deep),
         );
+        solve = result;
+        localTrace = trace;
       } catch (error) {
         warnings.add('本机解算未能完成：$error');
       }
@@ -290,6 +293,7 @@ class SkyPipeline {
             uploadAllowed: allowUpload,
             hasApiKey: astrometryKey.trim().isNotEmpty,
             onlineError: onlineError,
+            attempt: localTrace,
           ),
         );
       } else {
@@ -577,11 +581,15 @@ class SkyWorker {
       ) as SkyAnalysis;
 
   /// 本机离线解算。解不出来返回 null，由上层决定要不要回退在线服务。
-  Future<SolveResult?> solveLocal(
+  ///
+  /// 连同 [SolveTrace] 一起返回：解不出来时上层要拿它说明「差在哪」，而记录
+  /// 是在解算那一侧的 isolate 里填的，跨不过来，只能随结果一起送回来。
+  Future<(SolveResult?, SolveTrace)> solveLocal(
     SkyAnalysis analysis, {
     void Function(SolveProgress)? onProgress,
   }) async =>
-      await _request('solve', analysis, onProgress) as SolveResult?;
+      await _request('solve', analysis, onProgress)
+          as (SolveResult?, SolveTrace);
 
   /// 给在线解算拿回来的结果补上星座名与连线。
   ///
@@ -684,7 +692,13 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
               ),
             ),
           );
-          boot.reply.send(_WorkerReply(message.id, 'done', result));
+          boot.reply.send(
+            _WorkerReply(
+              message.id,
+              'done',
+              (result, solver.lastTrace ?? SolveTrace()),
+            ),
+          );
         case 'decorate':
           boot.reply.send(
             _WorkerReply(

@@ -83,7 +83,7 @@ void main() {
       );
 
       final stages = <String>[];
-      final solve = await worker.solveLocal(
+      final (solve, trace) = await worker.solveLocal(
         analysis,
         onProgress: (progress) => stages.add(progress.stage),
       );
@@ -96,6 +96,10 @@ void main() {
         lessThan(0.1),
       );
       expect(solve.matchedCount, greaterThanOrEqualTo(10));
+      // 过程记录也要跨 isolate 传得回来：它是在解算那一侧的 isolate 里填的，
+      // 上层拿不到它，失败时就只剩一句「没找到」。
+      expect(trace.layers, isNotEmpty);
+      expect(trace.layers.first.starCount, greaterThan(0));
       // 进度回调要真的从后台一条条传回来。这一步曾经真的断过：先到的
       // 进度消息把登记项摘掉了，之后带回结果的那条就找不到人收，界面
       // 永远停在进度条上。

@@ -258,16 +258,6 @@ class _NoxScreenState extends State<NoxScreen> {
                 style: TextStyle(fontSize: 15, height: 1.6),
               ),
               const SizedBox(height: 8),
-              const Text(
-                '可以问我当前这张照片拍到了什么、本机存了哪些观测，'
-                '也可以让我保存、改名、删除记录，或者请求在线解算。',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  height: 1.7,
-                  color: Color(0xFFA6B5C8),
-                ),
-              ),
               if (_noModel) ...[
                 const SizedBox(height: 18),
                 const Text(

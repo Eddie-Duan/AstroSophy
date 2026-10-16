@@ -161,6 +161,34 @@ void main() {
       expect(result.matchedCount, greaterThanOrEqualTo(15));
     });
 
+    test('解不出来时把过程记下来，好解释差在哪', () {
+      // 只用主星表：中间层和最深层的索引建一次要几十秒，这条测的是「记录
+      // 有没有填」，不是判据本身。
+      final shallowOnly = PlateSolver(loadTestCatalog(withGaia: false));
+      // 星点位置打散成噪声：图上根本凑不出正确的三角形，必然解不出来。
+      final analysis = synthesiseField(
+        catalog: catalog,
+        centerRa: _orionRa,
+        centerDec: _orionDec,
+        degreesPerPixel: 0.008,
+        positionJitter: 60,
+        randomSeed: 20261016,
+      );
+
+      expect(shallowOnly.solve(analysis), isNull,
+          reason: '位置打散成噪声之后不该还能对上');
+
+      final trace = shallowOnly.lastTrace;
+      expect(trace, isNotNull);
+      final layer = trace!.layers.single;
+      expect(layer.label, '浅层');
+      // 星数要如实报——资产读坏了就是靠这个数看出来的。
+      expect(layer.starCount, greaterThan(40000));
+      expect(layer.rungsTried, greaterThan(0));
+      expect(trace.bestRequired, greaterThan(0), reason: '应该真的验证过候选');
+      expect(trace.bestInliers, lessThan(trace.bestRequired));
+    });
+
     test('旋转过的星图同样能解算', () {
       for (final rotation in [0.35, 0.9, -1.4]) {
         final analysis = synthesiseField(
