@@ -130,7 +130,36 @@ PositionVector heliocentricPosition(
 
   // 平近点角归到 (−180, 180]：开普勒方程的牛顿迭代在这个区间里收敛得最稳。
   final meanAnomaly = _radians(_wrapSigned(meanLongitude - perihelion));
-  final eccentricAnomaly = _solveKepler(meanAnomaly, eccentricity);
+
+  return heliocentricFromElements(
+    semiMajorAxis: semiMajorAxis,
+    eccentricity: eccentricity,
+    inclinationDegrees: inclination / _radiansPerDegree,
+    nodeLongitudeDegrees: node,
+    perihelionArgumentDegrees: perihelion - node,
+    meanAnomalyDegrees: meanAnomaly / _radiansPerDegree,
+  );
+}
+
+/// 由「平近点角 ＋ 近日点幅角 ＋ 升交点经度 ＋ 倾角」直接算日光心黄道位置。
+///
+/// 行星那条路（[heliocentricPosition]）的根数表给的是平黄经 L 与近日点黄经 ϖ，
+/// 所以那里要先换算成 M = L − ϖ、ω = ϖ − Ω 才能进来。小行星和彗星不一样：
+/// JPL 和 MPC 给的直接就是平近点角与近日点幅角，**不需要那次换算**——把 L/ϖ
+/// 的约定套到已经换好的根数上，结果会整体差一个 Ω，而且差得看不出是哪一步错了。
+PositionVector heliocentricFromElements({
+  required double semiMajorAxis,
+  required double eccentricity,
+  required double inclinationDegrees,
+  required double nodeLongitudeDegrees,
+  required double perihelionArgumentDegrees,
+  required double meanAnomalyDegrees,
+}) {
+  final inclination = _radians(inclinationDegrees);
+  final eccentricAnomaly = _solveKepler(
+    _radians(_wrapSigned(meanAnomalyDegrees)),
+    eccentricity,
+  );
 
   // 先在轨道平面里算，x' 轴指向近日点。
   final xOrbital = semiMajorAxis * (math.cos(eccentricAnomaly) - eccentricity);
@@ -139,12 +168,12 @@ PositionVector heliocentricPosition(
       math.sin(eccentricAnomaly);
 
   // 再转进黄道系：绕 z 转近日点幅角、绕 x 转轨道倾角、绕 z 转升交点经度。
-  final argument = _radians(perihelion - node);
-  final nodeAngle = _radians(node);
+  final argument = _radians(perihelionArgumentDegrees);
+  final node = _radians(nodeLongitudeDegrees);
   final cosArgument = math.cos(argument);
   final sinArgument = math.sin(argument);
-  final cosNode = math.cos(nodeAngle);
-  final sinNode = math.sin(nodeAngle);
+  final cosNode = math.cos(node);
+  final sinNode = math.sin(node);
   final cosInclination = math.cos(inclination);
   final sinInclination = math.sin(inclination);
 
@@ -158,6 +187,75 @@ PositionVector heliocentricPosition(
     (sinArgument * sinInclination) * xOrbital +
         (cosArgument * sinInclination) * yOrbital,
   );
+}
+
+/// 椭圆轨道上，过近日点 [daysFromPerihelion] 天时的真近点角与日心距。
+///
+/// 彗星的根数给的是「q、e、Tp」，没有平近点角，所以要先从 Tp 反推出平近点角
+/// 再解开普勒方程。行星和小行星那边给的是（历元时刻的）平近点角，走的是
+/// [heliocentricFromElements]。
+({double trueAnomalyDegrees, double distanceAu}) ellipticState({
+  required double perihelionDistanceAu,
+  required double eccentricity,
+  required double daysFromPerihelion,
+}) {
+  final semiMajorAxis = perihelionDistanceAu / (1 - eccentricity);
+  final motion = 0.9856076686 / math.pow(semiMajorAxis, 1.5);
+  final meanAnomaly = motion * daysFromPerihelion;
+  final eccentricAnomaly = _solveKepler(_radians(_wrapSigned(meanAnomaly)), eccentricity);
+  return (
+    trueAnomalyDegrees: _trueAnomalyOf(eccentricAnomaly, eccentricity) /
+        _radiansPerDegree,
+    distanceAu: semiMajorAxis * (1 - eccentricity * math.cos(eccentricAnomaly)),
+  );
+}
+
+/// 由平近点角（度）解出真近点角（度）。
+double trueAnomalyFromMeanAnomalyDegrees(
+  double meanAnomalyDegrees,
+  double eccentricity,
+) =>
+    _trueAnomalyOf(
+      _solveKepler(_radians(_wrapSigned(meanAnomalyDegrees)), eccentricity),
+      eccentricity,
+    ) /
+    _radiansPerDegree;
+
+/// 偏近点角（弧度）转真近点角（弧度）。
+double _trueAnomalyOf(double eccentricAnomaly, double eccentricity) => 2 *
+    math.atan2(
+      math.sqrt(1 + eccentricity) * math.sin(eccentricAnomaly / 2),
+      math.sqrt(1 - eccentricity) * math.cos(eccentricAnomaly / 2),
+    );
+
+/// 抛物线轨道上，过近日点 [daysFromPerihelion] 天时的真近点角与日心距。
+///
+/// 解 Barker 方程。把 ν 换成 s = tan(ν/2)，从「角动量守恒 ＋ r = q·sec²(ν/2)」
+/// 积出来是一侧的三次方程
+///
+///     s³ + 3s = W,   W = 3√2·k·(t − Tp) / (2·q^{3/2})
+///
+/// 其中 k 是高斯引力常数。解它只需要一步：令 s = 2·sinh(u/3)，三次方程就退化成
+/// 2·sinh(u) = W，于是 s = 2·sinh(asinh(W/2)/3)。
+///
+/// 用这个写法（而不是把系数摊开成小数）是有意的：展开式里任何一个系数打错，
+/// 结果都只是位置整体偏一点点，看上去完全不像坏了——比一个能立刻看出来的
+/// 语法错误危险得多。
+///
+/// 全部 940 颗彗星里 114 颗的偏心率落在 (1.0, 1.05] 区间，它们用这个解；更扁的
+/// 那颗（1I/'Oumuamua，e=1.1993）需要真双曲的通用变量法，构建时就滤掉了。
+({double trueAnomalyDegrees, double distanceAu}) parabolicState({
+  required double perihelionDistanceAu,
+  required double daysFromPerihelion,
+}) {
+  // 3√2·k/2，k = 0.01720209895 rad/day，合起来就是下面这个数。
+  final w = 0.03649116245 *
+      daysFromPerihelion /
+      (perihelionDistanceAu * math.sqrt(perihelionDistanceAu));
+  final s = 2 * _sinh(_asinh(w / 2) / 3);
+  final trueAnomaly = 2 * math.atan(s) / _radiansPerDegree;
+  final distance = perihelionDistanceAu * (1 + s * s);
+  return (trueAnomalyDegrees: trueAnomaly, distanceAu: distance);
 }
 
 /// 一个天体在 [moment] 时刻的地心赤道坐标。
@@ -231,6 +329,21 @@ double _solveKepler(double meanAnomaly, double eccentricity) {
 }
 
 const double _radiansPerDegree = math.pi / 180;
+
+/// 双曲正弦。`dart:math` 里没有，Barker 方程那一步要用。
+///
+/// 参数是 `asinh(W/2)/3`，量级只有 `ln(W)/3`——即使彗星离近日点十年，也就 2
+/// 上下——所以直接展开成指数不会溢出的问题。
+double _sinh(double x) => (math.exp(x) - math.exp(-x)) / 2;
+
+/// 反双曲正弦。`asinh(x) = ln(x + √(x²+1))`。
+///
+/// 按 `sign(x)·ln(|x| + √(x²+1))` 写：直接照公式来的话，大 |x| 时 `x²` 会先
+/// 溢出，而 `x` 再大也只在 `ln` 里涨，不该被平方毁掉。
+double _asinh(double x) {
+  final magnitude = x.abs();
+  return x.sign * math.log(magnitude + math.sqrt(magnitude * magnitude + 1));
+}
 
 double _radians(double degrees) => degrees * _radiansPerDegree;
 

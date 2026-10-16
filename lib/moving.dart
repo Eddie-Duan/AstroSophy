@@ -20,10 +20,18 @@ class PredictedBody {
     required this.dec,
     this.distanceAu,
     this.discDiameterArcsec,
+    this.kind = BodyKind.planet,
+    this.magnitude,
+    this.magnitudeIsRough = false,
+    this.toleranceArcmin = ephemerisToleranceArcmin,
+    this.catalogBuilt,
   });
 
   /// 中文名，直接给用户看（「木星」）。
   final String name;
+
+  /// 哪一类天体。决定图上用哪个记号，也决定结论怎么写。
+  final BodyKind kind;
 
   final double ra;
   final double dec;
@@ -37,6 +45,26 @@ class PredictedBody {
   /// 写。判据也不该用它——星历误差和视直径是同一个量级，把它掺进判据只会让
   /// 结论同时依赖两个都在抖的量。留在字段里是给以后补上来源时用的。
   final double? discDiameterArcsec;
+
+  /// 这一时刻算出来的视星等。
+  ///
+  /// 行星那一路没有（那张近似根数表里根本没有星等），只有走内置小天体目录的
+  /// 时候才有。
+  final double? magnitude;
+
+  /// [magnitude] 是不是只能当个大概。见 `models.dart` 里
+  /// [MovingBodySuspicion.magnitudeIsRough]。
+  final bool magnitudeIsRough;
+
+  /// 这个天体允许的角分偏差。
+  ///
+  /// 按天体分而不是全局一个数：行星那张近似根数表需要 8 角分，内置小天体目录
+  /// 实测三五年内漂移 1.6 角分，用不着借那么宽——容差每放宽一倍，随机吻合的
+  /// 机会就多三倍。见 `smallbodies.dart` 里那三个容差常量的说明。
+  final double toleranceArcmin;
+
+  /// 位置来自哪一天构建的内置表。行星那条路为 null。
+  final String? catalogBuilt;
 }
 
 /// 星历位置和图上那个亮点之间允许多大的偏差。
@@ -151,14 +179,15 @@ List<MovingBodySuspicion> matchMovingBodies({
   final candidates = _candidatesOf(analysis);
   if (candidates.isEmpty) return const [];
 
-  final tolerancePixels = math.max(
-    _minimumTolerancePixels,
-    ephemerisToleranceArcmin * 60 / scale,
-  );
-  final toleranceSquared = tolerancePixels * tolerancePixels;
-
   final findings = <MovingBodySuspicion>[];
   for (final body in predictions) {
+    // 容差按天体给（见 [PredictedBody.toleranceArcmin]），所以要在循环里换算，
+    // 不能再提到外面算一次。
+    final tolerancePixels = math.max(
+      _minimumTolerancePixels,
+      body.toleranceArcmin * 60 / scale,
+    );
+    final toleranceSquared = tolerancePixels * tolerancePixels;
     final (x, y) = wcs.worldToPixel(body.ra, body.dec);
     if (!x.isFinite || !y.isFinite) continue;
     // 画面外一个容差以外的天体看不见，无从判断。
@@ -207,15 +236,40 @@ List<MovingBodySuspicion> matchMovingBodies({
         y: best.y,
         separationArcsec: math.sqrt(bestSquared) * scale,
         // 没有星等零点就报 null，而不是报仪器星等：仪器星等是个没有绝对
-        // 含义的数，用户拿它和「这颗比天狼星暗」之类的常识对不上。大亮斑
+        // 含义的数，用户拿它和「这颗比天狼星亮」之类的常识对不上。大亮斑
         // 也是一样——它已经曝到饱和，测出来的通量没有意义。
         magnitude: magnitudeZeroPoint == null || best.star == null
             ? null
             : best.star!.instrumentalMagnitude + magnitudeZeroPoint,
         distanceAu: body.distanceAu,
         discDiameterArcsec: body.discDiameterArcsec,
+        kind: body.kind,
+        magnitudeIsRough: body.magnitudeIsRough,
+        catalogBuilt: body.catalogBuilt,
       ),
     );
   }
-  return findings;
+  return _keepOnlyBestSmallBody(findings);
+}
+
+/// 小行星和彗星一次只报一颗，报偏移最小的那颗。
+///
+/// 行星不用这个：同一张照片上同时拍到木星和土星是可能的，而且两边的位置判据
+/// 各自独立（都靠那张近似根数表）。小天体不一样——它们来自一份有 939 颗彗星的
+/// 表，8 角分容差下每一颗都独立地有一点随机吻合的机会，报出两颗时「至少有一颗
+/// 是错的」的概率已经不是小数。真要出现第二颗，比起多报一个更可能是判据抖了。
+///
+/// 行星那一档不受影响：它们先按偏移排好，这里只在小天体里挑一颗。
+List<MovingBodySuspicion> _keepOnlyBestSmallBody(
+  List<MovingBodySuspicion> findings,
+) {
+  if (findings.length < 2) return findings;
+  final small = findings.where((body) => !body.kind.isMajorPlanet).toList();
+  if (small.length < 2) return findings;
+  small.sort((a, b) => a.separationArcsec.compareTo(b.separationArcsec));
+  final keep = small.first;
+  return [
+    for (final body in findings)
+      if (body.kind.isMajorPlanet || identical(body, keep)) body,
+  ];
 }

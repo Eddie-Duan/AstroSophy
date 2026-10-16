@@ -12,6 +12,7 @@ import 'deepsky_names.dart';
 import 'model.dart';
 import 'models.dart';
 import 'report.dart';
+import 'smallbodies.dart';
 import 'solver.dart';
 
 /// 一键解析的进度快照。
@@ -393,6 +394,7 @@ const _namesAsset = 'assets/catalog/names.json';
 const _constellationsAsset = 'assets/catalog/constellations.json';
 const _gridAsset = 'assets/catalog/constellation_grid.bin';
 const _deepSkyAsset = 'assets/catalog/deepsky.json';
+const _smallBodiesAsset = 'assets/catalog/smallbodies.json';
 const _gaiaAsset = 'assets/catalog/gaia.bin';
 
 /// 常驻的后台解算 isolate。
@@ -434,6 +436,10 @@ class SkyWorker {
     final deepSky = await assets.loadString(_deepSkyAsset).catchError(
           (Object _) => '[]',
         );
+    // 小天体目录同理：缺了只是回到「只认行星」，不是坏掉。
+    final smallBodies = await assets.loadString(_smallBodiesAsset).catchError(
+          (Object _) => '{}',
+        );
     // Gaia 补充层同理：缺了只是星点稀的天区回到从前的成败边界，不是坏掉。
     final gaiaData = await assets.load(_gaiaAsset).catchError(
           (Object _) => ByteData(0),
@@ -454,6 +460,7 @@ class SkyWorker {
         constellations,
         grid,
         deepSky,
+        smallBodies,
         gaia,
       ),
       debugName: 'astrosophy-solver',
@@ -612,6 +619,7 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
   final solver = PlateSolver(
     catalog,
     deepSky: DeepSkyCatalog.parse(boot.deepSky),
+    smallBodies: SmallBodyCatalog.parse(boot.smallBodies),
   );
   // 索引建一次就够，之后每张图都省下这一秒。用户还在挑图片的时候它就跑完了。
   solver.warmUp();
@@ -686,6 +694,7 @@ class _WorkerBoot {
     this.constellations,
     this.grid,
     this.deepSky,
+    this.smallBodies,
     this.gaia,
   );
 
@@ -695,6 +704,7 @@ class _WorkerBoot {
   final String constellations;
   final Uint8List grid;
   final String deepSky;
+  final String smallBodies;
   final Uint8List gaia;
 }
 

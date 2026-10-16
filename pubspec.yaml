@@ -54,6 +54,9 @@ flutter:
     - assets/catalog/catalog_meta.json
     # 内置深空目录（Messier 110 + 亮 NGC/IC），供本机解算标名字用。
     - assets/catalog/deepsky.json
+    # 太阳系小天体目录（亮小行星、矮行星、彗星），由 tools/build_smallbodies.py
+    # 离线生成，供「疑似运动天体」按星历位置认人。
+    - assets/catalog/smallbodies.json
     # 自带的演示星图。原图底部的相机信息条（设备、时间、拍摄地点）已裁掉，
     # 见 lib/demo.dart。
     - assets/demo/demo_m31.jpg

@@ -372,6 +372,7 @@ class _NoxTurn {
 String noxToolLabel(String name) => switch (name) {
       'get_current_report' => '读取当前分析报告',
       'find_catalog_object' => '查询当前视场天体',
+      'find_small_body' => '查询太阳系小天体位置',
       'list_observations' => '读取本机观测摘要',
       'get_observation' => '读取一条观测记录',
       'save_current_observation' => '请求保存观测',

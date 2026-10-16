@@ -34,6 +34,11 @@ PredictedBody _predictionAt(
   double dy, {
   String name = '木星',
   double distanceAu = 4.2,
+  BodyKind kind = BodyKind.planet,
+  double? magnitude,
+  bool magnitudeIsRough = false,
+  String? catalogBuilt,
+  double toleranceArcmin = ephemerisToleranceArcmin,
 }) {
   final (ra, dec) = wcs.pixelToWorld(wcs.crpix1 + dx, wcs.crpix2 + dy);
   return PredictedBody(
@@ -41,6 +46,11 @@ PredictedBody _predictionAt(
     ra: ra,
     dec: dec,
     distanceAu: distanceAu,
+    kind: kind,
+    magnitude: magnitude,
+    magnitudeIsRough: magnitudeIsRough,
+    catalogBuilt: catalogBuilt,
+    toleranceArcmin: toleranceArcmin,
   );
 }
 
@@ -452,6 +462,114 @@ void main() {
         ),
         isEmpty,
       );
+    });
+  });
+
+  group('容差按天体分，不共用一个数', () {
+    // 这套尺度是 10.68″/px，所以 1 角分 = 5.6 像素。
+    test('小行星的 4 角分比行星的 8 角分紧', () {
+      // 偏 35 像素 ≈ 6.2 角分：行星该收，小行星该放。
+      final planet = matchMovingBodies(
+        analysis: _analysis(wcs, [_detection(wcs, 35, 0)]),
+        wcs: wcs,
+        predictions: [_predictionAt(wcs, 0, 0)],
+        hasCatalogStarNear: _noCatalogStar,
+      );
+      expect(planet, hasLength(1));
+
+      final small = matchMovingBodies(
+        analysis: _analysis(wcs, [_detection(wcs, 35, 0)]),
+        wcs: wcs,
+        predictions: [
+          _predictionAt(
+            wcs,
+            0,
+            0,
+            name: '灶神星',
+            kind: BodyKind.asteroid,
+            toleranceArcmin: 4,
+          ),
+        ],
+        hasCatalogStarNear: _noCatalogStar,
+      );
+      expect(small, isEmpty, reason: '容差没跟到天体的类别上');
+    });
+
+    test('类别、亮度、表的构建日期都带得出来', () {
+      final findings = matchMovingBodies(
+        analysis: _analysis(wcs, [_detection(wcs, 12, 0)]),
+        wcs: wcs,
+        predictions: [
+          _predictionAt(
+            wcs,
+            12,
+            0,
+            name: '某颗彗星',
+            kind: BodyKind.comet,
+            magnitude: 11.2,
+            magnitudeIsRough: true,
+            catalogBuilt: '2026-10-16',
+          ),
+        ],
+        hasCatalogStarNear: _noCatalogStar,
+      );
+      expect(findings.single.kind, BodyKind.comet);
+      expect(findings.single.magnitudeIsRough, isTrue);
+      expect(findings.single.catalogBuilt, '2026-10-16');
+      // 认出来了就是认出来了。`detected` 为假的那一类是「位置算得出来、
+      // 图上没对上」，只在 solver 里造得出来，不能从这条路混进来。
+      expect(findings.single.detected, isTrue);
+    });
+  });
+
+  group('小行星和彗星一次只报一颗，行星不受限', () {
+    test('两颗小行星都对得上时，只留偏移最小的一颗', () {
+      final findings = matchMovingBodies(
+        analysis: _analysis(wcs, [
+          _detection(wcs, 12, 0),
+          _detection(wcs, -40, 0),
+        ]),
+        wcs: wcs,
+        predictions: [
+          _predictionAt(wcs, 12, 0, name: '灶神星', kind: BodyKind.asteroid),
+          _predictionAt(wcs, -50, 0, name: '智神星', kind: BodyKind.asteroid),
+        ],
+        hasCatalogStarNear: _noCatalogStar,
+      );
+      expect(findings, hasLength(1));
+      expect(findings.single.name, '灶神星');
+    });
+
+    test('行星可以同时报两颗', () {
+      final findings = matchMovingBodies(
+        analysis: _analysis(wcs, [
+          _detection(wcs, 12, 0),
+          _detection(wcs, -40, 0),
+        ]),
+        wcs: wcs,
+        predictions: [
+          _predictionAt(wcs, 12, 0, name: '木星'),
+          _predictionAt(wcs, -40, 0, name: '土星'),
+        ],
+        hasCatalogStarNear: _noCatalogStar,
+      );
+      expect(findings, hasLength(2));
+    });
+
+    test('小行星和行星混在一起时，行星一颗不少', () {
+      final findings = matchMovingBodies(
+        analysis: _analysis(wcs, [
+          _detection(wcs, 12, 0),
+          _detection(wcs, -40, 0),
+        ]),
+        wcs: wcs,
+        predictions: [
+          _predictionAt(wcs, 12, 0, name: '木星'),
+          _predictionAt(wcs, -40, 0, name: '灶神星', kind: BodyKind.asteroid),
+        ],
+        hasCatalogStarNear: _noCatalogStar,
+      );
+      expect(findings, hasLength(2));
     });
   });
 }

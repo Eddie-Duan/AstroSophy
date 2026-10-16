@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -27,6 +28,7 @@ import 'nox.dart';
 import 'onboarding.dart';
 import 'pipeline.dart';
 import 'report.dart';
+import 'smallbodies.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -44,14 +46,17 @@ const secondaryTargetGroups = <String>{'unnamed', 'streaks'};
 
 /// 一进结果页时哪几组收起。
 ///
-/// 画面里有深空天体时只展开深空天体：那些才是按下快门的目标，而星点动辄
+/// 画面里有深空天体或系内天体时只展开这两组：那些才是按下快门的目标，而星点动辄
 /// 几十项，全展开就把主角淹了。
 ///
-/// 画面里**没有**深空天体时反过来，展开亮星组：这时候列表里只剩星点，按上面
+/// 画面里**都没有**时反过来，展开亮星组：这时候列表里只剩星点，按上面
 /// 那套全收起来，用户打开面板看到的是一片空白加三个折叠条，像是什么都没算
 /// 出来。两种情况的默认值必须分开算，不能用一个常数。
-Set<String> initialCollapsedGroups({required int deepSkyObjectCount}) =>
-    deepSkyObjectCount == 0
+Set<String> initialCollapsedGroups({
+  required int deepSkyObjectCount,
+  int movingBodyCount = 0,
+}) =>
+    deepSkyObjectCount == 0 && movingBodyCount == 0
         ? {...secondaryTargetGroups}
         : {'named', ...secondaryTargetGroups};
 
@@ -194,13 +199,26 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 深空天体没有星点编号，显隐按目录名称单独管理。
   final _hiddenDeepSkyObjects = <String>{};
 
+  /// 系内天体（行星、矮行星、小行星、彗星）同理：没有星点编号，按名字单独管理。
+  ///
+  /// 默认**空集**，也就是初始状态图上就画着标注——这一组每一项都是「这一刻
+  /// 只有这一个位置」的结论，正是用户按下快门时想拍的东西，藏起来才是反常。
+  final _hiddenMovingBodies = <String>{};
+
+  /// 当前选中的系内天体名。
+  String? _selectedMovingBodyName;
+
   /// 哪几组是收起的。**一进结果页的默认值由 [initialCollapsedGroups] 给**，
   /// 之后跟着用户点。
   final _collapsedGroups = <String>{...secondaryTargetGroups};
 
   /// 一进结果页时哪几组收起。判据见 [initialCollapsedGroups]。
-  Set<String> _initialCollapsedGroups() =>
-      initialCollapsedGroups(deepSkyObjectCount: _sortedDeepSkyObjects(_solve).length);
+  Set<String> _initialCollapsedGroups() => initialCollapsedGroups(
+        deepSkyObjectCount: _sortedDeepSkyObjects(_solve).length,
+        // 只数真的画在图上的：全是「没对上」的那些时不展开这一组，展开一个
+        // 空组等于把亮星也一起收起来。
+        movingBodyCount: _visibleMovingBodies(_solve).length,
+      );
 
   /// 看图区的缩放/平移状态。
   final _viewer = TransformationController();
@@ -312,7 +330,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     _hiddenTargets.clear();
     _restoredTargets.clear();
     _hiddenDeepSkyObjects.clear();
+    _hiddenMovingBodies.clear();
     _selectedDeepSkyName = null;
+    _selectedMovingBodyName = null;
   }
 
   /// 把设置里的开关读进内存。设置表单保存之后也要再读一次。
@@ -629,6 +649,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         executeTool: AgentTools(
           report: report,
           loadHistory: () async => (await _ensureHistory()).list(),
+          loadSmallBodies: _ensureSmallBodies,
           handleAction: (name, arguments) =>
               _executeAgentAction(name, arguments, analysis, report),
         ).execute,
@@ -639,6 +660,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 switch (name) {
                   'get_current_report' => '读取当前分析报告',
                   'find_catalog_object' => '查询当前视场天体',
+                  'find_small_body' => '查询太阳系小天体位置',
                   'list_observations' => '读取本机观测摘要',
                   'save_current_observation' => '请求保存观测',
                   'rename_observation' => '请求重命名观测',
@@ -1239,6 +1261,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   Future<HistoryStore> _ensureHistory() async =>
       _history ??= await HistoryStore.open();
 
+  /// 内置的太阳系小天体目录，读了就留着。
+  ///
+  /// 只有 Nox 的 `find_small_body` 用得到它，所以不在启动时读。192 KB 的资源
+  /// 解析一次之后一直留着——它是一份静态表，整个进程生命周期内都不会变。
+  SmallBodyCatalog? _smallBodyCatalog;
+
+  Future<SmallBodyCatalog> _ensureSmallBodies() async =>
+      _smallBodyCatalog ??= await SmallBodyCatalog.load(rootBundle);
+
   /// 保存当前这一次的解析结果。
   Future<void> _save() async {
     final analysis = _analysis;
@@ -1424,6 +1455,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ? const {}
                   : buildAgentReport(analysis, solve),
               loadHistory: () async => (await _ensureHistory()).list(),
+              loadSmallBodies: _ensureSmallBodies,
               handleAction: (action, args) => _executeAgentAction(
                 action,
                 args,
@@ -2122,7 +2154,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         objects: _visibleDeepSkyObjects(solve),
                         // 运动天体的圆心是检出到的那颗亮点，而星历位置只有
                         // 赤经赤纬，得靠 WCS 现推——所以这两个一起传。
-                        bodies: solve?.movingBodies ?? const [],
+                        bodies: _visibleMovingBodies(solve),
                         wcs: solve?.wcs,
                         arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
                         // 关掉连线时传空表而不是把 painter 换一个：换 painter
@@ -2186,7 +2218,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             analysis: analysis,
             namedStars: _visibleNamedStars(analysis, solve),
             objects: _visibleDeepSkyObjects(solve),
-            bodies: solve?.movingBodies ?? const [],
+            bodies: _visibleMovingBodies(solve),
             wcs: solve?.wcs,
             arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
             figures: _visibleConstellationFigures(solve),
@@ -2216,7 +2248,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         namedStars: _visibleNamedStars(analysis, solve),
         objects: _visibleDeepSkyObjects(solve),
         figures: _visibleConstellationFigures(solve),
-        bodies: solve?.movingBodies ?? const [],
+        bodies: _visibleMovingBodies(solve),
         hidden: _hiddenIndices(analysis, solve),
         wcs: solve?.wcs,
         arcsecPerPixel: solve?.arcsecPerPixel ?? 0,
@@ -2312,7 +2344,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final targets = analysis.numberedTargets;
     final index = _selectedTarget;
     final String text;
-    if (_selectedDeepSkyName != null) {
+    if (_selectedMovingBodyName != null) {
+      final body = solve?.movingBodies
+          .where((item) => item.name == _selectedMovingBodyName)
+          .firstOrNull;
+      text = body == null
+          ? '系内天体 · $_selectedMovingBodyName'
+          : '系内天体 · ${body.name}（${body.kind.label}）'
+              '${body.magnitude == null ? '' : ' · 约 ${body.magnitude!.toStringAsFixed(1)} 等'}';
+    } else if (_selectedDeepSkyName != null) {
       final object = solve?.deepSkyObjects
           .where((item) => item.name == _selectedDeepSkyName)
           .firstOrNull;
@@ -2372,6 +2412,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() {
       _selectedTarget = best;
       _selectedDeepSkyName = null;
+      _selectedMovingBodyName = null;
     });
   }
 
@@ -2391,6 +2432,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final targets = analysis.numberedTargets;
     final groups = _categoriseTargets(targets, solve);
     final deepSkyObjects = _sortedDeepSkyObjects(solve);
+    final movingBodies = solve?.movingBodies ?? const <MovingBodySuspicion>[];
+    final markableBodies = [
+      for (final body in movingBodies)
+        if (body.detected) body,
+    ];
     // 算一次，往下传：每行都要知道自己画不画，逐行去重算一遍就是 O(n²)，
     // 而这一页的检出点源动辄上千个。
     final hidden = _hiddenIndices(analysis, solve);
@@ -2410,27 +2456,41 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 _batchButton(
                   Icons.remove_circle_outline,
                   '把图上所有的圆圈都隐去',
-                  hidden.length + _hiddenDeepSkyObjects.length <
-                      targets.length + deepSkyObjects.length,
-                  () => _setAllCircles(true, deepSkyObjects),
+                  hidden.length +
+                          _hiddenDeepSkyObjects.length +
+                          _hiddenMovingBodies.length <
+                      targets.length +
+                          deepSkyObjects.length +
+                          markableBodies.length,
+                  () => _setAllCircles(true, deepSkyObjects, markableBodies),
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
                   '把图上所有的圆圈都显示回来',
-                  hidden.isNotEmpty || _hiddenDeepSkyObjects.isNotEmpty,
-                  () => _setAllCircles(false, deepSkyObjects),
+                  hidden.isNotEmpty ||
+                      _hiddenDeepSkyObjects.isNotEmpty ||
+                      _hiddenMovingBodies.isNotEmpty,
+                  () => _setAllCircles(false, deepSkyObjects, markableBodies),
                 ),
                 const _HelpButton(
                   title: '图上目标',
                   message:
                       '星点编号与上图里的编号一一对应，点一行就能在图上定位到那一颗；'
-                      '深空天体按名称单独管理。'
+                      '深空天体和系内天体按名称单独管理。'
                       '双指捏合可以把图放大。放大之后圆圈跟着一起放大。'
                       '每一行右边的 − 把那一颗的圆圈从图上隐去，+ 显示回来；'
                       '组标题右边的 − / + 一次管整组，'
                       '卡片标题右边这两个一次管全部。'
                       '星点编号颜色表示识别可信度：薄荷绿较高、黄色中等、粉红色较低。'
+                      '图上四类目标用四种记号，互不相同：亮星是薄荷绿实线圆，'
+                      '深空天体是粉色实线圆（大小跟着天体自身的角尺寸），'
+                      '行星和矮行星是琥珀色虚线圆加十字，'
+                      '小行星和彗星是浅蓝色四角框加十字。'
+                      '虚线和方框都在说同一件事：这个位置是算出来的，不是看出来的。'
                       '隐去只是不画，测量结果、报告和星表匹配一个字都不变。'
+                      '「系内天体」里写着「图上没有对上」的那几条本来就没有记号——'
+                      '它们说的是「按星历它在这张照片的这个位置上，但亮度不够，'
+                      '没能在图上认出来」。'
                       '「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——'
                       '判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。'
                       '拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星，'
@@ -2466,7 +2526,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: targets.isEmpty && deepSkyObjects.isEmpty
+            child: targets.isEmpty && deepSkyObjects.isEmpty && movingBodies.isEmpty
                 ? const Center(
                     child: Text(
                       '没有检出目标。',
@@ -2477,6 +2537,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     padding: const EdgeInsets.only(bottom: 10),
                     children: [
                       _deepSkyGroup(deepSkyObjects, solve),
+                      _intraSolarGroup(solve),
                       _targetGroup(
                         id: 'named',
                         title: '亮星',
@@ -2543,6 +2604,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           if (!_hiddenDeepSkyObjects.contains(object.name) &&
               _worthMarking(object, solve))
             object,
+      ];
+
+  /// 图上要画标记的系内天体。
+  ///
+  /// 和深空天体那一组同规格，但过滤条件不同：「没认出来」的那种（[detected]
+  /// 为假）**必须**滤掉。它的意思是「按星历它在这张照片的这个位置上，可图上
+  /// 没有找到能对上的亮点」——画了记号就等于宣称看见了，而这一条恰恰是没看见。
+  List<MovingBodySuspicion> _visibleMovingBodies(SolveResult? solve) => [
+        for (final body in solve?.movingBodies ?? const <MovingBodySuspicion>[])
+          if (body.detected && !_hiddenMovingBodies.contains(body.name)) body,
       ];
 
   /// 这个天体在图上画不画圈。
@@ -2742,6 +2813,194 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  /// 系内天体那一组：行星、矮行星、小行星、彗星。
+  ///
+  /// 规格和 [_deepSkyGroup] 完全一致（同样的折叠、同样的整组隐去、同样逐项
+  /// 加减号），位置紧随其后。分开成两组是因为判据不同，而不是因为长相不同：
+  /// 深空天体靠「目录里有这个天体、坐标对得上」，系内天体靠「星表里这个位置
+  /// 没有星、而且星历说它就在这儿」——后者依赖拍摄时刻，前者不依赖。
+  ///
+  /// 组里会出现两种条目：
+  ///
+  ///   * 图上有标记的（认出来了）——这一行有 − / +，能单独从图上收起来；
+  ///   * 「画面里还有，但没对上」的——**没有**加减号可给，和图上的深空天体那套
+  ///     一样：图上本来就没画，给一个按下去什么也不发生的开关只会让人更困惑。
+  Widget _intraSolarGroup(SolveResult? solve) {
+    const id = 'intraSolar';
+    final bodies = solve?.movingBodies ?? const <MovingBodySuspicion>[];
+    final collapsed = _collapsedGroups.contains(id);
+    // 只有真的画在图上的才配叫「可视化」，也才有显隐可谈。
+    final markable = [
+      for (final body in bodies)
+        if (body.detected) body,
+    ];
+    final visible = markable
+        .where((body) => !_hiddenMovingBodies.contains(body.name))
+        .toList();
+    final canHide = visible.isNotEmpty;
+    final canShow = visible.length < markable.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: () => setState(() {
+            if (!_collapsedGroups.remove(id)) _collapsedGroups.add(id);
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
+            child: Row(
+              children: [
+                Icon(
+                  collapsed
+                      ? Icons.chevron_right_rounded
+                      : Icons.expand_more_rounded,
+                  size: 20,
+                  color: const Color(0xFF8192A8),
+                ),
+                const Icon(
+                  Icons.brightness_7_rounded,
+                  size: 15,
+                  color: Color(0xFFFFAB40),
+                ),
+                if (!canHide && bodies.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.visibility_off_outlined,
+                    size: 13,
+                    color: Color(0xFF8192A8),
+                  ),
+                ],
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '系内天体  ${bodies.length}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                _batchButton(
+                  Icons.remove_circle_outline,
+                  '把系内天体的标记从图上隐去',
+                  canHide,
+                  () => setState(() {
+                    _hiddenMovingBodies.addAll(
+                      markable.map((body) => body.name),
+                    );
+                  }),
+                ),
+                _batchButton(
+                  Icons.add_circle_outline,
+                  '显示全部系内天体标记',
+                  canShow,
+                  () => setState(() => _hiddenMovingBodies.clear()),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (!collapsed)
+          if (bodies.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(38, 2, 12, 10),
+              child: Text(
+                '这张照片里没有算得出位置的系内天体。'
+                '（要有拍摄时刻才算得出来。）',
+                style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+              ),
+            )
+          else
+            for (final body in bodies) _intraSolarRow(body),
+        const Divider(height: 1),
+      ],
+    );
+  }
+
+  Widget _intraSolarRow(MovingBodySuspicion body) {
+    final isHidden = _hiddenMovingBodies.contains(body.name);
+    final isSelected = _selectedMovingBodyName == body.name;
+    // 行星和矮行星一套颜色，小行星和彗星另一套——和图上那两套记号一一对应，
+    // 否则用户在列表里点了一行、到图上找不到对应的是哪个框。
+    final accent = body.kind.isMajorPlanet
+        ? const Color(0xFFFFAB40)
+        : const Color(0xFF7FD8FF);
+    final details = <String>[
+      body.kind.label,
+      if (!body.detected)
+        '图上没有对上'
+      else if (body.separationArcsec < movingBodyCoincidenceArcsec)
+        '位置重合'
+      else
+        '和星历差 ${body.separationArcsec.round()}″',
+      if (body.magnitude != null && !body.magnitudeIsRough)
+        '约 ${body.magnitude!.toStringAsFixed(1)} 等'
+      else if (body.magnitude != null)
+        '亮度大约 ${body.magnitude!.round()} 等'
+      else
+        '亮度未知',
+      if (body.distanceAu != null)
+        '距地球 ${body.distanceAu!.toStringAsFixed(2)} AU',
+      if (body.catalogBuilt != null) '表建于 ${body.catalogBuilt}',
+    ];
+
+    return ListTile(
+      dense: true,
+      selected: isSelected,
+      selectedTileColor: accent.withValues(alpha: 0.10),
+      onTap: () => setState(() {
+        _selectedTarget = null;
+        _selectedDeepSkyName = null;
+        _selectedMovingBodyName = body.name;
+        _hiddenMovingBodies.remove(body.name);
+      }),
+      leading: Icon(
+        body.kind.isMajorPlanet
+            ? Icons.brightness_7_rounded
+            : Icons.auto_awesome_rounded,
+        size: 20,
+        color: isHidden ? const Color(0xFF8192A8) : accent,
+      ),
+      title: Text(
+        body.name,
+        style: TextStyle(
+          color: isHidden ? const Color(0xFF8192A8) : accent,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Text(
+        details.join(' · '),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 11),
+      ),
+      trailing: body.detected
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _batchButton(
+                  Icons.remove_circle_outline,
+                  '把 ${body.name} 的标记从图上隐去',
+                  !isHidden,
+                  () => setState(() => _hiddenMovingBodies.add(body.name)),
+                  dense: true,
+                ),
+                _batchButton(
+                  Icons.add_circle_outline,
+                  '显示 ${body.name} 的标记',
+                  isHidden,
+                  () => setState(() => _hiddenMovingBodies.remove(body.name)),
+                  dense: true,
+                ),
+              ],
+            )
+          : null,
     );
   }
 
@@ -2961,8 +3220,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         }
       });
 
-  /// 一次管全部星点和深空天体标记。
-  void _setAllCircles(bool hidden, List<SkyObject> deepSkyObjects) =>
+  /// 一次管全部星点、深空天体和系内天体的标记。
+  void _setAllCircles(
+    bool hidden,
+    List<SkyObject> deepSkyObjects,
+    List<MovingBodySuspicion> movingBodies,
+  ) =>
       setState(() {
         _hiddenGroups
           ..clear()
@@ -2975,8 +3238,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           _hiddenDeepSkyObjects.addAll(
             deepSkyObjects.map((object) => object.name),
           );
+          _hiddenMovingBodies.addAll(
+            movingBodies.map((body) => body.name),
+          );
         } else {
           _hiddenDeepSkyObjects.clear();
+          _hiddenMovingBodies.clear();
         }
       });
 
@@ -3549,6 +3816,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   ///
   /// 那句不确定度说明是这块的一部分，不是可选的点缀：行星识别一旦给错就是错的，
   /// 所以结论和「它凭什么可能不成立」必须同时出现在屏幕上。
+  /// 保存过的记录里那一块「疑似运动天体」。
+  ///
+  /// 两段的说法必须分开：认出来的写「差多少角秒」，没认出来的**不能写差数**
+  /// ——那个差数根本不存在，写了就是把「按星历它在这儿」说成「我看见它了」。
+  /// 所以名字后面跟的是类别，不是距离：类别是事实，距离是结论。
   Widget _movingBodiesNotice(List<MovingBodyEntry> bodies) => Container(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
@@ -3576,7 +3848,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 3),
                 child: Text(
-                  body.describe,
+                  '${body.name}（${body.kind.label}）${body.describeWithoutName}',
                   style: const TextStyle(fontSize: 13, height: 1.4),
                 ),
               ),
@@ -3589,7 +3861,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 color: Color(0xFF8192A8),
               ),
             ),
-          ],
+            if (bodies.any((body) => !body.detected)) ...[
+              const SizedBox(height: 5),
+              const Text(
+                unidentifiedBodyCaution,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.45,
+                  color: Color(0xFF8192A8),
+                ),
+              ),
+            ],          ],
         ),
       );
 

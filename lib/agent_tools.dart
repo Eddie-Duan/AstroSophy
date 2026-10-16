@@ -1,5 +1,11 @@
 import 'package:astrosophy/history.dart' show SavedAnalysis;
 import 'package:astrosophy/models.dart' show SolveSource;
+import 'package:astrosophy/smallbodies.dart'
+    show
+        SmallBodyCatalog,
+        magnitudeOf,
+        positionOf,
+        smallBodyPhotoLimitMagnitude;
 
 typedef AgentActionHandler = Future<Object?> Function(
   String name,
@@ -14,12 +20,19 @@ class AgentTools {
   const AgentTools({
     required this.report,
     required this.loadHistory,
+    this.loadSmallBodies,
     this.handleAction,
   });
 
   final Map<String, Object?> report;
   final AgentHistoryLoader loadHistory;
   final AgentActionHandler? handleAction;
+
+  /// 读内置小天体目录。为 null 时 `find_small_body` 不可用。
+  ///
+  /// 做成回调而不是直接在构造时读：目录只在用户真的问起时才需要，而它要读
+  /// 192 KB 的资源文件。不问就不读。
+  final Future<SmallBodyCatalog> Function()? loadSmallBodies;
 
   Future<Object?> execute(
     String name,
@@ -36,6 +49,13 @@ class AgentTools {
           throw const FormatException('天体名称不能为空且不能超过 120 个字符。');
         }
         return _findCatalogObjects(query.trim());
+      case 'find_small_body':
+        _checkArguments(arguments, const {'query'});
+        final query = arguments['query'];
+        if (query is! String || query.trim().isEmpty || query.length > 120) {
+          throw const FormatException('天体名称不能为空且不能超过 120 个字符。');
+        }
+        return _findSmallBody(query.trim());
       case 'list_observations':
         _checkArguments(arguments, const {'limit'});
         final limit = arguments['limit'];
@@ -143,7 +163,13 @@ class AgentTools {
   Map<String, Object?> _findCatalogObjects(String query) {
     final normalized = query.toLowerCase();
     final matches = <Map<String, Object?>>[];
-    for (final key in const ['catalog_stars', 'deep_sky_objects']) {
+    for (final key in const [
+      'catalog_stars',
+      'deep_sky_objects',
+      // 系内天体（行星、矮行星、小行星、彗星）也算「已识别的天体」：用户问
+      // 「这张照片里有灶神星吗」，答案就在这一栏里。
+      'moving_bodies',
+    ]) {
       final rows = report[key];
       if (rows is! List) continue;
       for (final row in rows) {
@@ -161,6 +187,57 @@ class AgentTools {
       'objects': matches.take(12).toList(growable: false),
       if (matches.isEmpty) 'message': '当前视场的已识别天体中没有匹配项。',
       if (matches.length > 12) 'truncated': true,
+    };
+  }
+
+  /// 一颗小天体现在在哪儿、多亮。
+  ///
+  /// 和 [report] 里那一栏的区别是**时刻**：报告说的是「拍这张照片的时候」，
+  /// 这里说的是「现在」。两者都对，回答的问题不一样，所以返回里写明了
+  /// `computed_at`，免得模型把两个混成一个。
+  ///
+  /// 位置是两体近似，信息量全在「表是哪天建的」上——表越旧越不准。所以
+  /// 返回里带上 `catalog_built`，并且明说这件事，不假装它是精确定位。
+  Future<Map<String, Object?>> _findSmallBody(String query) async {
+    final loader = loadSmallBodies;
+    if (loader == null) {
+      throw StateError('当前环境未启用此 Agent 操作。');
+    }
+    final catalog = await loader();
+    final body = catalog.find(query);
+    if (body == null) {
+      return {
+        'query': query,
+        'found': false,
+        'message': '内置的太阳系小天体目录里没有这一颗。目录里有 16 颗亮小行星、'
+            '10 颗矮行星和全部 939 颗彗星。',
+      };
+    }
+    final moment = DateTime.now().toUtc();
+    final position = positionOf(body, moment);
+    final magnitude = magnitudeOf(body, moment);
+    final rough = !body.magnitudeIsReliable;
+    return {
+      'query': query,
+      'found': true,
+      'name': body.name,
+      'designation': body.designation,
+      'kind': body.kind.label,
+      'computed_at': moment.toIso8601String(),
+      if (position != null) 'ra_deg': position.ra,
+      if (position != null) 'dec_deg': position.dec,
+      if (position != null) 'distance_au': position.distanceAu,
+      // 彗星的 k1 八成是 MPC 填的缺省值，算出来的亮度可能差好几等，所以
+      // 宁可空着也不把这种数交给模型。
+      if (magnitude != null && !rough) 'magnitude': double.parse(magnitude.toStringAsFixed(1)),
+      'magnitude_is_rough': rough,
+      'catalog_built': catalog.built.isEmpty ? null : catalog.built,
+      if (magnitude != null && !rough)
+        'photographable_with_a_phone': magnitude <= smallBodyPhotoLimitMagnitude,
+      'note': '位置按两体近似从内置根数表推算（表建于 ${catalog.built}），'
+          '离这个日期越远越不准：谷神星三年能偏二十角分。'
+          '${rough ? '这颗彗星的亮度用的是缺省光度参数，只能当个大概。' : ''}'
+          '${magnitude != null && !rough && magnitude > smallBodyPhotoLimitMagnitude ? '它比手机能拍到的极限还暗。' : ''}',
     };
   }
 

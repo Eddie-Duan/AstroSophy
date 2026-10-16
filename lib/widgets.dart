@@ -499,46 +499,74 @@ class DetectedStarsPainter extends CustomPainter {
     // 疑似运动天体最后画，压在最上面：它是这张图上最稀有、也最该被先看到的
     // 结论，被别的圈盖住就白判了。
     //
-    // 三处刻意的选择，都是为了不把它画得比它实际有多硬：
-    //   * 圈用**虚线**。图上其余两套圈都是实线（薄荷色是星点、粉色是深空
-    //     天体），而这里的结论是「疑似」——判据依赖星历精度，虚线和实线在
-    //     视觉上正好是「大概在这儿」和「就在这儿」的区别。
-    //   * 圆的大小**不跟角尺寸走**，和深空天体那一套相反。行星的视面在手机
-    //     照片上小到分辨不出来（木星冲日也才 49″），画一个按角尺寸缩放的圆
-    //     会让人以为看到了圆面。这里的圈只表示「它在这儿」。
-    //   * 星历算出的位置单独画一个十字，不和圈合并。两个记号错开的那点距离
-    //     就是这个结论的不确定度——把它画出来，用户才看得见「疑似」有多大。
+    // 图上总共四套记号，两两都能一眼分开：
+    //
+    //   * 亮星与检出点源：**实线细圆**，薄荷绿（`kMint`）。拉长的那种改画椭圆，
+    //     因为「这是条线还是颗星」在图上意义完全不同。
+    //   * 深空天体：**实线圆**，粉色，圆的**大小跟着天体自身的角尺寸走**——
+    //     M31 用一个小圈住核心会让人以为那就是它的全部。
+    //   * 行星与矮行星：**虚线圆 ＋ 十字**，琥珀色。视面在手机照片上分辨不出来，
+    //     所以圈只表示「它在这儿」；十字是星历算出的位置，两个记号错开的那点距离
+    //     就是这个结论的不确定度。
+    //   * 彗星与小行星：**四角取景框 ＋ 十字**，浅蓝色。换形状而不是只换颜色，
+    //     是因为这两类的来路不一样——那一套位置来自构建时抓的小天体目录，而不是
+    //     行星那张近似根数表，精度和时效都不同；只靠深浅区分，色弱的人分不出来。
+    //
+    // 用虚线是有意的：图上的虚线记号一律表示「按表算，它在这儿」，不是「我看见了」。
     final bodyPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6
       ..color = const Color(0xFFFFAB40);
+    final smallBodyPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..color = const Color(0xFF7FD8FF);
     final predictedPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2
       ..color = const Color(0xFFFFAB40).withValues(alpha: 0.75);
+    final smallBodyPredictedPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = const Color(0xFF7FD8FF).withValues(alpha: 0.75);
     final bodyLabelStyle = const TextStyle(
       color: Color(0xFFFFAB40),
       fontSize: 10,
       fontWeight: FontWeight.w700,
       shadows: [Shadow(color: Colors.black, blurRadius: 5)],
     );
+    final smallBodyLabelStyle = bodyLabelStyle.copyWith(
+      color: const Color(0xFF7FD8FF),
+    );
     for (final body in bodies) {
+      // 「位置算得出来、这张图上没认出来」的那一类什么都不画。
+      //
+      // 这一条不是省略，是实话：那种条目说的是「它今天在这张照片的这个位置上，
+      // 但亮度不够，这个器材拍不到」。给它画个记号就等于宣称看见了。
+      if (!body.detected) continue;
       final found = toCanvas(body.x, body.y);
-      _dashedCircle(canvas, found, 11, bodyPaint);
+      final major = body.kind.isMajorPlanet;
+      final paint = major ? bodyPaint : smallBodyPaint;
+      if (major) {
+        _dashedCircle(canvas, found, 11, paint);
+      } else {
+        _bracketFrame(canvas, found, 13, paint);
+      }
 
       final predicted = _predictedPoint(body, toCanvas, destination, scale);
       if (predicted != null) {
         // 十字，臂长 5 像素。画成小号是有意的：它是「星历说的位置」，一个
         // 参考点，不该和那个表示检出的圈抢注意力。
+        final crossPaint = major ? predictedPaint : smallBodyPredictedPaint;
         canvas.drawLine(
           predicted - const Offset(5, 0),
           predicted + const Offset(5, 0),
-          predictedPaint,
+          crossPaint,
         );
         canvas.drawLine(
           predicted - const Offset(0, 5),
           predicted + const Offset(0, 5),
-          predictedPaint,
+          crossPaint,
         );
       }
 
@@ -548,7 +576,7 @@ class DetectedStarsPainter extends CustomPainter {
           text: separation < movingBodyCoincidenceArcsec
               ? '${body.name} · 位置重合'
               : '${body.name} · 差 ${separation.round()}″',
-          style: bodyLabelStyle,
+          style: major ? bodyLabelStyle : smallBodyLabelStyle,
         ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.55);
@@ -641,6 +669,19 @@ class DetectedStarsPainter extends CustomPainter {
         canvas.drawPath(metric.extractPath(start, end), paint);
         start = end + 3;
       }
+    }
+  }
+
+  /// 画一个四角取景框——四个角上的直角，中间留空。
+  ///
+  /// 用小行星和彗星。形状和圆差别够大：在密密麻麻的星点里，「方框角」和「圆」
+  /// 不会看混，而只换一种颜色（哪怕换得很远）在暗底小图上仍然像同一类东西。
+  void _bracketFrame(Canvas canvas, Offset center, double half, Paint paint) {
+    final arm = half * 0.55;
+    for (final (dx, dy) in const [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]) {
+      final corner = Offset(center.dx + dx * half, center.dy + dy * half);
+      canvas.drawLine(corner, Offset(corner.dx - dx * arm, corner.dy), paint);
+      canvas.drawLine(corner, Offset(corner.dx, corner.dy - dy * arm), paint);
     }
   }
 

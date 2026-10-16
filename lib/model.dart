@@ -73,13 +73,34 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'find_catalog_object',
-        'description': '按名称搜索当前照片视场内已识别的恒星或深空天体。',
+        'description': '按名称搜索当前照片视场内已识别的恒星、深空天体或系内天体'
+            '（行星、矮行星、小行星、彗星）。',
         'parameters': {
           'type': 'object',
           'properties': {
             'query': {
               'type': 'string',
-              'description': '要查找的天体名称，例如天狼星或 M31。',
+              'description': '要查找的天体名称，例如天狼星、M31 或灶神星。',
+            },
+          },
+          'required': ['query'],
+          'additionalProperties': false,
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'find_small_body',
+        'description': '查一颗太阳系小天体**现在**在哪儿、多亮。用的是应用内置的'
+            '根数表，和当前照片无关；位置是两体近似，离表的构建日期越远越不准。'
+            '目录里有 16 颗亮小行星、10 颗矮行星和全部彗星。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'query': {
+              'type': 'string',
+              'description': '中文名或编号，例如灶神星、Vesta、共工星、2P。',
             },
           },
           'required': ['query'],

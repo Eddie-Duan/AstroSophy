@@ -4,6 +4,7 @@ import 'analysis.dart';
 import 'deepsky_names.dart';
 import 'models.dart';
 import 'moon.dart';
+import 'smallbodies.dart';
 
 /// 报告层：把测量结果翻译成两类东西——给人看的，和给模型看的。
 ///
@@ -101,14 +102,25 @@ Map<String, Object?> buildAgentReport(
       for (final entry in buildMovingBodyEntries(solve))
         {
           'name': entry.name,
-          'separation_arcsec': entry.separationArcsec,
-          'magnitude': entry.magnitude,
+          'kind': entry.kind.name,
+          'kind_label': entry.kind.label,
+          'separation_arcsec': entry.detected ? entry.separationArcsec : null,
+          'magnitude': entry.magnitudeIsRough ? null : entry.magnitude,
+          'magnitude_is_rough': entry.magnitudeIsRough,
           'distance_au': entry.distanceAu,
+          // 有没有在图上认出来。为 false 时上面那个 separation 是空的——那个
+          // 差数不存在，不能给模型一个「差 0 角秒」去发挥。
+          'detected': entry.detected,
+          'catalog_built': entry.catalogBuilt,
         },
     ],
     'moving_body_caution': solve == null || solve.movingBodies.isEmpty
         ? null
         : movingBodyCaution,
+    'unidentified_body_caution': solve == null ||
+            !solve.movingBodies.any((body) => !body.detected)
+        ? null
+        : unidentifiedBodyCaution,
     'catalog_warning': solve?.catalogWarning,
     'magnitude_zero_point': solve?.magnitudeZeroPoint,
     'photometry_scatter_mag': solve?.magnitudeScatter,
@@ -248,9 +260,14 @@ String buildHeadlineMarkdown(
   final bodies = buildMovingBodyEntries(solve);
   for (final body in bodies) {
     // 行星是这张图上最稀有、也最该被先看到的结论，排在第一条。
-    lines.add('- ==${body.name}==${
-        body.magnitude == null ? '' : '，星等约 ${body.magnitude!.toStringAsFixed(1)}'
-    }，${body.separationLabel}');
+    if (!body.detected) {
+      lines.add('- ${body.name}（${body.kind.label}）${body.magnitudeLabel}'
+          '${body.reachLabel}——图上没有对上');
+      continue;
+    }
+    lines.add('- ==${body.name}==（${body.kind.label}）'
+        '${body.magnitudePhrase == null ? '' : '，${body.magnitudePhrase}'}'
+        '，${body.separationLabel}');
   }
 
   final named = _chineseNamedStars(solve);
@@ -902,14 +919,32 @@ class MovingBodyEntry {
   const MovingBodyEntry({
     required this.name,
     required this.separationArcsec,
+    this.kind = BodyKind.planet,
     this.magnitude,
     this.distanceAu,
+    this.detected = true,
+    this.magnitudeIsRough = false,
+    this.catalogBuilt,
   });
 
   final String name;
+
+  /// 哪一类天体。报告里要写出来——「灶神星」和「木星」的可信程度不一样，
+  /// 前者来自构建时抓的内置表，后者来自写在代码里的近似根数表。
+  final BodyKind kind;
+
   final double separationArcsec;
   final double? magnitude;
   final double? distanceAu;
+
+  /// 图上到底认出来了没有。见 [MovingBodySuspicion.detected]。
+  final bool detected;
+
+  /// 亮度是不是只能当个大概（彗星的 k1 八成是缺省值）。这种数字不写进报告。
+  final bool magnitudeIsRough;
+
+  /// 内置小天体表的构建日期。
+  final String? catalogBuilt;
 
   /// 「和星历位置差 42″」。
   String get separationLabel {
@@ -918,15 +953,46 @@ class MovingBodyEntry {
     return '和星历位置差 ${seconds.round()}″';
   }
 
-  String get magnitudeLabel =>
-      magnitude == null ? '' : '，星等约 ${magnitude!.toStringAsFixed(1)}';
+  /// 「亮度约 8.0 等」；不可靠或没有时为 null。
+  ///
+  /// 不可靠的亮度宁可不写：写出来用户就会拿它和星表里的星等比，而那个数可能差
+  /// 好几等。
+  String? get magnitudePhrase => magnitude == null || magnitudeIsRough
+      ? null
+      : '亮度约 ${magnitude!.toStringAsFixed(1)} 等';
+
+  /// 「，亮度约 8.0 等」。
+  String get magnitudeLabel {
+    final phrase = magnitudePhrase;
+    return phrase == null ? '' : '，$phrase';
+  }
 
   String get distanceLabel => distanceAu == null
       ? ''
       : '，距地球约 ${distanceAu!.toStringAsFixed(2)} 个天文单位';
 
-  /// 一句话讲完这一条：位置、亮度、距离，以及它和星历差了多少。
-  String get describe => '$name$distanceLabel$magnitudeLabel，$separationLabel';
+  /// 「，这个器材拍不到」——只有算出来比手机能记到的极限还暗时才这么说。
+  ///
+  /// 不说的话，用户看到「冥王星 14.6 等」只会以为是我们没找到。
+  String get reachLabel {
+    final value = magnitude;
+    if (value == null) return '';
+    return value > smallBodyPhotoLimitMagnitude
+        ? '，比手机能拍到的极限还暗，这个器材拍不到'
+        : '，亮度上够得着，但这张图上没有对上';
+  }
+
+  /// 一句话讲完这一条。
+  ///
+  /// 认出来的讲位置、亮度、距离，以及它和星历差了多少；没认出来的不能讲「差
+  /// 多少」——那个差数根本不存在。
+  String get describe => detected
+      ? '$name$distanceLabel$magnitudeLabel，$separationLabel'
+      : '$name$distanceLabel$magnitudeLabel$reachLabel';
+
+  /// [describe] 去掉开头的名字。想在名字后面插一句类别（「灶神星（小行星）」）
+  /// 时用，省得把三段拼装再写一遍。
+  String get describeWithoutName => describe.substring(name.length);
 }
 
 /// 落到报告里的那条不确定度说明。
@@ -937,24 +1003,48 @@ class MovingBodyEntry {
 /// 肉眼可见的位置，恒星不会。
 const String movingBodyCaution =
     '这些是「疑似」，不是「确认」。判断依据有两条，缺一不可：星表里这个位置'
-    '查不到星，而且星历算出的位置上有颗亮点。用的星历是近似根数，位置本身有'
-    '角分量级的误差，所以看到「差几十角秒」是正常的。想看得更实，可以过几天'
-    '在同一机位再拍一张：行星会挪位置，恒星不会。';
+    '查不到星，而且星历算出的位置上有颗亮点。行星用的是一张近似根数表，'
+    '位置本身有角分量级的误差，所以看到「差几十角秒」是正常的。'
+    '小行星和彗星的位置来自应用内置的星历表（表上写着构建日期），'
+    '表建好之后就不再更新——离构建日期越远，位置越不准，谷神星三年能偏二十角分。'
+    '想看得更实，可以过几天在同一机位再拍一张：这些天体几天里会挪位置，恒星不会。';
+
+/// 「它在画面里，但没认出来」那一条的说明。
+///
+/// 单独一条，因为这两件事的成因完全不同：认出来是「位置对上了 ＋ 星表里没有星」，
+/// 没认出来是「位置算出来了，但图上找不到够亮的点」——八成是亮度不够。混在一段话
+/// 里说，用户会以为前者也不可信。
+const String unidentifiedBodyCaution =
+    '「画面里还有」那几条是另一回事：它们的位置是算出来的，但图上没有找到能对上'
+    '的亮点。多数情况是亮度不够——手机和小口径望远镜拍不到十几等的天体，'
+    '这跟这个天体在不在那儿没有关系。';
 
 /// 把解算结果里的疑似运动天体整理成报告条目。
+///
+/// 排序分两段：真的认出来的按「和星历差多少」排（差得越少，「就是它」越站得住），
+/// 没认出来的接在后面按亮度排（最亮的排前面，用户最可能问的就是它）。
 List<MovingBodyEntry> buildMovingBodyEntries(SolveResult? solve) {
   final bodies = solve?.movingBodies;
   if (bodies == null || bodies.isEmpty) return const [];
-  // 和星历差得少的排前面：差得越少，「就是它」越站得住。
-  final sorted = [...bodies]
-    ..sort((a, b) => a.separationArcsec.compareTo(b.separationArcsec));
+  final detected = <MovingBodySuspicion>[
+    for (final body in bodies)
+      if (body.detected) body,
+  ]..sort((a, b) => a.separationArcsec.compareTo(b.separationArcsec));
+  final unidentified = <MovingBodySuspicion>[
+    for (final body in bodies)
+      if (!body.detected) body,
+  ]..sort((a, b) => (a.magnitude ?? 99).compareTo(b.magnitude ?? 99));
   return [
-    for (final body in sorted)
+    for (final body in [...detected, ...unidentified])
       MovingBodyEntry(
         name: body.name,
         separationArcsec: body.separationArcsec,
+        kind: body.kind,
         magnitude: body.magnitude,
         distanceAu: body.distanceAu,
+        detected: body.detected,
+        magnitudeIsRough: body.magnitudeIsRough,
+        catalogBuilt: body.catalogBuilt,
       ),
   ];
 }
@@ -1033,9 +1123,24 @@ String _summary(
   // 讲一句、并当场把「疑似」两个字说出口——总结里出现的东西用户会当成结论。
   if (solve != null && solve.movingBodies.isNotEmpty) {
     final entries = buildMovingBodyEntries(solve);
-    buffer.write('另外，图上 ${entries.map((entry) => entry.describe).join('、')}，'
-        '疑似是行星这一类会动的天体——'
-        '这个判断依赖拍摄时刻，也依赖星历的精度，所以只说疑似。');
+    final detected = [
+      for (final entry in entries)
+        if (entry.detected) entry,
+    ];
+    final unidentified = [
+      for (final entry in entries)
+        if (!entry.detected) entry,
+    ];
+    if (detected.isNotEmpty) {
+      buffer.write('另外，图上 '
+          '${detected.map((entry) => '${entry.name}（${entry.kind.label}）${entry.describeWithoutName}').join('、')}，'
+          '疑似是行星这一类会动的天体——'
+          '这个判断依赖拍摄时刻，也依赖星历的精度，所以只说疑似。');
+    }
+    if (unidentified.isNotEmpty) {
+      buffer.write('${detected.isEmpty ? '另外，' : ''}这张照片上还应该有 '
+          '${unidentified.map((entry) => entry.describe).join('、')}。');
+    }
   }
   return buffer.toString();
 }

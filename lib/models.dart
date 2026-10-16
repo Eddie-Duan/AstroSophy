@@ -485,6 +485,35 @@ class Wcs {
   }
 }
 
+/// 一类太阳系天体。
+///
+/// 分出来只有一个理由：**图上要用不同的记号**。行星和矮行星算一类，彗星和小行星
+/// 算另一类——前者的视面在手机照片上完全分辨不出来（木星冲日也才 49″），记号只能
+/// 表示「它在这儿」；后者的位置来自另一份根数表（构建时抓的小天体目录，不是那张
+/// 近似行星根数表），精度和时效都不一样。两类混着画，用户就没法从图上判断哪个记号
+/// 代表哪条判据。
+enum BodyKind {
+  planet('行星'),
+  dwarfPlanet('矮行星'),
+  asteroid('小行星'),
+  comet('彗星');
+
+  const BodyKind(this.label);
+
+  /// 中文类别名，报告里直接写。
+  final String label;
+
+  /// 行星和矮行星画同一种记号，理由见类注释。
+  bool get isMajorPlanet => this == BodyKind.planet || this == BodyKind.dwarfPlanet;
+
+  static BodyKind parse(String? raw) {
+    for (final kind in BodyKind.values) {
+      if (kind.name == raw) return kind;
+    }
+    return BodyKind.planet;
+  }
+}
+
 /// 一颗疑似运动天体：星历说它在这儿，图上这儿也真有一颗星表解释不了的亮点。
 ///
 /// 「疑似」两个字是认真的：判据是「星表在这一带没有星」＋「星历位置对得上
@@ -502,10 +531,17 @@ class MovingBodySuspicion {
     this.magnitude,
     this.distanceAu,
     this.discDiameterArcsec,
+    this.kind = BodyKind.planet,
+    this.detected = true,
+    this.magnitudeIsRough = false,
+    this.catalogBuilt,
   });
 
-  /// 中文名，直接给用户看（「木星」）。
+  /// 中文名，直接给用户看（「木星」「灶神星」）。
   final String name;
+
+  /// 哪一类天体，决定图上用哪个记号。
+  final BodyKind kind;
 
   /// 星历给出的位置。
   final double ra;
@@ -529,6 +565,29 @@ class MovingBodySuspicion {
   /// 这一项目前恒为 null。
   final double? discDiameterArcsec;
 
+  /// 图上到底有没有认出这颗天体。
+  ///
+  /// 为 false 时 [x]、[y] 是**星历预测**的位置，不是检出到的亮点：意思是「按星历
+  /// 它就在这一带，但这张图上没能把它认出来」——通常是亮度不够。这种条目只进报告
+  /// （说明「它今天在这儿，但拍不到」），**图上一个记号都不画**：画了就等于宣称
+  /// 看见了，而这一条恰恰是「没看见」。
+  final bool detected;
+
+  /// [magnitude] 是不是只能当个大概。
+  ///
+  /// 彗星专用：MPC 的 k1 在八成彗星上填的是缺省值 4.0，用缺省值算出来的亮度可能
+  /// 差好几等。这种数字照样参与「够不够亮」的筛选，但不写进报告——写出来就成了
+  /// 一个看着精确、实际没有依据的数。
+  final bool magnitudeIsRough;
+
+  /// 小行星和彗星的位置来自哪一天构建的内置表（``YYYY-MM-DD``）。
+  ///
+  /// 行星那条路不用：那张近似根数表是写在代码里的，年年一样。内置小天体表不一样
+  /// ——它在构建的那一天抓一次 JPL 的根数，之后就不再变。表越旧，算出来的位置越
+  /// 偏（实测谷神星三年偏 20 角分），所以这个日期要跟着结论一起给出去，用户才
+  /// 判断得出「该不该信」。
+  final String? catalogBuilt;
+
   Map<String, Object?> toJson() => {
         'name': name,
         'ra_deg': ra,
@@ -539,6 +598,10 @@ class MovingBodySuspicion {
         'magnitude': magnitude,
         'distance_au': distanceAu,
         'disc_diameter_arcsec': discDiameterArcsec,
+        'kind': kind.name,
+        'detected': detected,
+        'magnitude_is_rough': magnitudeIsRough,
+        'catalog_built': catalogBuilt,
       };
 
   /// 从历史记录里读回来。
@@ -557,6 +620,12 @@ class MovingBodySuspicion {
         magnitude: _nullableNumber(json['magnitude']),
         distanceAu: _nullableNumber(json['distance_au']),
         discDiameterArcsec: _nullableNumber(json['disc_diameter_arcsec']),
+        // 老记录里没有这几个键。缺省按「行星 ＋ 真的认出来了」读，这样一条
+        // 2026 年以前存下的「木星」不会突然变成「没认出」。
+        kind: BodyKind.parse(json['kind'] as String?),
+        detected: json['detected'] != false,
+        magnitudeIsRough: json['magnitude_is_rough'] == true,
+        catalogBuilt: json['catalog_built'] as String?,
       );
 }
 

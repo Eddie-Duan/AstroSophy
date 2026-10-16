@@ -7,6 +7,7 @@ import 'deepsky.dart';
 import 'ephemeris.dart';
 import 'models.dart';
 import 'moving.dart';
+import 'smallbodies.dart';
 
 /// 解算进度的一次快照。
 ///
@@ -63,6 +64,7 @@ class PlateSolver {
   PlateSolver(
     this.catalog, {
     this.deepSky,
+    this.smallBodies,
     this.neighbours = 6,
   });
 
@@ -71,6 +73,11 @@ class PlateSolver {
   /// 内置深空目录。给了就在解算结果里带上「画面中的深空天体」，没给就只有
   /// 恒星——本机解算本来也只需要恒星表，深空目录是纯粹多给的一层信息。
   final DeepSkyCatalog? deepSky;
+
+  /// 内置小天体目录（亮小行星、矮行星、彗星）。和深空目录一样是「多给的一层」：
+  /// 没给的时候行星那条链路照旧（靠 `ephemeris.dart` 那张近似根数表），只是少掉
+  /// 小行星和彗星。
+  final SmallBodyCatalog? smallBodies;
 
   /// 每颗星取多少近邻来组三角形。索引端和图内端必须用同一个值，
   /// 否则两边算出来的三角形不是同一批星，指纹对不上。
@@ -1338,10 +1345,10 @@ class PlateSolver {
     );
   }
 
-  /// 标出疑似运动天体（行星、太阳）。
+  /// 标出疑似运动天体（行星、小行星、彗星、太阳）。
   ///
-  /// [moment] 为 null 就原样返回：行星、彗星、小行星的位置随日期变，没有拍摄
-  /// 时刻就没有判据可说，这时候报任何东西都是猜。
+  /// [moment] 为 null 就原样返回：这些天体的位置随日期变，没有拍摄时刻就没有
+  /// 判据可说，这时候报任何东西都是猜。
   ///
   /// 判据的前一半落在这里——「星表在这一带没有星」。所以这件事必须由持有星表
   /// 的一侧来做，`moving.dart` 只管几何。放在 [solve] 之外而不是塞进去，是因为
@@ -1356,9 +1363,13 @@ class PlateSolver {
 
     // 太阳也从同一组根数白拿一个：地心看到的太阳方向就是地球日光心方向的
     // 反方向，不需要为它在表里单占一行。
+    final sun = sunPosition(moment);
     final predictions = <PredictedBody>[
       ...predictedBodies(moment),
-      sunPosition(moment),
+      sun,
+      // 小行星和彗星来自另一份表（构建时抓的内置目录），亮度先筛一道再比位置。
+      // 顺序不能反：全部 939 颗彗星一起比，8 角分容差下随机吻合的期望接近 5 个。
+      ...?smallBodies?.visibleBodies(moment, sunRa: sun.ra, sunDec: sun.dec),
     ];
 
     final findings = matchMovingBodies(
@@ -1371,8 +1382,71 @@ class PlateSolver {
       hasCatalogStarNear: (ra, dec, radiusArcmin) =>
           catalog.starsNear(ra, dec, radiusArcmin / 60).isNotEmpty,
     );
-    if (findings.isEmpty) return result;
-    return result.withMovingBodies(findings);
+
+    final unmatched = _unidentifiedComponents(
+      smallBodies,
+      moment,
+      findings,
+      wcs,
+      analysis,
+    );
+    if (findings.isEmpty && unmatched.isEmpty) return result;
+    return result.withMovingBodies([...findings, ...unmatched]);
+  }
+
+  /// 画面里那几颗「位置算得出来、图上却没认出来」的亮小天体。
+  ///
+  /// 这一条专门为了不静默省略。内置目录里那 21 颗是逐个挑出来的，用户很可能正是
+  /// 冲着其中某一颗去的：冥王星只有 14.6 等、阅神星 18.6 等，手机根本拍不到——
+  /// 报告里什么都不说，用户只会以为这个 APP 不认识它。所以拍不到的也要说一句
+  /// 「它今天在这张照片的这个位置，但亮度 X 等，这个器材拍不到」。
+  ///
+  /// 只对那 21 颗逐个做，不对 939 颗彗星做：彗星本来就是「够亮才参与比对」，
+  /// 给每一张照片都来一段「今天有 400 颗彗星在画面里但你看不见」，那不是在告知，
+  /// 是在淹没。
+  ///
+  /// 一次最多给 3 颗，按亮度取最亮的：广角照片里同时落进四五颗主带小行星是
+  /// 常事，全列出来这条提示就变成了噪声。
+  List<MovingBodySuspicion> _unidentifiedComponents(
+    SmallBodyCatalog? catalog,
+    DateTime moment,
+    List<MovingBodySuspicion> findings,
+    Wcs wcs,
+    SkyAnalysis analysis,
+  ) {
+    if (catalog == null || catalog.components.isEmpty) return const [];
+    final identified = {
+      for (final body in findings)
+        if (body.detected) body.name,
+    };
+    final found = <MovingBodySuspicion>[];
+    for (final body in catalog.components) {
+      if (identified.contains(body.name)) continue;
+      final position = positionOf(body, moment);
+      if (position == null) continue;
+      final (x, y) = wcs.worldToPixel(position.ra, position.dec);
+      if (!x.isFinite || !y.isFinite) continue;
+      if (x < 0 || y < 0 || x > analysis.width || y > analysis.height) continue;
+      found.add(
+        MovingBodySuspicion(
+          name: body.name,
+          ra: position.ra,
+          dec: position.dec,
+          x: x,
+          y: y,
+          separationArcsec: 0,
+          magnitude: magnitudeOf(body, moment),
+          distanceAu: position.distanceAu,
+          kind: body.kind,
+          // 关键：没有检出，所以图上一个记号都不画。
+          detected: false,
+          magnitudeIsRough: !body.magnitudeIsReliable,
+          catalogBuilt: catalog.built.isEmpty ? null : catalog.built,
+        ),
+      );
+    }
+    found.sort((a, b) => (a.magnitude ?? 99).compareTo(b.magnitude ?? 99));
+    return found.take(3).toList();
   }
 
   /// 给在线解算带回来的深空天体补上角尺寸。
