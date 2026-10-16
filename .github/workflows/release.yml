@@ -31,7 +31,25 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
+      - name: Write the signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ASTROSOPHY_KEYSTORE_BASE64 }}
+        run: |
+          # 缺凭据就直接失败，不退到 debug 签名。理由：debug keystore 是每个
+          # runner 现生成的，用它签出来的包签名每次都不一样，用户装上就得先
+          # 卸载——API Key 和观星仓库一起没。宁可这一次不发版，也不能发出一个
+          # 会清空用户数据的包。怎么配见 docs/TECHNICAL.md。
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::ASTROSOPHY_KEYSTORE_BASE64 is not set. A release signed with the runner's throwaway debug key cannot be installed over the previous one, and uninstalling wipes the user's API key and observation log. See docs/TECHNICAL.md."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/astrosophy-release.jks
       - run: flutter build apk --release
+        env:
+          ASTROSOPHY_STORE_FILE: astrosophy-release.jks
+          ASTROSOPHY_STORE_PASSWORD: ${{ secrets.ASTROSOPHY_STORE_PASSWORD }}
+          ASTROSOPHY_KEY_ALIAS: ${{ secrets.ASTROSOPHY_KEY_ALIAS }}
+          ASTROSOPHY_KEY_PASSWORD: ${{ secrets.ASTROSOPHY_KEY_PASSWORD }}
       - name: Collect the APK
         run: |
           # 产物交给用户时叫 AstroSophy.apk。`flutter build apk` 写出来的是

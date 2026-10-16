@@ -27,6 +27,9 @@ render.experimental.xml
 # Keystore files
 *.jks
 *.keystore
+# 正式签名凭据。丢了就再也无法覆盖安装，所以它只在开发者手里和 CI 的
+# secrets 里各存一份，绝不进仓库。
+key.properties
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json

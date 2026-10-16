@@ -169,7 +169,24 @@ p ≈ 图内星点数 × π × 3² / 像面面积        期望假解数 ≈ C(�
 3. 在仓库根目录运行 `flutter pub get` 和 `flutter run`，或双击 `START.bat`。
 4. 运行 `flutter test` 和 `flutter analyze` 执行项目验证；仓库的 GitHub Actions 会在每次推送时跑这两步、构建 debug APK，并把 APK 作为产物上传，保留 30 天。
 5. release APK 在构建之后由脚本改名成 `AstroSophy.apk`（`BUILD_APK.bat` 与 `release.yml` 各改一次），而不是去改 Gradle 的产物名。**这是量过成本之后的决定**：AGP 8 里能改产物名的入口要么已经废弃（`archivesBaseName`），要么根本不存在（`variant.artifacts.get(SingleArtifact.APK)` 返回的是只读的 `Provider<Directory>`），而改名这件事本身在脚本里就是一次 `move`。代价是多一个约定：`app-release.apk` 这个名字还可能从 `flutter build apk` 直接跑出来，脚本负责兜住。
-6. 仓库中的 release APK 使用本机 Android debug keystore 签名，仅供个人设备安装；若有合法许可并另作分发，须按 Flutter Android 文档配置正式签名凭据。不要把 keystore 或密钥提交到 Git。
+6. **release 用正式签名凭据，不能用 debug keystore。** 位置以前写的是 `signingConfig = signingConfigs.getByName("debug")`，而 GitHub runner 每次都是全新机器、`~/.android/debug.keystore` 是那台机器现生成的 —— 于是每一版 APK 的**签名都不一样**。Android 只允许同一把钥匙签名的包覆盖安装，签名一变就得先卸载，应用内存储（API Key、观星仓库）跟着一起被清空。症状是「从 Releases 下载的更新每次都要重填 Key、记录全没了」。
+
+   现在的取法：`android/app/build.gradle.kts` 先找环境变量 `ASTROSOPHY_STORE_FILE` / `ASTROSOPHY_STORE_PASSWORD` / `ASTROSOPHY_KEY_ALIAS` / `ASTROSOPHY_KEY_PASSWORD`（CI 走这条，密码不落盘），找不到再读 `android/key.properties`（本机走这条，已被 gitignore）。两处都没有才退回 debug 签名 —— 本机构建照旧能跑。
+
+   `release.yml` 在缺凭据时**直接报错停下**，不退到 debug 签名：宁可这一次不发版，也不能发出一个会清空用户数据的包。它需要的 4 个仓库 secret：
+
+   | Secret | 内容 |
+   | --- | --- |
+   | `ASTROSOPHY_KEYSTORE_BASE64` | `astrosophy-release.jks` 的 base64 |
+   | `ASTROSOPHY_STORE_PASSWORD` | keystore 密码 |
+   | `ASTROSOPHY_KEY_ALIAS` | 别名（当前是 `astrosophy`） |
+   | `ASTROSOPHY_KEY_PASSWORD` | 该别名的密码 |
+
+   本机生成 base64（在仓库根目录跑）：`[Convert]::ToBase64String([IO.File]::ReadAllBytes("android/app/astrosophy-release.jks"))`。
+
+   **keystore 和它的密码必须自己留一份**：丢了就再也无法覆盖安装同一个应用，用户只能卸载重装。这两样东西绝不提交到 Git。
+
+   换到正式签名的那一刻，已经在用户机上的旧包（debug 签名）无法被覆盖 —— 需要**卸载重装一次**，那是最后一次丢数据。之后就固定下来了。
 
 ## 数据来源与致谢
 

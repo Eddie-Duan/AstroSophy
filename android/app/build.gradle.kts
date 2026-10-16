@@ -1,8 +1,44 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+/// 正式签名凭据从两处按优先级取：
+///
+///   1. **环境变量**（CI）——密码不落盘，只在构建那一层的内存里；
+///   2. **`android/key.properties`**（本机）。
+///
+/// 两处都没有就退回 debug 签名，`flutter run` 和 `BUILD_APK.bat` 照旧能跑。
+///
+/// 为什么 release 必须有正式签名：这个位置以前写的是
+/// `signingConfig = signingConfigs.getByName("debug")`，而 CI 每次都是全新的
+/// runner、`~/.android/debug.keystore` 是那台机器现生成的——于是**每一版 APK
+/// 的签名都不一样**。Android 只允许同一把钥匙签名的包覆盖安装，签名一变就得
+/// 先卸载，应用内存储（API Key、观星仓库）跟着一起被清空。症状就是「从
+/// Releases 下载的更新每次都要重填 Key、记录全没了」。
+val signingProperties = Properties().apply {
+    val file = rootProject.file("key.properties")
+    if (file.exists()) FileInputStream(file).use { load(it) }
+}
+
+fun signingCredential(environment: String, property: String): String? =
+    System.getenv(environment)?.takeIf { it.isNotBlank() }
+        ?: signingProperties.getProperty(property)?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingCredential("ASTROSOPHY_STORE_FILE", "storeFile")
+val releaseStorePassword =
+    signingCredential("ASTROSOPHY_STORE_PASSWORD", "storePassword")
+val releaseKeyAlias = signingCredential("ASTROSOPHY_KEY_ALIAS", "keyAlias")
+val releaseKeyPassword =
+    signingCredential("ASTROSOPHY_KEY_PASSWORD", "keyPassword")
+val hasReleaseSigning = releaseStoreFile != null &&
+    releaseStorePassword != null &&
+    releaseKeyAlias != null &&
+    releaseKeyPassword != null
 
 android {
     namespace = "com.astrosophy.app"
@@ -22,9 +58,28 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                // 没配正式凭据就退回 debug 签名。本机构建、`flutter run` 都照旧，
+                // 但**用它发布的包换不了钥匙**——装到用户机上就得先卸载，数据
+                // 跟着没。CI 那边就不允许这种退路：release 流程在缺少凭据时直接
+                // 报错停下，见 `.github/workflows/release.yml`。
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
