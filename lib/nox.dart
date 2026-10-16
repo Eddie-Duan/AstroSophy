@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'strings.dart';
 import 'markdown.dart';
 import 'model.dart';
 import 'models.dart';
@@ -26,21 +27,8 @@ const noxIcon = Icons.nightlight_round;
 ///
 /// 只写事实，而且只写这个应用真的有的功能——把没有的能力写进去，用户问
 /// 「帮我叠加一下」时它就会一本正经地解释一个不存在的功能。
-const noxAppBrief =
-    '这个应用叫 AstroSophy，把手机拍的星空照片在本机分析，算出拍到了哪片天。\n'
-    '它已经有的能力：本机星点检测，并把文字、表格、大亮斑这类非星空内容剔掉；'
-    '本机天区解算（内置星表，完全离线，不需要网络）；必要时把预览图上传到 '
-    'Astrometry.net 在线解算（要先授权，且只有本机解算失败时才会用到）；'
-    '孔径测光，用 Gaia 反推星等零点；给恒星和深空天体标名字，'
-    '恒星用中文星官名，深空天体用「编号 ＋ 中文常用名」；星座连线；'
-    '用「星表里这里没有星 ＋ 星历说这里有行星」推断疑似运动天体；'
-    '月面的亮面占比与月相（月相需要拍摄时刻，单张照片分不出盈亏）。\n'
-    '它没有的能力（用户问到就直说没有，不要编）：赤道仪或望远镜控制、'
-    '多帧叠加与实时叠加、暗场平场等校准、天文摄影计划与天气预报、'
-    '社区分享。它也做不了科学级测光——输入是手机单张照片。\n'
-    '数据在哪：测量结果全部在本机算，照片默认不出设备；'
-    '保存过的观测在本机「观星仓库」里，可以查看、改名、删除；'
-    '删除只删本机的测量记录和预览图，不动相册里的原图。\n';
+String get noxAppBrief =>
+    t('这个应用叫 AstroSophy，把手机拍的星空照片在本机分析，算出拍到了哪片天。\n它已经有的能力：本机星点检测，并把文字、表格、大亮斑这类非星空内容剔掉；本机天区解算（内置星表，完全离线，不需要网络）；必要时把预览图上传到 Astrometry.net 在线解算（要先授权，且只有本机解算失败时才会用到）；孔径测光，用 Gaia 反推星等零点；给恒星和深空天体标名字，恒星用中文星官名，深空天体用「编号 ＋ 中文常用名」；星座连线；用「星表里这里没有星 ＋ 星历说这里有行星」推断疑似运动天体；月面的亮面占比与月相（月相需要拍摄时刻，单张照片分不出盈亏）。\n它没有的能力（用户问到就直说没有，不要编）：赤道仪或望远镜控制、多帧叠加与实时叠加、暗场平场等校准、天文摄影计划与天气预报、社区分享。它也做不了科学级测光——输入是手机单张照片。\n数据在哪：测量结果全部在本机算，照片默认不出设备；保存过的观测在本机「观星仓库」里，可以查看、改名、删除；删除只删本机的测量记录和预览图，不动相册里的原图。\n');
 
 /// Nox 干活需要的三样东西。
 ///
@@ -159,7 +147,7 @@ class _NoxScreenState extends State<NoxScreen> {
         history: history,
         assistantName: noxName,
         appBrief: noxAppBrief,
-        contextLabel: '当前上下文（应用概况 ＋ 本机记录 ＋ 当前图片，如果有）',
+        contextLabel: t('当前上下文（应用概况 ＋ 本机记录 ＋ 当前图片，如果有）'),
         executeTool: widget.backend.executeTool,
         onToolCall: (name) {
           if (!mounted) return;
@@ -220,7 +208,7 @@ class _NoxScreenState extends State<NoxScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Text(
-                    '本轮查了：${_activity.join('、')}',
+                    t('本轮查了：{0}', [_activity.join(t('、'))]),
                     style: const TextStyle(
                       fontSize: 11.5,
                       color: Color(0xFFA6B5C8),
@@ -252,25 +240,24 @@ class _NoxScreenState extends State<NoxScreen> {
             children: [
               const Icon(noxIcon, size: 42, color: kMint),
               const SizedBox(height: 14),
-              const Text(
-                '我是 $noxName，这个应用里的助手。',
+              Text(
+                t('我是 {0}，这个应用里的助手。', [noxName]),
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 15, height: 1.6),
+                style: const TextStyle(fontSize: 15, height: 1.6),
               ),
               const SizedBox(height: 8),
               if (_noModel) ...[
                 const SizedBox(height: 18),
-                const Text(
-                  '还没有配置模型。Nox 需要你自己的 API Key 才能说话——'
-                  '应用的测量功能不受影响，那些都在本机算。',
+                Text(
+                  t('还没有配置模型。Nox 需要你自己的 API Key 才能说话——应用的测量功能不受影响，那些都在本机算。'),
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, height: 1.6),
+                  style: const TextStyle(fontSize: 12, height: 1.6),
                 ),
                 const SizedBox(height: 10),
                 if (widget.onOpenSettings != null)
                   FilledButton.tonal(
                     onPressed: widget.onOpenSettings,
-                    child: const Text('去配置 API'),
+                    child: Text(t('去配置 API')),
                   ),
               ],
             ],
@@ -333,9 +320,9 @@ class _NoxScreenState extends State<NoxScreen> {
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _send(),
                 enabled: !_busy,
-                decoration: const InputDecoration(
-                  hintText: '问 Nox……',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  hintText: t('问 Nox……'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -344,7 +331,7 @@ class _NoxScreenState extends State<NoxScreen> {
             IconButton.filled(
               onPressed: _busy ? null : _send,
               icon: const Icon(Icons.arrow_upward),
-              tooltip: '发送',
+              tooltip: t('发送'),
             ),
           ],
         ),
@@ -360,16 +347,16 @@ class _NoxTurn {
 
 /// 工具名的中文读法，和结果页那张卡用的是同一套说法。
 String noxToolLabel(String name) => switch (name) {
-      'get_current_report' => '读取当前分析报告',
-      'find_catalog_object' => '查询当前视场天体',
-      'find_small_body' => '查询太阳系小天体位置',
-      'list_observations' => '读取本机观测摘要',
-      'get_observation' => '读取一条观测记录',
-      'save_current_observation' => '请求保存观测',
-      'rename_observation' => '请求重命名观测',
-      'delete_observation' => '请求删除观测',
-      'request_online_solve' => '请求在线解算',
-      'propose_non_sky_regions' => '请求视觉遮罩建议',
-      'open_screen' => '打开页面',
-      _ => '调用工具：$name',
+      'get_current_report' => t('读取当前分析报告'),
+      'find_catalog_object' => t('查询当前视场天体'),
+      'find_small_body' => t('查询太阳系小天体位置'),
+      'list_observations' => t('读取本机观测摘要'),
+      'get_observation' => t('读取一条观测记录'),
+      'save_current_observation' => t('请求保存观测'),
+      'rename_observation' => t('请求重命名观测'),
+      'delete_observation' => t('请求删除观测'),
+      'request_online_solve' => t('请求在线解算'),
+      'propose_non_sky_regions' => t('请求视觉遮罩建议'),
+      'open_screen' => t('打开页面'),
+      _ => t('调用工具：{0}', [name]),
     };

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'strings.dart';
 import 'theme.dart';
 
 /// 新用户引导：首次启动时自动展示，之后可从右上角的问号重播。
@@ -63,7 +64,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
           automaticallyImplyLeading: widget.isReplay,
           actions: [
             if (!widget.isReplay)
-              TextButton(onPressed: widget.onDone, child: const Text('跳过')),
+              TextButton(onPressed: widget.onDone, child: Text(t('跳过'))),
           ],
         ),
         body: SafeArea(
@@ -95,7 +96,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       child: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 200),
                         child: Text(
-                          _isLast ? '开始探索' : '下一步',
+                          _isLast ? t('开始探索') : t('下一步'),
                           key: ValueKey<bool>(_isLast),
                         ),
                       ),
@@ -114,51 +115,51 @@ class _OnboardingPageState extends State<OnboardingPage> {
   // -- 四页内容 --
 
   Widget _welcomeSlide() => _pageShell([
-        const _Hero(
+        _Hero(
           asset: 'assets/brand/astrosophy_mascot.png',
-          label: '吉祥物 Nox——一颗抱着望远镜的星星',
+          label: t('吉祥物 Nox——一颗抱着望远镜的星星'),
         ),
         const SizedBox(height: 18),
         const _Headline('AstroSophy'),
-        const _Lead('拍下星空，剩下交给它'),
+        _Lead(t('拍下星空，剩下交给它')),
         const SizedBox(height: 18),
-        const _Chips(['不用赤道仪', '不用懂天文', '内置演示图']),
+        _Chips([t('不用赤道仪'), t('不用懂天文'), t('内置演示图')]),
       ]);
 
   Widget _localSlide() => _pageShell([
-        const _Hero(
+        _Hero(
           asset: 'assets/brand/astrosophy_onboarding_local.png',
-          label: '手机屏幕里亮着一张星图',
+          label: t('手机屏幕里亮着一张星图'),
         ),
         const SizedBox(height: 18),
-        const _Headline('照片不出手机'),
-        const _Lead('解析全程都在本机跑'),
+        _Headline(t('照片不出手机')),
+        _Lead(t('解析全程都在本机跑')),
         const SizedBox(height: 18),
-        const _Chips(['不用联网', '不用账号', '上传先问你']),
+        _Chips([t('不用联网'), t('不用账号'), t('上传先问你')]),
       ]);
 
   Widget _resultSlide() => _pageShell([
-        const _Hero(
+        _Hero(
           asset: 'assets/brand/astrosophy_onboarding_result.png',
-          label: '手指点中画面里的一颗星',
+          label: t('手指点中画面里的一颗星'),
         ),
         const SizedBox(height: 18),
-        const _Headline('点一下，认出是哪颗'),
-        const _Lead('图上和列表，编号一一对应'),
+        _Headline(t('点一下，认出是哪颗')),
+        _Lead(t('图上和列表，编号一一对应')),
         const SizedBox(height: 18),
-        const _Chips(['边看边点', '剔除拖线', '原图／处理图']),
+        _Chips([t('边看边点'), t('剔除拖线'), t('原图／处理图')]),
       ]);
 
   Widget _keepSlide() => _pageShell([
-        const _Hero(
+        _Hero(
           asset: 'assets/brand/astrosophy_onboarding_keep.png',
-          label: '夹着星空照片的相册',
+          label: t('夹着星空照片的相册'),
         ),
         const SizedBox(height: 18),
-        const _Headline('存下来，随时翻'),
-        const _Lead('原图不动，只存预览'),
+        _Headline(t('存下来，随时翻')),
+        _Lead(t('原图不动，只存预览')),
         const SizedBox(height: 18),
-        const _Chips(['一键保存', '书架回看', '随时删除']),
+        _Chips([t('一键保存'), t('书架回看'), t('随时删除')]),
       ]);
 
   // -- 组件 --
@@ -191,7 +192,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
             Semantics(
               button: true,
               selected: index == _index,
-              label: '第 ${index + 1} 页，共 $_pageCount 页',
+              label: t('第 {0} 页，共 {1} 页', [index + 1, _pageCount]),
               onTap: () => _goTo(index),
               child: GestureDetector(
                 onTap: () => _goTo(index),

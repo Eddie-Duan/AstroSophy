@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'exif.dart';
 import 'pipeline.dart';
@@ -53,8 +54,8 @@ class SkyJob {
   double get fraction => progress?.fraction ?? 0;
 
   String get stage {
-    if (error != null) return '解析中断';
-    return progress?.stage ?? '正在准备';
+    if (error != null) return t('解析中断');
+    return progress?.stage ?? t('正在准备');
   }
 
   /// 给用户认这一条的一句话：「月亮_261015」或者那张图原来的名字。
@@ -146,7 +147,7 @@ class JobCenter extends ChangeNotifier {
         (analysis) async => await job.askMoon?.call(analysis) ?? false,
       );
       job.outcome = outcome;
-      job.progress = const PipelineProgress(1, '解析完成');
+      job.progress = PipelineProgress(1, t('解析完成'));
       // 没人在看的时候替用户存下来。
       //
       // 「保存并退出」的承诺就是「结果不会丢」——不存的话，用户回来只看到
@@ -163,7 +164,7 @@ class JobCenter extends ChangeNotifier {
     try {
       job.archiveName = await archive(job, outcome);
     } catch (error) {
-      job.error = '解析完成，但存进观星记录失败：$error';
+      job.error = t('解析完成，但存进观星记录失败：{0}', [error]);
     }
   }
 }

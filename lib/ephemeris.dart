@@ -1,3 +1,4 @@
+import 'strings.dart';
 import 'moving.dart';
 import 'orbit.dart';
 
@@ -60,10 +61,10 @@ const OrbitalElements earthMoonBarycentre = OrbitalElements(
 );
 
 /// Table 1（1800 AD – 2050 AD）的行，一行一天体，顺序与页面上一致。
-const List<SolarSystemBody> solarSystemBodies = [
+List<SolarSystemBody> get solarSystemBodies => [
   SolarSystemBody(
-    name: '水星',
-    elements: OrbitalElements(
+    name: t('水星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 0.38709927,
       semiMajorAxisRate: 0.00000037,
       eccentricity: 0.20563593,
@@ -79,8 +80,8 @@ const List<SolarSystemBody> solarSystemBodies = [
     ),
   ),
   SolarSystemBody(
-    name: '金星',
-    elements: OrbitalElements(
+    name: t('金星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 0.72333566,
       semiMajorAxisRate: 0.00000390,
       eccentricity: 0.00677672,
@@ -96,8 +97,8 @@ const List<SolarSystemBody> solarSystemBodies = [
     ),
   ),
   SolarSystemBody(
-    name: '火星',
-    elements: OrbitalElements(
+    name: t('火星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 1.52371034,
       semiMajorAxisRate: 0.00001847,
       eccentricity: 0.09339410,
@@ -113,8 +114,8 @@ const List<SolarSystemBody> solarSystemBodies = [
     ),
   ),
   SolarSystemBody(
-    name: '木星',
-    elements: OrbitalElements(
+    name: t('木星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 5.20288700,
       semiMajorAxisRate: -0.00011607,
       eccentricity: 0.04838624,
@@ -130,8 +131,8 @@ const List<SolarSystemBody> solarSystemBodies = [
     ),
   ),
   SolarSystemBody(
-    name: '土星',
-    elements: OrbitalElements(
+    name: t('土星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 9.53667594,
       semiMajorAxisRate: -0.00125060,
       eccentricity: 0.05386179,
@@ -147,8 +148,8 @@ const List<SolarSystemBody> solarSystemBodies = [
     ),
   ),
   SolarSystemBody(
-    name: '天王星',
-    elements: OrbitalElements(
+    name: t('天王星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 19.18916464,
       semiMajorAxisRate: -0.00196176,
       eccentricity: 0.04725744,
@@ -164,8 +165,8 @@ const List<SolarSystemBody> solarSystemBodies = [
     ),
   ),
   SolarSystemBody(
-    name: '海王星',
-    elements: OrbitalElements(
+    name: t('海王星'),
+    elements: const OrbitalElements(
       semiMajorAxis: 30.06992276,
       semiMajorAxisRate: 0.00026291,
       eccentricity: 0.00859048,
@@ -198,7 +199,7 @@ PredictedBody sunPosition(DateTime moment) {
   final centuries = julianCenturies(julianDay(moment));
   final position = heliocentricPosition(earthMoonBarycentre, centuries);
   return _toPredicted(
-    '太阳',
+    t('太阳'),
     PositionVector(-position.x, -position.y, -position.z),
   );
 }

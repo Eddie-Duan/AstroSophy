@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'models.dart';
 import 'widgets.dart';
@@ -79,7 +80,7 @@ Future<Uint8List> renderAnnotatedPng({
   picture.dispose();
 
   if (data == null) {
-    throw StateError('导出失败：渲染出的图拿不到像素数据。');
+    throw StateError(t('导出失败：渲染出的图拿不到像素数据。'));
   }
   return data.buffer.asUint8List();
 }

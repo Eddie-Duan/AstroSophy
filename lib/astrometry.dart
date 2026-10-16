@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'models.dart';
 
@@ -37,8 +38,7 @@ class AstrometryService {
     final actual = wcs.width / wcs.height;
     if (expected <= 0 || (expected - actual).abs() / expected > 0.02) {
       throw StateError(
-        '在线解算返回的坐标描述的是一张 ${wcs.width}×${wcs.height} 的图，'
-        '和上传的 ${analysis.width}×${analysis.height} 形状对不上，已停止坐标标注。',
+        t('在线解算返回的坐标描述的是一张 {0}×{1} 的图，和上传的 {2}×{3} 形状对不上，已停止坐标标注。', [wcs.width, wcs.height, analysis.width, analysis.height]),
       );
     }
     return wcs.rescaledTo(analysis.width, analysis.height);
@@ -94,7 +94,7 @@ class AstrometryService {
   }) async {
     final client = http.Client();
     try {
-      onProgress?.call(0.05, '正在登录 Astrometry.net');
+      onProgress?.call(0.05, t('正在登录 Astrometry.net'));
       final login = await withRetry(
         () => client
             .post(
@@ -106,10 +106,10 @@ class AstrometryService {
       );
       final sessionToken = _json(login)['session'];
       if (sessionToken is! String || sessionToken.isEmpty) {
-        throw StateError('Astrometry.net 未返回会话令牌，请检查 API Key。');
+        throw StateError(t('Astrometry.net 未返回会话令牌，请检查 API Key。'));
       }
 
-      onProgress?.call(0.15, '正在上传分析预览图');
+      onProgress?.call(0.15, t('正在上传分析预览图'));
       // 每次重试都得新建一个请求：http 的 Request 只能 finalize 一次，拿同一个
       // 对象再 send 一次会抛 "Can't finalize a finalized Request."
       http.MultipartRequest buildUpload() =>
@@ -132,7 +132,7 @@ class AstrometryService {
         ),
       );
       final subId = upload['subid'];
-      if (subId == null) throw StateError('天文解算服务未接受图片。');
+      if (subId == null) throw StateError(t('天文解算服务未接受图片。'));
 
       // 排队：等服务方把提交拆成具体作业。这一段往往最久，进度条慢慢爬到 0.45。
       //
@@ -147,7 +147,7 @@ class AstrometryService {
         final elapsed = DateTime.now().difference(queuedAt).inMilliseconds;
         onProgress?.call(
           (0.2 + 0.25 * (elapsed / 60000).clamp(0.0, 1.0)).toDouble(),
-          '已提交，正在排队等待解算',
+          t('已提交，正在排队等待解算'),
         );
         final response = await withRetry(
           () => client
@@ -169,7 +169,7 @@ class AstrometryService {
       }
       if (jobId == null) {
         throw TimeoutException(
-          '在线解算排队超时（等了 ${_queueTimeout.inMinutes} 分钟还没轮到），请稍后再试。',
+          t('在线解算排队超时（等了 {0} 分钟还没轮到），请稍后再试。', [_queueTimeout.inMinutes]),
         );
       }
 
@@ -180,7 +180,7 @@ class AstrometryService {
         final elapsed = DateTime.now().difference(solvedAt).inMilliseconds;
         onProgress?.call(
           (0.45 + 0.2 * (elapsed / 90000).clamp(0.0, 1.0)).toDouble(),
-          '正在识别星图模式',
+          t('正在识别星图模式'),
         );
         final status = _json(
           await withRetry(
@@ -193,17 +193,17 @@ class AstrometryService {
           ),
         );
         if (status['status'] == 'failure') {
-          throw StateError('星图解算失败：请检查星点数量、拖线和画面遮挡。');
+          throw StateError(t('星图解算失败：请检查星点数量、拖线和画面遮挡。'));
         }
         if (status['status'] == 'success') break;
         if (DateTime.now().isAfter(solveDeadline)) {
           throw TimeoutException(
-            '在线解算超时（等了 ${_solveTimeout.inMinutes} 分钟），请稍后重试。',
+            t('在线解算超时（等了 {0} 分钟），请稍后重试。', [_solveTimeout.inMinutes]),
           );
         }
       }
 
-      onProgress?.call(0.7, '正在读取天球坐标');
+      onProgress?.call(0.7, t('正在读取天球坐标'));
       final fitsResponse = await withRetry(
         () => client
             .get(
@@ -213,30 +213,30 @@ class AstrometryService {
             .timeout(const Duration(seconds: 45)),
       );
       if (fitsResponse.statusCode != 200) {
-        throw StateError('无法读取天球坐标解算结果。');
+        throw StateError(t('无法读取天球坐标解算结果。'));
       }
       final wcs = fitToPreview(
         Wcs.parseFitsHeader(fitsResponse.bodyBytes),
         analysis,
       );
 
-      onProgress?.call(0.8, '正在查询 Gaia DR3 星表');
+      onProgress?.call(0.8, t('正在查询 Gaia DR3 星表'));
       var gaia = <GaiaMatch>[];
       var simbadObjects = <_CatalogObject>[];
       final catalogWarnings = <String>[];
       try {
         gaia = await _queryGaia(client, wcs, analysis);
       } on Exception catch (error) {
-        catalogWarnings.add('Gaia DR3 星表：$error');
+        catalogWarnings.add(t('Gaia DR3 星表：{0}', [error]));
       }
-      onProgress?.call(0.88, '正在查询 SIMBAD 天体名称');
+      onProgress?.call(0.88, t('正在查询 SIMBAD 天体名称'));
       try {
         simbadObjects = await _querySimbad(client, wcs, analysis);
       } on Exception catch (error) {
-        catalogWarnings.add('SIMBAD 名称目录：$error');
+        catalogWarnings.add(t('SIMBAD 名称目录：{0}', [error]));
       }
 
-      onProgress?.call(0.94, '正在交叉匹配星名与测光');
+      onProgress?.call(0.94, t('正在交叉匹配星名与测光'));
       final matches = _crossMatch(analysis, wcs, gaia, simbadObjects);
 
       return SolveResult(
@@ -249,7 +249,7 @@ class AstrometryService {
         magnitudeZeroPoint: matches.zeroPoint,
         magnitudeScatter: matches.scatter,
         catalogWarning:
-            catalogWarnings.isEmpty ? null : catalogWarnings.join('；'),
+            catalogWarnings.isEmpty ? null : catalogWarnings.join(t('；')),
         source: SolveSource.online,
         fieldOfViewDegrees: wcs.fieldOfViewDegrees,
         wcs: wcs,
@@ -262,12 +262,12 @@ class AstrometryService {
 
   static Map<String, dynamic> _json(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException('天文服务返回 HTTP ${response.statusCode}。');
+      throw HttpException(t('天文服务返回 HTTP {0}。', [response.statusCode]));
     }
     final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) throw const FormatException('天文服务返回格式无效。');
+    if (decoded is! Map<String, dynamic>) throw FormatException(t('天文服务返回格式无效。'));
     if (decoded['status'] == 'error') {
-      throw StateError('${decoded['errormessage'] ?? '天文服务处理失败。'}');
+      throw StateError('${decoded['errormessage'] ?? t('天文服务处理失败。')}');
     }
     return decoded;
   }
@@ -296,7 +296,7 @@ class AstrometryService {
           .timeout(const Duration(seconds: 90)),
     );
     if (response.statusCode != 200) {
-      throw HttpException('Gaia DR3 星表查询返回 HTTP ${response.statusCode}。');
+      throw HttpException(t('Gaia DR3 星表查询返回 HTTP {0}。', [response.statusCode]));
     }
     final lines = csvLines(response.body);
     if (lines.length < 2) return [];
@@ -350,11 +350,11 @@ class AstrometryService {
           .timeout(const Duration(seconds: 90)),
     );
     if (response.statusCode != 200) {
-      throw HttpException('SIMBAD 名称目录返回 HTTP ${response.statusCode}。');
+      throw HttpException(t('SIMBAD 名称目录返回 HTTP {0}。', [response.statusCode]));
     }
     final lines = csvLines(response.body);
     if (lines.isEmpty || lines.first.toLowerCase().contains('error')) {
-      throw const FormatException('SIMBAD 名称目录无法解析查询结果。');
+      throw FormatException(t('SIMBAD 名称目录无法解析查询结果。'));
     }
     final objects = <_CatalogObject>[];
     for (final line in lines.skip(1)) {
@@ -417,7 +417,7 @@ class AstrometryService {
           simbadName ?? 'Gaia DR3 ${gaiaStar.sourceId}',
           gaiaStar.ra,
           gaiaStar.dec,
-          simbadStar?.objectType ?? '恒星 · Gaia DR3',
+          simbadStar?.objectType ?? t('恒星 · Gaia DR3'),
           magnitude: gaiaStar.gMagnitude,
           magnitudeBand: 'G',
           x: nearest.star.x,
@@ -605,7 +605,9 @@ String tidyCatalogName(String raw) =>
 String describeObjectType(String otype) {
   final code = otype.trim();
   for (final entry in _objectTypes) {
-    if (code.startsWith(entry.$1)) return entry.$2;
+    // 表里存的是中文当 key，这里查译文——在返回的时候查，见 deepsky_names.dart
+    // 里对同一个坑的说明。
+    if (code.startsWith(entry.$1)) return t(entry.$2);
   }
   return code;
 }

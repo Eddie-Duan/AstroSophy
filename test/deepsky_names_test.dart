@@ -7,12 +7,12 @@ void main() {
       // 目录里写 `M 31`，用户和别的星表可能写 `M31`；NGC 也是。同一个东西
       // 不该因为多一个空格就查不到。
       for (final spelling in ['M 45', 'M45', 'm 45', 'M-45']) {
-        expect(chineseNicknameOf(spelling), '昴星团', reason: spelling);
+        expect(nicknameOf(spelling), '昴星团', reason: spelling);
       }
       for (final spelling in ['NGC 2237', 'NGC2237', 'ngc_2237']) {
-        expect(chineseNicknameOf(spelling), '玫瑰星云', reason: spelling);
+        expect(nicknameOf(spelling), '玫瑰星云', reason: spelling);
       }
-      expect(chineseNicknameOf('IC 434'), '马头星云');
+      expect(nicknameOf('IC 434'), '马头星云');
     });
 
     test('收的是常用名，不是类型名', () {
@@ -32,7 +32,7 @@ void main() {
         'M 1', 'M 6', 'M 13', 'M 31', 'M 42', 'M 45', 'M 57',
         'NGC 104', 'NGC 5139', 'NGC 7293',
       ]) {
-        final nickname = chineseNicknameOf(designation);
+        final nickname = nicknameOf(designation);
         expect(nickname, isNotNull, reason: designation);
         expect(typeNames.contains(nickname), isFalse,
             reason: '$designation 查到的「$nickname」是类型名，不是昵称');
@@ -42,10 +42,10 @@ void main() {
     test('同一片星云的不同部分各是各的名字', () {
       // 面纱星云是超新星遗迹，东西两弧在目录里是两个编号，中文里也是两个
       // 名字。全都报「面纱星云」等于把「你拍到的是哪一块」这个信息抹掉了。
-      expect(chineseNicknameOf('NGC 6960'), '西面纱星云');
-      expect(chineseNicknameOf('NGC 6992'), '东面纱星云');
-      expect(chineseNicknameOf('NGC 6960'),
-          isNot(chineseNicknameOf('NGC 6992')));
+      expect(nicknameOf('NGC 6960'), '西面纱星云');
+      expect(nicknameOf('NGC 6992'), '东面纱星云');
+      expect(nicknameOf('NGC 6960'),
+          isNot(nicknameOf('NGC 6992')));
     });
 
     test('界面上只有一个地方决定这个天体怎么写', () {
@@ -67,10 +67,10 @@ void main() {
 
     test('没收录的编号不给编一个名字', () {
       // 硬译一个出来是最坏的结果：用户会拿它当事实去搜，然后什么也搜不到。
-      expect(chineseNicknameOf('NGC 9999'), isNull);
-      expect(chineseNicknameOf('2MASS J12345678+1234567'), isNull);
-      expect(chineseNicknameOf(''), isNull);
-      expect(chineseNicknameOf('   '), isNull);
+      expect(nicknameOf('NGC 9999'), isNull);
+      expect(nicknameOf('2MASS J12345678+1234567'), isNull);
+      expect(nicknameOf(''), isNull);
+      expect(nicknameOf('   '), isNull);
     });
 
     test('标签是「编号 昵称」，没昵称时就是编号', () {

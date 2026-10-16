@@ -1,4 +1,5 @@
 import 'package:astrosophy/history.dart' show SavedAnalysis;
+import 'strings.dart';
 import 'package:astrosophy/models.dart' show SolveSource;
 import 'package:astrosophy/smallbodies.dart'
     show
@@ -46,21 +47,21 @@ class AgentTools {
         _checkArguments(arguments, const {'query'});
         final query = arguments['query'];
         if (query is! String || query.trim().isEmpty || query.length > 120) {
-          throw const FormatException('天体名称不能为空且不能超过 120 个字符。');
+          throw FormatException(t('天体名称不能为空且不能超过 120 个字符。'));
         }
         return _findCatalogObjects(query.trim());
       case 'find_small_body':
         _checkArguments(arguments, const {'query'});
         final query = arguments['query'];
         if (query is! String || query.trim().isEmpty || query.length > 120) {
-          throw const FormatException('天体名称不能为空且不能超过 120 个字符。');
+          throw FormatException(t('天体名称不能为空且不能超过 120 个字符。'));
         }
         return _findSmallBody(query.trim());
       case 'list_observations':
         _checkArguments(arguments, const {'limit'});
         final limit = arguments['limit'];
         if (limit is! int || limit < 1 || limit > 20) {
-          throw const FormatException('历史记录数量必须是 1 到 20 之间的整数。');
+          throw FormatException(t('历史记录数量必须是 1 到 20 之间的整数。'));
         }
         final observations = await loadHistory();
         return {
@@ -83,12 +84,12 @@ class AgentTools {
         _checkArguments(arguments, const {'observation_id'});
         final id = arguments['observation_id'];
         if (id is! String || id.trim().isEmpty) {
-          throw const FormatException('需要给出观测记录的 id。');
+          throw FormatException(t('需要给出观测记录的 id。'));
         }
         final all = await loadHistory();
         final found = all.where((item) => item.id == id.trim()).firstOrNull;
         if (found == null) {
-          throw StateError('找不到 id 为 $id 的本机观测记录。');
+          throw StateError(t('找不到 id 为 {0} 的本机观测记录。', [id]));
         }
         return _observationDetail(found);
       case 'open_screen':
@@ -99,11 +100,11 @@ class AgentTools {
         final screen = arguments['screen'];
         if (screen is! String ||
             !const {'history', 'settings'}.contains(screen)) {
-          throw const FormatException('可打开的页面只有 history 和 settings。');
+          throw FormatException(t('可打开的页面只有 history 和 settings。'));
         }
         final nav = handleAction;
         if (nav == null) {
-          throw StateError('当前环境未启用此 Agent 操作。');
+          throw StateError(t('当前环境未启用此 Agent 操作。'));
         }
         return nav('open_screen', arguments);
       case 'save_current_observation':
@@ -120,11 +121,11 @@ class AgentTools {
         _checkArguments(arguments, allowed);
         final handler = handleAction;
         if (handler == null) {
-          throw StateError('当前环境未启用此 Agent 操作。');
+          throw StateError(t('当前环境未启用此 Agent 操作。'));
         }
         return handler(name, arguments);
       default:
-        throw ArgumentError.value(name, 'name', '未知的 Agent 工具');
+        throw ArgumentError.value(name, 'name', t('未知的 Agent 工具'));
     }
   }
 
@@ -185,7 +186,7 @@ class AgentTools {
       'query': query,
       'count': matches.length,
       'objects': matches.take(12).toList(growable: false),
-      if (matches.isEmpty) 'message': '当前视场的已识别天体中没有匹配项。',
+      if (matches.isEmpty) 'message': t('当前视场的已识别天体中没有匹配项。'),
       if (matches.length > 12) 'truncated': true,
     };
   }
@@ -201,7 +202,7 @@ class AgentTools {
   Future<Map<String, Object?>> _findSmallBody(String query) async {
     final loader = loadSmallBodies;
     if (loader == null) {
-      throw StateError('当前环境未启用此 Agent 操作。');
+      throw StateError(t('当前环境未启用此 Agent 操作。'));
     }
     final catalog = await loader();
     final body = catalog.find(query);
@@ -209,8 +210,7 @@ class AgentTools {
       return {
         'query': query,
         'found': false,
-        'message': '内置的太阳系小天体目录里没有这一颗。目录里有 16 颗亮小行星、'
-            '10 颗矮行星和全部 939 颗彗星。',
+        'message': t('内置的太阳系小天体目录里没有这一颗。目录里有 16 颗亮小行星、10 颗矮行星和全部 939 颗彗星。'),
       };
     }
     final moment = DateTime.now().toUtc();
@@ -222,7 +222,7 @@ class AgentTools {
       'found': true,
       'name': body.name,
       'designation': body.designation,
-      'kind': body.kind.label,
+      'kind': t(body.kind.label),
       'computed_at': moment.toIso8601String(),
       if (position != null) 'ra_deg': position.ra,
       if (position != null) 'dec_deg': position.dec,
@@ -234,10 +234,7 @@ class AgentTools {
       'catalog_built': catalog.built.isEmpty ? null : catalog.built,
       if (magnitude != null && !rough)
         'photographable_with_a_phone': magnitude <= smallBodyPhotoLimitMagnitude,
-      'note': '位置按两体近似从内置根数表推算（表建于 ${catalog.built}），'
-          '离这个日期越远越不准：谷神星三年能偏二十角分。'
-          '${rough ? '这颗彗星的亮度用的是缺省光度参数，只能当个大概。' : ''}'
-          '${magnitude != null && !rough && magnitude > smallBodyPhotoLimitMagnitude ? '它比手机能拍到的极限还暗。' : ''}',
+      'note': t('位置按两体近似从内置根数表推算（表建于 {0}），离这个日期越远越不准：谷神星三年能偏二十角分。{1}{2}', [catalog.built, rough ? t('这颗彗星的亮度用的是缺省光度参数，只能当个大概。') : '', magnitude != null && !rough && magnitude > smallBodyPhotoLimitMagnitude ? t('它比手机能拍到的极限还暗。') : '']),
     };
   }
 
@@ -247,7 +244,7 @@ class AgentTools {
   ) {
     final unexpected = arguments.keys.where((key) => !allowed.contains(key));
     if (unexpected.isNotEmpty) {
-      throw FormatException('工具包含不支持的参数：${unexpected.join(', ')}。');
+      throw FormatException(t('工具包含不支持的参数：{0}。', [unexpected.join(', ')]));
     }
   }
 }

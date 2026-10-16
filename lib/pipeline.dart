@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'astrometry.dart';
 import 'catalog.dart';
@@ -133,10 +134,10 @@ class SkyPipeline {
   /// 动辄一两分钟，而本地分析只要一秒。平分的话进度条前半程几乎不动，
   /// 用户反而更慌。
   List<_Stage> get _stages => [
-        const _Stage('正在分析星图', 20),
-        const _Stage('正在本机解算天区', 26),
-        if (_canUpload) const _Stage('正在在线解算天区', 34, online: true),
-        if (_canExplain) const _Stage('正在生成解读', 16),
+        _Stage(t('正在分析星图'), 20),
+        _Stage(t('正在本机解算天区'), 26),
+        if (_canUpload) _Stage(t('正在在线解算天区'), 34, online: true),
+        if (_canExplain) _Stage(t('正在生成解读'), 16),
       ];
 
   /// 跑完整条链路。
@@ -208,8 +209,7 @@ class SkyPipeline {
       onProgress?.call(
         PipelineProgress(
           bounds.first.$1,
-          '识别到月面 · 亮面 '
-          '${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%',
+          t('识别到月面 · 亮面 {0}%', [(disc.illuminatedFraction * 100).toStringAsFixed(1)]),
           moon: true,
         ),
       );
@@ -222,15 +222,13 @@ class SkyPipeline {
         onProgress?.call(
           PipelineProgress(
             bounds.first.$2,
-            '只报月亮 · 亮面 '
-            '${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%',
+            t('只报月亮 · 亮面 {0}%', [(disc.illuminatedFraction * 100).toStringAsFixed(1)]),
             moon: true,
             moonOnly: true,
           ),
         );
         warnings.add(
-          '这次只报告月亮：月盘、亮面占比，以及按拍摄时刻算出来的相名。'
-          '想在这张图里找别的天体，重新解析时选「继续寻找其他天体」。',
+          t('这次只报告月亮：月盘、亮面占比，以及按拍摄时刻算出来的相名。想在这张图里找别的天体，重新解析时选「继续寻找其他天体」。'),
         );
       }
     }
@@ -243,7 +241,7 @@ class SkyPipeline {
       // 用户选了只要月亮：跳过解算和上传，直接走到解读那一步。
       index = 0;
     } else {
-      report(index, 0, '正在本机解算天区');
+      report(index, 0, t('正在本机解算天区'));
       try {
         final (result, trace) = await worker.solveLocal(
           analysis,
@@ -253,12 +251,12 @@ class SkyPipeline {
         solve = result;
         localTrace = trace;
       } catch (error) {
-        warnings.add('本机解算未能完成：$error');
+        warnings.add(t('本机解算未能完成：{0}', [error]));
       }
       if (solve != null) {
         // 成了。从这里开始「照片没出过手机」就是既成事实，不是承诺了。
         solvedLocally = true;
-        report(index, 1, '本机解算成功');
+        report(index, 1, t('本机解算成功'));
       }
 
       if (solve == null && _canUpload) {
@@ -271,7 +269,7 @@ class SkyPipeline {
           );
         } catch (error) {
           onlineError = '$error';
-          warnings.add('在线解算未能完成：$error');
+          warnings.add(t('在线解算未能完成：{0}', [error]));
         }
         // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
         // 失败了只记一条提示，不把已经拿到手的解算结果丢掉。
@@ -279,7 +277,7 @@ class SkyPipeline {
           try {
             solve = await worker.decorate(solve);
           } catch (error) {
-            warnings.add('星座标注未能完成：$error');
+            warnings.add(t('星座标注未能完成：{0}', [error]));
           }
         }
       }
@@ -313,7 +311,7 @@ class SkyPipeline {
           try {
             solve = await worker.annotateMovingBodies(analysis, solve, moment);
           } catch (error) {
-            warnings.add('运动天体判定未能完成：$error');
+            warnings.add(t('运动天体判定未能完成：{0}', [error]));
           }
         }
       }
@@ -323,7 +321,7 @@ class SkyPipeline {
     final settings = modelSettings;
     if (settings != null && settings.hasAnyModel) {
       // 解读永远排在最后一段。解算那几段有没有跑过都不影响这件事的位置。
-      report(_stages.length - 1, 0, '正在生成解读');
+      report(_stages.length - 1, 0, t('正在生成解读'));
       try {
         explanation = await ModelService.explain(
           baseUrl: settings.baseUrl,
@@ -339,7 +337,7 @@ class SkyPipeline {
           question: question,
         );
       } catch (error) {
-        warnings.add('模型解读未能完成：$error');
+        warnings.add(t('模型解读未能完成：{0}', [error]));
       }
     }
 
@@ -349,7 +347,7 @@ class SkyPipeline {
     onProgress?.call(
       PipelineProgress(
         1,
-        '解析完成',
+        t('解析完成'),
         moon: analysis.isMoonShot,
         moonOnly: moonOnlyReported,
         solvedLocally: solvedLocally,
@@ -395,7 +393,7 @@ class SkyPipeline {
               ? null
               : (object.angularSizeArcmin! / 60) / field,
           magnitude: object.magnitude,
-          nickname: chineseNicknameOf(object.name),        ),
+          nickname: nicknameOf(object.name),        ),
     ];
     final picked = await ModelService.pickPrimaryDeepSky(
       baseUrl: settings.baseUrl,
@@ -536,7 +534,7 @@ class SkyWorker {
       default:
         _pending.remove(message.id);
         pending.completer.completeError(
-          StateError(message.value?.toString() ?? '后台解算出错。'),
+          StateError(message.value?.toString() ?? t('后台解算出错。')),
         );
     }
   }
@@ -548,7 +546,7 @@ class SkyWorker {
     _pending.clear();
     for (final request in pending) {
       request.completer.completeError(
-        StateError('后台解算进程已退出：${error ?? '原因不明'}'),
+        StateError(t('后台解算进程已退出：{0}', [error ?? t('原因不明')])),
       );
     }
   }
@@ -559,13 +557,14 @@ class SkyWorker {
     void Function(SolveProgress)? onProgress,
   ) {
     if (_disposed) {
-      return Future<Object?>.error(StateError('后台解算已经关闭。'));
+      return Future<Object?>.error(StateError(t('后台解算已经关闭。')));
     }
     final id = _nextId++;
     final pending = _Pending(onProgress);
     _pending[id] = pending;
     // 握手没完成时 _ready 还没值，先挂上；完成后再发。
-    _ready.future.then((port) => port.send(_WorkerRequest(id, kind, payload)));
+    _ready.future.then((port) => port.send(
+        _WorkerRequest(id, kind, payload, appLanguage.value.code)));
     return pending.completer.future;
   }
 
@@ -665,6 +664,9 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
 
   await for (final message in inbox) {
     if (message is! _WorkerRequest) continue;
+    // isolate 里的语言是另一份全局量，每条请求都带过来，解算阶段文案才跟得上
+    // 用户在设置里换的语言。
+    appLanguage.value = AppLanguage.fromCode(message.language);
     try {
       switch (message.kind) {
         case 'analyze':
@@ -722,7 +724,7 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
           );
         default:
           boot.reply.send(
-            _WorkerReply(message.id, 'error', '未知的后台请求：${message.kind}'),
+            _WorkerReply(message.id, 'error', t('未知的后台请求：{0}', [message.kind])),
           );
       }
     } catch (error) {
@@ -754,11 +756,19 @@ class _WorkerBoot {
 }
 
 class _WorkerRequest {
-  const _WorkerRequest(this.id, this.kind, this.payload);
+  const _WorkerRequest(this.id, this.kind, this.payload,
+      [this.language = 'zh']);
 
   final int id;
   final String kind;
   final Object? payload;
+
+  /// 这条请求要用哪门语言。
+  ///
+  /// isolate 有自己的内存空间，`appLanguage` 那个全局量在那边是另一份，改主
+  /// isolate 里的它不会跟着变。而解算的阶段文案是在 isolate 里拼好、当字符串
+  /// 发回来的，所以语言得跟着请求一起过去。
+  final String language;
 }
 
 class _WorkerReply {

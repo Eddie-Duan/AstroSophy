@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' show HttpException;
+import 'strings.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -56,12 +57,12 @@ class DeepSkyCandidate {
 /// 或者已经解算出天区、问题需要真正推理时才交给强模型；强模型不可用时
 /// 再退回轻量模型，避免用户配置不全就直接失败。
 class ModelService {
-  static const _tools = <Map<String, Object?>>[
+  static final _tools = <Map<String, Object?>>[
     {
       'type': 'function',
       'function': {
         'name': 'get_current_report',
-        'description': '读取当前照片的本机分析与天区解算摘要。',
+        'description': t('读取当前照片的本机分析与天区解算摘要。'),
         'parameters': {
           'type': 'object',
           'properties': <String, Object?>{},
@@ -73,14 +74,13 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'find_catalog_object',
-        'description': '按名称搜索当前照片视场内已识别的恒星、深空天体或系内天体'
-            '（行星、矮行星、小行星、彗星）。',
+        'description': t('按名称搜索当前照片视场内已识别的恒星、深空天体或系内天体（行星、矮行星、小行星、彗星）。'),
         'parameters': {
           'type': 'object',
           'properties': {
             'query': {
               'type': 'string',
-              'description': '要查找的天体名称，例如天狼星、M31 或灶神星。',
+              'description': t('要查找的天体名称，例如天狼星、M31 或灶神星。'),
             },
           },
           'required': ['query'],
@@ -92,15 +92,13 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'find_small_body',
-        'description': '查一颗太阳系小天体**现在**在哪儿、多亮。用的是应用内置的'
-            '根数表，和当前照片无关；位置是两体近似，离表的构建日期越远越不准。'
-            '目录里有 16 颗亮小行星、10 颗矮行星和全部彗星。',
+        'description': t('查一颗太阳系小天体**现在**在哪儿、多亮。用的是应用内置的根数表，和当前照片无关；位置是两体近似，离表的构建日期越远越不准。目录里有 16 颗亮小行星、10 颗矮行星和全部彗星。'),
         'parameters': {
           'type': 'object',
           'properties': {
             'query': {
               'type': 'string',
-              'description': '中文名或编号，例如灶神星、Vesta、共工星、2P。',
+              'description': t('中文名或编号，例如灶神星、Vesta、共工星、2P。'),
             },
           },
           'required': ['query'],
@@ -112,7 +110,7 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'list_observations',
-        'description': '列出本机已保存观测的摘要，不读取或返回照片。',
+        'description': t('列出本机已保存观测的摘要，不读取或返回照片。'),
         'parameters': {
           'type': 'object',
           'properties': {
@@ -120,7 +118,7 @@ class ModelService {
               'type': 'integer',
               'minimum': 1,
               'maximum': 20,
-              'description': '最多返回多少条观测，范围为 1 到 20。',
+              'description': t('最多返回多少条观测，范围为 1 到 20。'),
             },
           },
           'required': ['limit'],
@@ -133,15 +131,13 @@ class ModelService {
       'function': {
         'name': 'get_observation',
         'description':
-            '读取本机某一条观测记录的详细内容：保存时的解读、解算坐标与比例尺、'
-                '拍摄时刻。回答「我那张土星解出来是什么」这类问题时用它，'
-                '而不是让用户自己去翻记录。不返回照片。',
+            t('读取本机某一条观测记录的详细内容：保存时的解读、解算坐标与比例尺、拍摄时刻。回答「我那张土星解出来是什么」这类问题时用它，而不是让用户自己去翻记录。不返回照片。'),
         'parameters': {
           'type': 'object',
           'properties': {
             'observation_id': {
               'type': 'string',
-              'description': '观测记录的 id，先用 list_observations 拿到。',
+              'description': t('观测记录的 id，先用 list_observations 拿到。'),
             },
           },
           'required': ['observation_id'],
@@ -154,14 +150,14 @@ class ModelService {
       'function': {
         'name': 'open_screen',
         'description':
-            '在应用里打开一个页面。纯界面动作，没有副作用，不需要用户确认。',
+            t('在应用里打开一个页面。纯界面动作，没有副作用，不需要用户确认。'),
         'parameters': {
           'type': 'object',
           'properties': {
             'screen': {
               'type': 'string',
               'enum': ['history', 'settings'],
-              'description': 'history＝观星仓库，settings＝API 设置。',
+              'description': t('history＝观星仓库，settings＝API 设置。'),
             },
           },
           'required': ['screen'],
@@ -173,11 +169,11 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'save_current_observation',
-        'description': '请求保存当前观测；应用会先向用户确认。',
+        'description': t('请求保存当前观测；应用会先向用户确认。'),
         'parameters': {
           'type': 'object',
           'properties': {
-            'name': {'type': 'string', 'description': '观测记录名称。'},
+            'name': {'type': 'string', 'description': t('观测记录名称。')},
           },
           'required': ['name'],
           'additionalProperties': false,
@@ -188,7 +184,7 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'rename_observation',
-        'description': '请求重命名本机观测记录；应用会先向用户确认。',
+        'description': t('请求重命名本机观测记录；应用会先向用户确认。'),
         'parameters': {
           'type': 'object',
           'properties': {
@@ -204,7 +200,7 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'delete_observation',
-        'description': '请求删除本机观测记录及其预览图；应用会先向用户确认。',
+        'description': t('请求删除本机观测记录及其预览图；应用会先向用户确认。'),
         'parameters': {
           'type': 'object',
           'properties': {
@@ -219,7 +215,7 @@ class ModelService {
       'type': 'function',
       'function': {
         'name': 'request_online_solve',
-        'description': '请求将当前照片预览上传到 Astrometry.net 解算；应用会先向用户确认。',
+        'description': t('请求将当前照片预览上传到 Astrometry.net 解算；应用会先向用户确认。'),
         'parameters': {
           'type': 'object',
           'properties': <String, Object?>{},
@@ -232,9 +228,7 @@ class ModelService {
       'function': {
         'name': 'propose_non_sky_regions',
         'description':
-            '请求模型检查当前照片中的水印、文字或界面区域并建议遮罩。'
-                '这一步会把预览图发到用户配置的模型服务，'
-                '所以那个模型必须支持图像输入；应用会先向用户确认。',
+            t('请求模型检查当前照片中的水印、文字或界面区域并建议遮罩。这一步会把预览图发到用户配置的模型服务，所以那个模型必须支持图像输入；应用会先向用户确认。'),
         'parameters': {
           'type': 'object',
           'properties': <String, Object?>{},
@@ -266,12 +260,12 @@ class ModelService {
     AgentToolListener? onToolCall,
     String? assistantName,
     String? appBrief,
-    String contextLabel = '当前图像分析摘要',
+    String? contextLabel,
     List<Map<String, String>> history = const [],
     http.Client? httpClient,
   }) async {
     const maxToolCalls = 5;
-    final routeStrong = report['quality'] == '较弱' || report['solved'] == true;
+    final routeStrong = report['quality'] == t('较弱') || report['solved'] == true;
     final models = <(String, String)>[
       if (routeStrong) (strongKey, strongModel) else (lightKey, lightModel),
       if (routeStrong && lightKey.isNotEmpty)
@@ -280,8 +274,8 @@ class ModelService {
         (strongKey, strongModel),
     ];
     final persona = assistantName == null
-        ? '你是面向爱好者的天文图像助手。'
-        : '你是「$assistantName」，这个应用里的助手。${appBrief ?? ''}';
+        ? t('你是面向爱好者的天文图像助手。')
+        : t('你是「{0}」，这个应用里的助手。{1}', [assistantName, appBrief ?? '']);
     final client = httpClient ?? http.Client();
     final errors = <String>[];
     var anyToolExecuted = false;
@@ -292,12 +286,7 @@ class ModelService {
           final messages = <Map<String, Object?>>[
             {
               'role': 'system',
-              'content': '$persona'
-                  '只依据本机测量和工具结果回答，'
-                      '明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，'
-                      '也不得把仪器星等说成校准视星等。除只读查询外，保存、改名、删除、'
-                      '联网解算和发送图片都属于有副作用的操作；只有用户明确要求时才可申请，'
-                      '应用仍会在执行前单独确认。简洁使用中文，不要为了调用工具而调用工具。',
+              'content': t('{0}只依据本机测量和工具结果回答，明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，也不得把仪器星等说成校准视星等。除只读查询外，保存、改名、删除、联网解算和发送图片都属于有副作用的操作；只有用户明确要求时才可申请，应用仍会在执行前单独确认。简洁使用中文，不要为了调用工具而调用工具。', [persona]),
             },
             for (final turn in history)
               if (turn['role'] == 'user' || turn['role'] == 'assistant')
@@ -305,8 +294,14 @@ class ModelService {
             {
               'role': 'user',
               'content':
-                  '问题：${question.trim().isEmpty ? '请概括照片能确认的天文信息和可靠性。' : question.trim()}\n'
-                      '$contextLabel：${jsonEncode(report)}',
+                  t('问题：{0}\n{1}：{2}', [
+          question.trim().isEmpty
+              ? t('请概括照片能确认的天文信息和可靠性。')
+              : question.trim(),
+          // 参数默认值必须是编译期常量，套不了 t()，所以缺省在这里补。
+          contextLabel ?? t('当前图像分析摘要'),
+          jsonEncode(report),
+        ]),
             },
           ];
           var toolCallCount = 0;
@@ -331,43 +326,43 @@ class ModelService {
                 )
                 .timeout(const Duration(seconds: 45));
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('模型 API 返回 HTTP ${response.statusCode}。');
+              throw HttpException(t('模型 API 返回 HTTP {0}。', [response.statusCode]));
             }
             final decoded = jsonDecode(response.body) as Map<String, dynamic>;
             final message = decoded['choices']?[0]?['message'];
             if (message is! Map) {
-              throw const FormatException('模型响应中缺少 assistant 消息。');
+              throw FormatException(t('模型响应中缺少 assistant 消息。'));
             }
             final toolCalls = message['tool_calls'];
             if (toolCalls is! List || toolCalls.isEmpty) {
               final content = message['content'];
               if (content is! String || content.trim().isEmpty) {
-                throw const FormatException('模型返回内容为空。');
+                throw FormatException(t('模型返回内容为空。'));
               }
               return content.trim();
             }
             if (toolCalls.length + toolCallCount > maxToolCalls) {
-              throw StateError('Agent 达到本轮工具调用上限（$maxToolCalls 次）。');
+              throw StateError(t('Agent 达到本轮工具调用上限（{0} 次）。', [maxToolCalls]));
             }
             messages.add(Map<String, Object?>.from(message));
             for (final rawCall in toolCalls) {
               if (rawCall is! Map) {
-                throw const FormatException('模型返回了无效的工具调用。');
+                throw FormatException(t('模型返回了无效的工具调用。'));
               }
               final call = Map<String, Object?>.from(rawCall);
               final function = call['function'];
               if (function is! Map || call['id'] is! String) {
-                throw const FormatException('模型返回了不完整的工具调用。');
+                throw FormatException(t('模型返回了不完整的工具调用。'));
               }
               final functionMap = Map<String, Object?>.from(function);
               final name = functionMap['name'];
               final rawArguments = functionMap['arguments'];
               if (name is! String || rawArguments is! String) {
-                throw const FormatException('模型返回了无效的工具参数。');
+                throw FormatException(t('模型返回了无效的工具参数。'));
               }
               final arguments = jsonDecode(rawArguments);
               if (arguments is! Map) {
-                throw const FormatException('工具参数必须是 JSON 对象。');
+                throw FormatException(t('工具参数必须是 JSON 对象。'));
               }
               onToolCall?.call(name);
               anyToolExecuted = true;
@@ -386,10 +381,10 @@ class ModelService {
           }
         } catch (error) {
           if (anyToolExecuted) rethrow;
-          errors.add('$model：$error');
+          errors.add(t('{0}：{1}', [model, error]));
         }
       }
-      throw StateError(errors.isEmpty ? '未配置可用模型。' : errors.join('\n'));
+      throw StateError(errors.isEmpty ? t('未配置可用模型。') : errors.join('\n'));
     } finally {
       if (httpClient == null) client.close();
     }
@@ -444,12 +439,7 @@ class ModelService {
             {
               'role': 'system',
               'content':
-                  '你是天文观测助手。用户会给你一张照片里解出来的深空天体清单，'
-                      '你要指出这张照片**拍的是哪一个**。'
-                      '只能从清单里的编号中选一个，逐字照抄，不要发明编号，'
-                      '也不要解释。判断依据是「爱好者会说自己拍了什么」：'
-                      '优先选那个大家都叫得出名字的目标，而不是尺寸数字最大的。'
-                      '只输出 JSON：{"primary": "编号"}。',
+                  t('你是天文观测助手。用户会给你一张照片里解出来的深空天体清单，你要指出这张照片**拍的是哪一个**。只能从清单里的编号中选一个，逐字照抄，不要发明编号，也不要解释。判断依据是「爱好者会说自己拍了什么」：优先选那个大家都叫得出名字的目标，而不是尺寸数字最大的。只输出 JSON：{{"primary": "编号"}}。'),
             },
             {
               'role': 'user',
@@ -499,10 +489,10 @@ class ModelService {
     http.Client? httpClient,
   }) async {
     if (apiKey.trim().isEmpty || model.trim().isEmpty) {
-      throw StateError('未配置可用的视觉模型 API Key 或模型名。');
+      throw StateError(t('未配置可用的视觉模型 API Key 或模型名。'));
     }
     if (imageWidth <= 0 || imageHeight <= 0) {
-      throw ArgumentError('视觉分析的图像尺寸无效。');
+      throw ArgumentError(t('视觉分析的图像尺寸无效。'));
     }
     final client = httpClient ?? http.Client();
     try {
@@ -523,19 +513,14 @@ class ModelService {
                 {
                   'role': 'system',
                   'content':
-                      '你是天文照片的水印区域定位器。只找明确叠加在照片上的文字、'
-                          '水印、相机状态栏或 UI；不要把星云、星团、星轨、暗角、'
-                          '地景或任何可能的天体结构标为遮罩。若不确定，返回空 regions。'
-                          '只输出 JSON：{"regions":[{"x":0,"y":0,"width":0,"height":0}]}。'
-                          '坐标是相对于整张图片左上角的 0 到 1 归一化矩形；'
-                          '最多 8 个框，每框不超过图像面积 25%，合计不超过 30%。',
+                      t('你是天文照片的水印区域定位器。只找明确叠加在照片上的文字、水印、相机状态栏或 UI；不要把星云、星团、星轨、暗角、地景或任何可能的天体结构标为遮罩。若不确定，返回空 regions。只输出 JSON：{{"regions":[{{"x":0,"y":0,"width":0,"height":0}}]}}。坐标是相对于整张图片左上角的 0 到 1 归一化矩形；最多 8 个框，每框不超过图像面积 25%，合计不超过 30%。'),
                 },
                 {
                   'role': 'user',
                   'content': [
                     {
                       'type': 'text',
-                      'text': '请定位明确的文字/水印叠加区域。',
+                      'text': t('请定位明确的文字/水印叠加区域。'),
                     },
                     {
                       'type': 'image_url',
@@ -551,7 +536,7 @@ class ModelService {
           )
           .timeout(const Duration(seconds: 60));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('视觉模型 API 返回 HTTP ${response.statusCode}。');
+        throw HttpException(t('视觉模型 API 返回 HTTP {0}。', [response.statusCode]));
       }
       final decoded = jsonDecode(response.body) as Map<String, dynamic>;
       final rawContent = decoded['choices']?[0]?['message']?['content'];
@@ -565,7 +550,7 @@ class ModelService {
         _ => '',
       };
       if (content.trim().isEmpty) {
-        throw const FormatException('视觉模型没有返回区域建议。');
+        throw FormatException(t('视觉模型没有返回区域建议。'));
       }
       final jsonText = content
           .trim()
@@ -573,23 +558,23 @@ class ModelService {
           .replaceFirst(RegExp(r'\s*```$'), '');
       final result = jsonDecode(jsonText);
       if (result is! Map || result['regions'] is! List) {
-        throw const FormatException('视觉模型区域建议格式无效。');
+        throw FormatException(t('视觉模型区域建议格式无效。'));
       }
       final rawRegions = result['regions']! as List;
       if (rawRegions.length > 8) {
-        throw const FormatException('视觉模型建议的区域数量超出上限。');
+        throw FormatException(t('视觉模型建议的区域数量超出上限。'));
       }
       final regions = <Map<String, double>>[];
       var totalArea = 0.0;
       for (final rawRegion in rawRegions) {
         if (rawRegion is! Map) {
-          throw const FormatException('视觉模型返回了无效的区域。');
+          throw FormatException(t('视觉模型返回了无效的区域。'));
         }
         final region = <String, double>{};
         for (final key in const ['x', 'y', 'width', 'height']) {
           final value = rawRegion[key];
           if (value is! num || !value.toDouble().isFinite) {
-            throw const FormatException('视觉模型区域坐标必须是有限数字。');
+            throw FormatException(t('视觉模型区域坐标必须是有限数字。'));
           }
           region[key] = value.toDouble();
         }
@@ -607,7 +592,7 @@ class ModelService {
             area > 0.25 ||
             width * imageWidth < 2 ||
             height * imageHeight < 2) {
-          throw const FormatException('视觉模型区域坐标超出允许范围。');
+          throw FormatException(t('视觉模型区域坐标超出允许范围。'));
         }
         if (regions.any(
           (other) =>
@@ -616,11 +601,11 @@ class ModelService {
               y < other['y']! + other['height']! &&
               y + height > other['y']!,
         )) {
-          throw const FormatException('视觉模型区域建议互相重叠。');
+          throw FormatException(t('视觉模型区域建议互相重叠。'));
         }
         totalArea += area;
         if (totalArea > 0.3) {
-          throw const FormatException('视觉模型建议的遮罩总面积过大。');
+          throw FormatException(t('视觉模型建议的遮罩总面积过大。'));
         }
         regions.add(region);
       }
@@ -639,7 +624,7 @@ class ModelService {
     required Map<String, Object?> report,
     required String question,
   }) async {
-    final routeStrong = report['quality'] == '较弱' || report['solved'] == true;
+    final routeStrong = report['quality'] == t('较弱') || report['solved'] == true;
     final models = <(String, String)>[
       if (routeStrong) (strongKey, strongModel) else (lightKey, lightModel),
       if (routeStrong && lightKey.isNotEmpty)
@@ -670,34 +655,31 @@ class ModelService {
                     {
                       'role': 'system',
                       'content':
-                          '你是面向爱好者的天文图像助手。只依据数据回答，明确区分目录确认、估算和未知；'
-                              '不得把视觉背景说成 SQM/Bortle，也不得把仪器星等说成校准视星等。'
-                              '简洁使用中文。',
+                          t('你是面向爱好者的天文图像助手。只依据数据回答，明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，也不得把仪器星等说成校准视星等。简洁使用中文。'),
                     },
                     {
                       'role': 'user',
                       'content':
-                          '问题：${question.trim().isEmpty ? '请概括照片能确认的天文信息和可靠性。' : question.trim()}\n'
-                              '图像分析 JSON：${jsonEncode(report)}',
+                          t('问题：{0}\n图像分析 JSON：{1}', [question.trim().isEmpty ? t('请概括照片能确认的天文信息和可靠性。') : question.trim(), jsonEncode(report)]),
                     },
                   ],
                 }),
               )
               .timeout(const Duration(seconds: 45));
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            throw HttpException('模型 API 返回 HTTP ${response.statusCode}。');
+            throw HttpException(t('模型 API 返回 HTTP {0}。', [response.statusCode]));
           }
           final decoded = jsonDecode(response.body) as Map<String, dynamic>;
           final content = decoded['choices']?[0]?['message']?['content'];
           if (content is! String || content.trim().isEmpty) {
-            throw const FormatException('模型返回内容为空。');
+            throw FormatException(t('模型返回内容为空。'));
           }
           return content.trim();
         } catch (error) {
-          errors.add('$model：$error');
+          errors.add(t('{0}：{1}', [model, error]));
         }
       }
-      throw StateError(errors.isEmpty ? '未配置可用模型。' : errors.join('\n'));
+      throw StateError(errors.isEmpty ? t('未配置可用模型。') : errors.join('\n'));
     } finally {
       client.close();
     }

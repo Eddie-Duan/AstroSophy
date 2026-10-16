@@ -1,4 +1,4 @@
-/// 深空天体的中文昵称。
+/// 深空天体的常用昵称。
 ///
 /// 「M 45」对刚入门的人是三个字符，对爱好者是「昴星团」。星表编号是查得到的
 /// 凭据，昵称才是让人一眼认出「哦是这个」的东西，所以报告里两个都要给：
@@ -14,15 +14,22 @@
 /// 只显示编号，绝不按构词法硬译一个出来：一个编造的昵称比没有昵称糟糕得多，
 /// 用户会拿它当事实去搜，然后什么也搜不到。
 ///
-/// 译法取中文天文普及读物里通行的叫法（《中国大百科全书》天文学卷、各天文
-/// 馆与天文社团的通用译名那一套），不收只在个别译本里出现过的说法。
+/// 表里的值用中文当 key 交给 [t] 查译文，所以英文界面下报的是 Horsehead
+/// Nebula 这类英文惯用名。译法取各语言天文普及读物里通行的叫法，不收只在
+/// 个别译本里出现过的说法。
 library;
 
-/// 天体编号（`M 31`、`NGC 2244`、`IC 434`…）对应的中文昵称；没有就返回 null。
-String? chineseNicknameOf(String designation) {
+import 'strings.dart';
+
+/// 天体编号（`M 31`、`NGC 2244`、`IC 434`…）对应的常用昵称；没有就返回 null。
+///
+/// **查表在返回的时候做**，不在这张表初始化的时候做：表是顶层 `const`，值只会
+/// 求值一次——那样一来用户中途换语言，昵称会冻在打开应用时那门语言上。
+String? nicknameOf(String designation) {
   final key = _normalise(designation);
   if (key.isEmpty) return null;
-  return _nicknames[key];
+  final nickname = _nicknames[key];
+  return nickname == null ? null : t(nickname);
 }
 
 /// 从「M 16」或者「M 16 鹰状星云」里取出编号那一段，再查昵称。
@@ -33,7 +40,7 @@ String? chineseNicknameOf(String designation) {
 String? _nicknameOfLabel(String text) {
   final trimmed = text.trim();
   final match = RegExp(r'^[A-Za-z]+\s?\d+').firstMatch(trimmed);
-  return chineseNicknameOf(match?.group(0) ?? trimmed);
+  return nicknameOf(match?.group(0) ?? trimmed);
 }
 
 /// 「M 31 仙女座大星系」；没有昵称时就是原来那个编号。

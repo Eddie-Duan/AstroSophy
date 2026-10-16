@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'catalog.dart';
 import 'deepsky.dart';
@@ -248,7 +249,7 @@ class PlateSolver {
       ..sort((a, b) => b.flux.compareTo(a.flux));
     if (detections.length < _minimumDetections) return null;
 
-    onProgress?.call(const SolveProgress(0.05, '正在准备离线解算索引'));
+    onProgress?.call(SolveProgress(0.05, t('正在准备离线解算索引')));
     final index = _index;
     if (index.triangleCount == 0) return null;
     // 索引是跨帧复用的，像面尺寸每帧都可能不同，所以每次解算都更新。
@@ -266,20 +267,20 @@ class PlateSolver {
       progressBase: 0.25,
       progressSpan: 0.35,
       onProgress: onProgress,
-      layer: trace.startLayer('浅层', _shallowPool.length),
+      layer: trace.startLayer(t('浅层'), _shallowPool.length),
     );
     if (shallow != null) return shallow;
 
     // 浅层星表里这半天区根本没有几颗星，再往下就是唯一的路。
     if (_hasMidLayer) {
-      onProgress?.call(const SolveProgress(0.58, '正在加深星表再试一次'));
+      onProgress?.call(SolveProgress(0.58, t('正在加深星表再试一次')));
       final mid = _forFrame(
         _cachedMidIndex ??= _TriangleIndex.build(
           catalog,
           pool: _midPool,
           neighbours: _midNeighbours,
           onProgress: (fraction) => onProgress?.call(
-            SolveProgress(0.58 + 0.04 * fraction, '正在加深星表再试一次'),
+            SolveProgress(0.58 + 0.04 * fraction, t('正在加深星表再试一次')),
           ),
         ),
         analysis,
@@ -297,7 +298,7 @@ class PlateSolver {
               progressBase: 0.62,
               progressSpan: 0.1,
               onProgress: onProgress,
-              layer: trace.startLayer('中间层', _midPool.length),
+              layer: trace.startLayer(t('中间层'), _midPool.length),
             );
       if (solved != null) return solved;
     }
@@ -307,7 +308,7 @@ class PlateSolver {
     // 文案要让用户知道「还在跑、而且这次跑得久」，界面还会据此换一套配色
     // （见 [SolveProgress.deep]）。
     onProgress?.call(
-      const SolveProgress(0.72, '正在用最深的星表再试一次', deep: true),
+      SolveProgress(0.72, t('正在用最深的星表再试一次'), deep: true),
     );
     final deep = _forFrame(
       _cachedDeepIndex ??= _TriangleIndex.build(
@@ -315,7 +316,7 @@ class PlateSolver {
         pool: catalog.stars,
         neighbours: _deepNeighbours,
         onProgress: (fraction) => onProgress?.call(
-          SolveProgress(0.72 + 0.06 * fraction, '正在用最深的星表建索引',
+          SolveProgress(0.72 + 0.06 * fraction, t('正在用最深的星表建索引'),
               deep: true),
         ),
       ),
@@ -334,7 +335,7 @@ class PlateSolver {
       progressSpan: 0.12,
       onProgress: onProgress,
       deep: true,
-      layer: trace.startLayer('最深层', catalog.stars.length),
+      layer: trace.startLayer(t('最深层'), catalog.stars.length),
     );
   }
 
@@ -434,7 +435,7 @@ class PlateSolver {
       onProgress?.call(
         SolveProgress(
           progressBase + progressSpan * i / rungs.length,
-          '正在匹配星图三角形',
+          t('正在匹配星图三角形'),
           deep: deep,
         ),
       );
@@ -561,11 +562,11 @@ class PlateSolver {
       }
     }
 
-    onProgress?.call(SolveProgress(0.7, '正在精修天球坐标', deep: deep));
+    onProgress?.call(SolveProgress(0.7, t('正在精修天球坐标'), deep: deep));
     final wcs = _buildWcs(index, analysis, detections, best);
     if (wcs == null) return null;
 
-    onProgress?.call(SolveProgress(0.88, '正在标定星等零点', deep: deep));
+    onProgress?.call(SolveProgress(0.88, t('正在标定星等零点'), deep: deep));
     return _buildResult(index, analysis, detections, best, wcs);
   }
 
@@ -1105,8 +1106,8 @@ class PlateSolver {
           star.ra,
           star.dec,
           name?.spectralType?.isNotEmpty == true
-              ? '恒星 · ${name!.spectralType}'
-              : '恒星',
+              ? t('恒星 · {0}', [name!.spectralType])
+              : t('恒星'),
           magnitude: star.vMagnitude,
           magnitudeBand: 'V',
           x: x,

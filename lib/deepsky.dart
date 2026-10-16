@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show AssetBundle;
 
+import 'strings.dart';
 import 'catalog.dart';
 import 'models.dart';
 
@@ -146,8 +147,7 @@ class DeepSkyObject {
       );
 
   @override
-  String toString() => '$name（$category）'
-      '${angularSizeArcmin == null ? '' : ' ${angularSizeArcmin!.toStringAsFixed(1)}′'}';
+  String toString() => t('{0}（{1}）{2}', [name, category, angularSizeArcmin == null ? '' : ' ${angularSizeArcmin!.toStringAsFixed(1)}′']);
 }
 
 /// NGC 2000.0 的类型码翻成中文。
@@ -161,7 +161,10 @@ class DeepSkyObject {
 String describeDeepSkyType(String code) {
   final trimmed = code.trim();
   if (trimmed.isEmpty) return '';
-  return _deepSkyTypes[trimmed] ?? trimmed;
+  final name = _deepSkyTypes[trimmed];
+  // 表里存的是中文当 key，这里查译文——在返回的时候查，见 deepsky_names.dart
+  // 里对同一个坑的说明。
+  return name == null ? trimmed : t(name);
 }
 
 const _deepSkyTypes = <String, String>{

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'deepsky_names.dart';
 import 'models.dart';
@@ -104,7 +105,7 @@ Map<String, Object?> buildAgentReport(
         {
           'name': entry.name,
           'kind': entry.kind.name,
-          'kind_label': entry.kind.label,
+          'kind_label': t(entry.kind.label),
           'separation_arcsec': entry.detected ? entry.separationArcsec : null,
           'magnitude': entry.magnitudeIsRough ? null : entry.magnitude,
           'magnitude_is_rough': entry.magnitudeIsRough,
@@ -189,9 +190,7 @@ class MoonFacts {
     final other = ephemerisFraction;
     if (other == null) return null;
     if ((measuredFraction - other).abs() <= _agreementTolerance) return null;
-    return '图上量出 $measuredPercent，按拍摄时刻算是 $ephemerisPercent，'
-        '差得比预期大。可能是拍摄时刻不对（这个数对时间很敏感），'
-        '也可能是明暗界线附近的亮度被曝光或后期处理改了。';
+    return t('图上量出 {0}，按拍摄时刻算是 {1}，差得比预期大。可能是拍摄时刻不对（这个数对时间很敏感），也可能是明暗界线附近的亮度被曝光或后期处理改了。', [measuredPercent, ephemerisPercent]);
   }
 }
 
@@ -242,14 +241,14 @@ String buildHeadlineMarkdown(
   if (moonFacts != null) {
     // 月面照片没有星场可报，「在哪个星座」对月亮没有意义——月亮几分钟就挪
     // 出星座边界。它有自己的三件事：相、亮面占比、占多大。
-    lines.add('## ${moonFacts.phaseName ?? '月亮'}');
+    lines.add('## ${moonFacts.phaseName ?? t('月亮')}');
     lines.add('');
-    lines.add('- 亮面占比 ==${moonFacts.measuredPercent}==（图上量的）');
+    lines.add(t('- 亮面占比 =={0}==（图上量的）', [moonFacts.measuredPercent]));
     if (moonFacts.ephemerisPercent != null) {
-      lines.add('- 按拍摄时刻算 ==${moonFacts.ephemerisPercent}==');
+      lines.add(t('- 按拍摄时刻算 =={0}==', [moonFacts.ephemerisPercent]));
     }
     final disc = analysis.moonDisc!;
-    lines.add('- 月盘占画面 ==${(disc.discAreaFraction * 100).toStringAsFixed(2)}%==');
+    lines.add(t('- 月盘占画面 =={0}%==', [(disc.discAreaFraction * 100).toStringAsFixed(2)]));
     if (moonFacts.caution != null) {
       lines.add('');
       lines.add('> ${moonFacts.caution}');
@@ -261,47 +260,42 @@ String buildHeadlineMarkdown(
       solve != null && solve.constellations.isNotEmpty
           ? solve.constellations.first
           : null;
-  lines.add('## ${constellation ?? (solve == null ? '天区未识别' : '天区已解算')}');
+  lines.add('## ${constellation ?? (solve == null ? t('天区未识别') : t('天区已解算'))}');
   lines.add('');
 
   final bodies = buildMovingBodyEntries(solve);
   for (final body in bodies) {
     // 行星是这张图上最稀有、也最该被先看到的结论，排在第一条。
     if (!body.detected) {
-      lines.add('- ${body.name}（${body.kind.label}）${body.magnitudeLabel}'
-          '${body.reachLabel}——图上没有对上');
+      lines.add(t('- {0}（{1}）{2}{3}——图上没有对上', [body.name, t(body.kind.label), body.magnitudeLabel, body.reachLabel]));
       continue;
     }
-    lines.add('- ==${body.name}==（${body.kind.label}）'
-        '${body.magnitudePhrase == null ? '' : '，${body.magnitudePhrase}'}'
-        '，${body.separationLabel}');
+    lines.add(t('- =={0}==（{1}）{2}，{3}', [body.name, t(body.kind.label), body.magnitudePhrase == null ? '' : t('，{0}', [body.magnitudePhrase]), body.separationLabel]));
   }
 
   final named = _chineseNamedStars(solve);
   if (named.isNotEmpty) {
-    lines.add('- 亮星 ${named.map((name) => '==$name==').join('、')}');
+    lines.add(t('- 亮星 {0}', [named.map((name) => '==$name==').join(t('、'))]));
   }
 
   final deepSky = buildDeepSkyEntries(solve);
   if (deepSky.isNotEmpty) {
     lines.add(
-      '- 深空天体 ${deepSky.take(3).map((entry) {
+      t('- 深空天体 {0}', [deepSky.take(3).map((entry) {
         final label = entry.label;
         final coverage = entry.fieldFraction;
         if (coverage == null || coverage < 0.05) return '==$label==';
-        return '==$label==（占像场 ${(coverage * 100).round()}%）';
-      }).join('、')}',
+        return t('=={0}==（占像场 {1}%）', [label, (coverage * 100).round()]);
+      }).join(t('、'))]),
     );
   }
 
   if (solve != null) {
     lines.add(
-      '- 视场 ==${formatFieldOfView(solve.fieldOfViewDegrees)}== · '
-      '==${solve.arcsecPerPixel.toStringAsFixed(1)}″==/像素 · '
-      '星表匹配 ==${solve.matchedCount}== 颗',
+      t('- 视场 =={0}== · =={1}″==/像素 · 星表匹配 =={2}== 颗', [formatFieldOfView(solve.fieldOfViewDegrees), solve.arcsecPerPixel.toStringAsFixed(1), solve.matchedCount]),
     );
   } else if (analysis.compactSources.isNotEmpty) {
-    lines.add('- 检出 ==${analysis.compactSources.length}== 个紧凑点源，但没和星表对上');
+    lines.add(t('- 检出 =={0}== 个紧凑点源，但没和星表对上', [analysis.compactSources.length]));
   }
 
   return lines.join('\n');
@@ -405,13 +399,13 @@ ObservationRecord buildObservationRecord(
         solve != null && solve.constellations.isNotEmpty
             ? solve.constellations.first
             : null,
-    centerRa: solve == null ? '未解算' : formatRa(solve.centerRa),
-    centerDec: solve == null ? '未解算' : formatDec(solve.centerDec),
+    centerRa: solve == null ? t('未解算') : formatRa(solve.centerRa),
+    centerDec: solve == null ? t('未解算') : formatDec(solve.centerDec),
     fieldOfView:
-        solve == null ? '未解算' : formatFieldOfView(solve.fieldOfViewDegrees),
+        solve == null ? t('未解算') : formatFieldOfView(solve.fieldOfViewDegrees),
     scale: solve == null
-        ? '未解算'
-        : '${solve.arcsecPerPixel.toStringAsFixed(1)}″ / 像素',
+        ? t('未解算')
+        : t('{0}″ / 像素', [solve.arcsecPerPixel.toStringAsFixed(1)]),
     matchedStars: solve?.matchedCount ?? 0,
     brightest: _brightest(analysis, solve),
     quality: analysis.quality,
@@ -514,10 +508,10 @@ class StarRow {
 
   String get confidenceLabel {
     final value = confidence;
-    if (value == null) return '未检出';
-    if (value >= 0.7) return '较可信';
-    if (value >= 0.35) return '供参考';
-    return '低可信';
+    if (value == null) return t('未检出');
+    if (value >= 0.7) return t('较可信');
+    if (value >= 0.35) return t('供参考');
+    return t('低可信');
   }
 }
 
@@ -569,11 +563,11 @@ double? _confidenceNear(SkyObject object, List<DetectedStar> detections) {
 /// 后期处理影响，跟 SQM 读数或 Bortle 等级不是一回事。说成等级会让人拿去
 /// 跟别人比，比出来的差异其实主要是机器设得不一样。
 String describeSkyBrightness(double index) {
-  if (index < 12) return '很暗';
-  if (index < 25) return '偏暗';
-  if (index < 42) return '一般';
-  if (index < 60) return '偏亮';
-  return '很亮';
+  if (index < 12) return t('很暗');
+  if (index < 25) return t('偏暗');
+  if (index < 42) return t('一般');
+  if (index < 60) return t('偏亮');
+  return t('很亮');
 }
 
 /// 画面里最亮的那颗天体。
@@ -594,14 +588,14 @@ String? _brightest(SkyAnalysis analysis, SolveResult? solve) {
       final magnitude = object.magnitude;
       return magnitude == null
           ? object.name
-          : '${object.name}（${object.magnitudeBand} ${magnitude.toStringAsFixed(2)}）';
+          : t('{0}（{1} {2}）', [object.name, object.magnitudeBand, magnitude.toStringAsFixed(2)]);
     }
   }
   // 最亮的那颗没能对上星名时要说清楚是哪种情况：没解算，和
   // 「解算了但这颗星不在目录里」（太暗、或被掩膜吃掉）是两回事。
   return solve == null
-      ? '图内最亮点（未解算，无法确认星名）'
-      : '图内最亮点（星表里没有对应的名称）';
+      ? t('图内最亮点（未解算，无法确认星名）')
+      : t('图内最亮点（星表里没有对应的名称）');
 }
 
 /// 拍摄建议。每条都从测量结果里推出来，不写没有依据的话。
@@ -613,53 +607,35 @@ List<String> buildAdvice(
   final advice = <String>[];
   if (moon != null) {
     // 月面照片走另一条链路，星场那套建议（对焦、星点数量、解算）一条都不适用。
-    advice.add('这是一张月面照片，亮面占月盘的 ${moon.measuredPercent}。'
-        '拍月面讲究的是不过曝：月亮比恒星亮上万倍，'
-        '要单独用很短的曝光，别和星空用同一套参数。');
+    advice.add(t('这是一张月面照片，亮面占月盘的 {0}。拍月面讲究的是不过曝：月亮比恒星亮上万倍，要单独用很短的曝光，别和星空用同一套参数。', [moon.measuredPercent]));
     if (moon.phaseName != null) {
-      advice.add('拍摄时刻算出来是${moon.phaseName}，'
-          '亮面占比应有 ${moon.ephemerisPercent}，和图上量出来的'
-          '${moon.measuredPercent} 是两个独立的数——'
-          '它们对得上，说明测量可信。');
+      advice.add(t('拍摄时刻算出来是{0}，亮面占比应有 {1}，和图上量出来的{2} 是两个独立的数——它们对得上，说明测量可信。', [moon.phaseName, moon.ephemerisPercent, moon.measuredPercent]));
     } else {
-      advice.add('没有拍摄时刻就没有相名，也说不清是在盈还是在亏：'
-          '单张照片里相机有没有镜像或上下翻转是看不出来的。'
-          '在下方填上拍摄时间，就能算出来。');
+      advice.add(t('没有拍摄时刻就没有相名，也说不清是在盈还是在亏：单张照片里相机有没有镜像或上下翻转是看不出来的。在下方填上拍摄时间，就能算出来。'));
     }
     if (analysis.saturatedFraction > 0.01) {
-      advice.add('有 ${(analysis.saturatedFraction * 100).toStringAsFixed(1)}% '
-          '的像素已经饱和。月面比以前更亮的部分会连成一片死白，'
-          '明暗界线也会被抹平——把曝光再降一档。');
+      advice.add(t('有 {0}% 的像素已经饱和。月面比以前更亮的部分会连成一片死白，明暗界线也会被抹平——把曝光再降一档。', [(analysis.saturatedFraction * 100).toStringAsFixed(1)]));
     }
     final caution = moon.caution;
     if (caution != null) advice.add(caution);
     return advice;
   }
   if (!analysis.isLikelyStarfield) {
-    advice.add('这张图看起来不完全是星空——里面有超过 '
-        '${(analysis.nonStarFraction * 100).toStringAsFixed(0)}% 的区域'
-        '（文字、表格、建筑或大幅面亮块）。星空相关的测量只在星场区域内有效。');
+    advice.add(t('这张图看起来不完全是星空——里面有超过 {0}% 的区域（文字、表格、建筑或大幅面亮块）。星空相关的测量只在星场区域内有效。', [(analysis.nonStarFraction * 100).toStringAsFixed(0)]));
   }
   if (analysis.fwhm > 5.5) {
-    advice.add('点源半高全宽 ${analysis.fwhm.toStringAsFixed(1)} 像素，偏大：'
-        '对焦可以再准一些，或者曝光期间有轻微抖动。');
+    advice.add(t('点源半高全宽 {0} 像素，偏大：对焦可以再准一些，或者曝光期间有轻微抖动。', [analysis.fwhm.toStringAsFixed(1)]));
   } else if (analysis.fwhm > 0 && analysis.fwhm < 1.6) {
-    advice.add('点源半高全宽只有 ${analysis.fwhm.toStringAsFixed(1)} 像素，'
-        '星星几乎被压在一个像素里——用了很强的降噪或锐化？'
-        '这会压扁亮星的测光结果。');
+    advice.add(t('点源半高全宽只有 {0} 像素，星星几乎被压在一个像素里——用了很强的降噪或锐化？这会压扁亮星的测光结果。', [analysis.fwhm.toStringAsFixed(1)]));
   }
   if (analysis.saturatedFraction > 0.008) {
-    advice.add('有 ${(analysis.saturatedFraction * 100).toStringAsFixed(1)}% 的像素过曝。'
-        '亮星的核心一旦压平，星等就量不准了，可以缩短曝光或降 ISO。');
+    advice.add(t('有 {0}% 的像素过曝。亮星的核心一旦压平，星等就量不准了，可以缩短曝光或降 ISO。', [(analysis.saturatedFraction * 100).toStringAsFixed(1)]));
   }
   if (analysis.noise > 0.055) {
-    advice.add('背景噪声 ${(analysis.noise * 100).toStringAsFixed(1)}%，偏高。'
-        '同一机位多拍几张叠加（每张 10–20 张起步）比拉高 ISO 更划算。');
+    advice.add(t('背景噪声 {0}%，偏高。同一机位多拍几张叠加（每张 10–20 张起步）比拉高 ISO 更划算。', [(analysis.noise * 100).toStringAsFixed(1)]));
   }
   if (analysis.backgroundIndex > 55) {
-    advice.add('天空背景偏亮（视觉指数 '
-        '${analysis.backgroundIndex.toStringAsFixed(0)}/100），'
-        '暗弱的天体会淹在背景里。换到远离城市灯光的位置，或者加一片光害滤镜。');
+    advice.add(t('天空背景偏亮（视觉指数 {0}/100），暗弱的天体会淹在背景里。换到远离城市灯光的位置，或者加一片光害滤镜。', [analysis.backgroundIndex.toStringAsFixed(0)]));
   }
   // 拍深空目标的人最容易被「星点怎么这么少」劝退，以为是自己拍砸了。
   // 画面里有深空天体时先把这句话说在前头：这是目标本身的性质，不是失败。
@@ -668,31 +644,25 @@ List<String> buildAdvice(
     final main = deepSky.first;
     final what = main.category.isEmpty
         ? main.name
-        : '${main.name}（${main.category}）';
+        : t('{0}（{1}）', [main.name, main.category]);
     final sizePart =
-        main.angularSizeArcmin == null ? '' : '（${main.sizeLabel}）';
+        main.angularSizeArcmin == null ? '' : t('（{0}）', [main.sizeLabel]);
     final coveragePart =
-        main.coverageLabel.isEmpty ? '' : '，${main.coverageLabel}';
+        main.coverageLabel.isEmpty ? '' : t('，{0}', [main.coverageLabel]);
     advice.add(
-      '这张照片拍的是深空目标 $what$sizePart$coveragePart。'
-      '这类目标本身就是一个延展的亮斑，'
-      '画面里的紧凑星点本来就比普通星场少，不是拍坏了，也不是对焦不准。',
+      t('这张照片拍的是深空目标 {0}{1}{2}。这类目标本身就是一个延展的亮斑，画面里的紧凑星点本来就比普通星场少，不是拍坏了，也不是对焦不准。', [what, sizePart, coveragePart]),
     );
   }
   if (analysis.streakCandidates.isNotEmpty) {
-    advice.add('检出 ${analysis.streakCandidates.length} 条拉长的亮点，'
-        '很可能是卫星或飞机。单张照片没法确认是哪一种，'
-        '但可以在下方列表里逐条剔除，别让它们带偏结果。');
+    advice.add(tn('检出 {0} 条拉长的亮点，很可能是卫星或飞机。单张照片没法确认是哪一种，但可以在下方列表里逐条剔除，别让它们带偏结果。', analysis.streakCandidates.length, [analysis.streakCandidates.length]));
   }
   if (solve == null) {
-    advice.add('这次没能解开天区，所以还不知道拍的是哪一片星空。'
-        '视场太窄或星点太少时会这样，可以试试更广的镜头，'
-        '或填好 Astrometry.net API Key 交给在线解算。');
+    advice.add(t('这次没能解开天区，所以还不知道拍的是哪一片星空。视场太窄或星点太少时会这样，可以试试更广的镜头，或填好 Astrometry.net API Key 交给在线解算。'));
   }
   // 解算方式（本机 / 在线）不写进建议：它是事实陈述，不是可执行的改进，
   // 而且天区识别那张卡里已经写明。留在这里会把下面这条兜底挤掉。
   if (advice.isEmpty) {
-    advice.add('这张照片的测量结果没有明显问题，可以直接作为观测记录留存。');
+    advice.add(t('这张照片的测量结果没有明显问题，可以直接作为观测记录留存。'));
   }
   return advice;
 }
@@ -718,23 +688,15 @@ List<String> buildSolveFailureAdvice(
 
   if (!analysis.isLikelyStarfield) {
     advice.add(
-      '本机没能认出这片天区，而且这张图看起来就不是以星场为主的照片。'
-      '先在相册里裁掉文字、地面和建筑，只留星空再试一次。',
+      t('本机没能认出这片天区，而且这张图看起来就不是以星场为主的照片。先在相册里裁掉文字、地面和建筑，只留星空再试一次。'),
     );
   } else if (compact < 8) {
     advice.add(
-      '本机没能认出这片天区：图上只检出 $compact 个紧凑点源，参考星太少。'
-      '把曝光时间加倍（或 ISO 提高一档）重拍一张，'
-      '或者把镜头拉到更广的焦段——视场越大，画面里的参考星越多。',
+      t('本机没能认出这片天区：图上只检出 {0} 个紧凑点源，参考星太少。把曝光时间加倍（或 ISO 提高一档）重拍一张，或者把镜头拉到更广的焦段——视场越大，画面里的参考星越多。', [compact]),
     );
   } else {
     advice.add(
-      '本机没能认出这片天区。图上检出了 $compact 个紧凑点源，'
-      '所以不是星点太少，而是图中点源与已知恒星位置对不上：'
-      '内置目录收录到 V=8.0 的亮星，另有一层 9 等以内的背景星兜底；'
-      '视场窄到 4° 以下、或者画面里大半「星点」其实是星系星云一类'
-      '并非点源的东西，就还是对不上。'
-      '换更广的焦段（或加 0.5× 减焦镜）更容易成功。',
+      t('本机没能认出这片天区。图上检出了 {0} 个紧凑点源，所以不是星点太少，而是图中点源与已知恒星位置对不上：内置目录收录到 V=8.0 的亮星，另有一层 9 等以内的背景星兜底；视场窄到 4° 以下、或者画面里大半「星点」其实是星系星云一类并非点源的东西，就还是对不上。换更广的焦段（或加 0.5× 减焦镜）更容易成功。', [compact]),
     );
   }
 
@@ -747,31 +709,24 @@ List<String> buildSolveFailureAdvice(
   if (uploadAllowed && hasApiKey) {
     advice.add(
       onlineError == null
-          ? '也可以交给在线解算：它用的是完整的星表，窄视场基本只有这条路能走通。'
-          : '在线解算这次也没成功（$onlineError）。'
-              '在线服务用的是完整星表，如果它也认不出来，'
-              '更可能是画面本身的问题——检查是否有云、拖线、严重失焦。',
+          ? t('也可以交给在线解算：它用的是完整的星表，窄视场基本只有这条路能走通。')
+          : t('在线解算这次也没成功（{0}）。在线服务用的是完整星表，如果它也认不出来，更可能是画面本身的问题——检查是否有云、拖线、严重失焦。', [onlineError]),
     );
   } else {
     advice.add(
       uploadAllowed
-          ? '在线解算已经开着，但设置里还没有 Astrometry.net 的 API Key。'
-              '填上 Key 之后，窄视场就可以交给在线服务——它用的是完整的星表。'
-          : '如果这是一张长焦或望远镜拍的照片，本机解算多半解不出来。'
-              '到「设置」里填上 Astrometry.net 的 API Key 并授权上传，'
-              '就可以改走在线解算。',
+          ? t('在线解算已经开着，但设置里还没有 Astrometry.net 的 API Key。填上 Key 之后，窄视场就可以交给在线服务——它用的是完整的星表。')
+          : t('如果这是一张长焦或望远镜拍的照片，本机解算多半解不出来。到「设置」里填上 Astrometry.net 的 API Key 并授权上传，就可以改走在线解算。'),
     );
   }
 
   if (analysis.fwhm > 8) {
     advice.add(
-      '另外，点源半高全宽有 ${analysis.fwhm.toStringAsFixed(1)} 像素，'
-      '明显偏大：先重新手动对焦（实时取景放到最大找最锐的位置）再拍。',
+      t('另外，点源半高全宽有 {0} 像素，明显偏大：先重新手动对焦（实时取景放到最大找最锐的位置）再拍。', [analysis.fwhm.toStringAsFixed(1)]),
     );
   } else if (analysis.streakCandidates.length > 30) {
     advice.add(
-      '另外，画面里有 ${analysis.streakCandidates.length} 条拉长的亮点。'
-      '如果是星点拖线，说明曝光期间设备动了——缩短单张曝光时间会有帮助。',
+      t('另外，画面里有 {0} 条拉长的亮点。如果是星点拖线，说明曝光期间设备动了——缩短单张曝光时间会有帮助。', [analysis.streakCandidates.length]),
     );
   }
   return advice;
@@ -790,16 +745,15 @@ String? describeSolveAttempt(SolveTrace? trace) {
   if (trace == null || trace.layers.isEmpty) return null;
   final layers = [
     for (final layer in trace.layers)
-      '${layer.label} ${layer.starCount} 颗（试 ${layer.rungsTried} 档）',
+      t('{0} {1} 颗（试 {2} 档）', [layer.label, layer.starCount, layer.rungsTried]),
   ];
-  final buffer = StringBuffer('本机解算未成功：${layers.join('、')}；');
+  final buffer = StringBuffer(t('本机解算未成功：{0}；', [layers.join(t('、'))]));
   if (trace.bestRequired == 0) {
     // 一次内点都没数到：三角形候选连验证那一步都没走到。
-    buffer.write('候选三角形一个都没能对上内点。');
+    buffer.write(t('候选三角形一个都没能对上内点。'));
   } else {
     buffer.write(
-      '最多数到 ${trace.bestInliers} 颗内点，'
-      '需要 ${trace.bestRequired} 颗。',
+      t('最多数到 {0} 颗内点，需要 {1} 颗。', [trace.bestInliers, trace.bestRequired]),
     );
   }
   return buffer.toString();
@@ -856,7 +810,7 @@ class DeepSkyEntry {
 
   /// 常见中文昵称（「昴星团」）；这张表只收最常被提到的那批目标，没有就是
   /// null，此时只报编号，不硬译一个出来。
-  String? get nickname => chineseNicknameOf(name);
+  String? get nickname => nicknameOf(name);
 
   /// 报告里写这个名字：`M 45 昴星团`。
   String get label => deepSkyLabel(name);
@@ -880,20 +834,20 @@ class DeepSkyEntry {
   /// 「约 190′ 长」或「尺寸未知」。
   String get sizeLabel {
     final size = angularSizeArcmin;
-    if (size == null || size <= 0) return '尺寸未知';
-    if (size < 1) return '约 ${(size * 60).round()}″';
-    if (size < 60) return '约 ${size.toStringAsFixed(1)}′';
-    return '约 ${(size / 60).toStringAsFixed(2)}°';
+    if (size == null || size <= 0) return t('尺寸未知');
+    if (size < 1) return t('约 {0}″', [(size * 60).round()]);
+    if (size < 60) return t('约 {0}′', [size.toStringAsFixed(1)]);
+    return t('约 {0}°', [(size / 60).toStringAsFixed(2)]);
   }
 
   /// 「占像场对角线的 13%」或「比像场还大」。
   String get coverageLabel {
     final fraction = fieldFraction;
     if (fraction == null) return '';
-    if (fraction >= 1) return '比像场对角线还大，画面里只是它的一部分';
-    if (fraction >= 0.35) return '约占像场对角线的 ${(fraction * 100).round()}%，是这张照片的主体';
-    if (fraction >= 0.1) return '约占像场对角线的 ${(fraction * 100).round()}%';
-    return '只占像场对角线的 ${(fraction * 100).toStringAsFixed(1)}%，在这套器材上偏小';
+    if (fraction >= 1) return t('比像场对角线还大，画面里只是它的一部分');
+    if (fraction >= 0.35) return t('约占像场对角线的 {0}%，是这张照片的主体', [(fraction * 100).round()]);
+    if (fraction >= 0.1) return t('约占像场对角线的 {0}%', [(fraction * 100).round()]);
+    return t('只占像场对角线的 {0}%，在这套器材上偏小', [(fraction * 100).toStringAsFixed(1)]);
   }
 }
 
@@ -992,8 +946,8 @@ class MovingBodyEntry {
   /// 「和星历位置差 42″」。
   String get separationLabel {
     final seconds = separationArcsec;
-    if (seconds < movingBodyCoincidenceArcsec) return '和星历位置几乎重合';
-    return '和星历位置差 ${seconds.round()}″';
+    if (seconds < movingBodyCoincidenceArcsec) return t('和星历位置几乎重合');
+    return t('和星历位置差 {0}″', [seconds.round()]);
   }
 
   /// 「亮度约 8.0 等」；不可靠或没有时为 null。
@@ -1002,17 +956,17 @@ class MovingBodyEntry {
   /// 好几等。
   String? get magnitudePhrase => magnitude == null || magnitudeIsRough
       ? null
-      : '亮度约 ${magnitude!.toStringAsFixed(1)} 等';
+      : t('亮度约 {0} 等', [magnitude!.toStringAsFixed(1)]);
 
   /// 「，亮度约 8.0 等」。
   String get magnitudeLabel {
     final phrase = magnitudePhrase;
-    return phrase == null ? '' : '，$phrase';
+    return phrase == null ? '' : t('，{0}', [phrase]);
   }
 
   String get distanceLabel => distanceAu == null
       ? ''
-      : '，距地球约 ${distanceAu!.toStringAsFixed(2)} 个天文单位';
+      : t('，距地球约 {0} 个天文单位', [distanceAu!.toStringAsFixed(2)]);
 
   /// 「，这个器材拍不到」——只有算出来比手机能记到的极限还暗时才这么说。
   ///
@@ -1021,8 +975,8 @@ class MovingBodyEntry {
     final value = magnitude;
     if (value == null) return '';
     return value > smallBodyPhotoLimitMagnitude
-        ? '，比手机能拍到的极限还暗，这个器材拍不到'
-        : '，亮度上够得着，但这张图上没有对上';
+        ? t('，比手机能拍到的极限还暗，这个器材拍不到')
+        : t('，亮度上够得着，但这张图上没有对上');
   }
 
   /// 一句话讲完这一条。
@@ -1030,7 +984,7 @@ class MovingBodyEntry {
   /// 认出来的讲位置、亮度、距离，以及它和星历差了多少；没认出来的不能讲「差
   /// 多少」——那个差数根本不存在。
   String get describe => detected
-      ? '$name$distanceLabel$magnitudeLabel，$separationLabel'
+      ? t('{0}{1}{2}，{3}', [name, distanceLabel, magnitudeLabel, separationLabel])
       : '$name$distanceLabel$magnitudeLabel$reachLabel';
 
   /// [describe] 去掉开头的名字。想在名字后面插一句类别（「灶神星（小行星）」）
@@ -1045,18 +999,16 @@ class MovingBodyEntry {
 /// 上面每一条条目自己的副标题里——那里说得开，也不会让这一句长到没人读。
 /// 想再核实的话，过几天在同一机位重拍一张最实在：这些天体几天里会挪出可见的
 /// 位置，恒星不会。
-const String movingBodyCaution =
-    '这些是「疑似」，不是「确认」。';
+String get movingBodyCaution =>
+    t('这些是「疑似」，不是「确认」。');
 
 /// 「它在画面里，但没认出来」那一条的说明。
 ///
 /// 单独一条，因为这两件事的成因完全不同：认出来是「位置对上了 ＋ 星表里没有星」，
 /// 没认出来是「位置算出来了，但图上找不到够亮的点」——八成是亮度不够。混在一段话
 /// 里说，用户会以为前者也不可信。
-const String unidentifiedBodyCaution =
-    '「画面里还有」那几条是另一回事：它们的位置是算出来的，但图上没有找到能对上'
-    '的亮点。多数情况是亮度不够——手机和小口径望远镜拍不到十几等的天体，'
-    '这跟这个天体在不在那儿没有关系。';
+String get unidentifiedBodyCaution =>
+    t('「画面里还有」那几条是另一回事：它们的位置是算出来的，但图上没有找到能对上的亮点。多数情况是亮度不够——手机和小口径望远镜拍不到十几等的天体，这跟这个天体在不在那儿没有关系。');
 
 /// 把解算结果里的疑似运动天体整理成报告条目。
 ///
@@ -1096,16 +1048,18 @@ String _summary(
   MoonFacts? moon,
 ]) {
   if (moon != null) {
-    final buffer = StringBuffer('这张照片拍的是月亮。');
-    buffer.write('月盘占画面约 ${(analysis.moonDisc!.discAreaFraction * 100).toStringAsFixed(2)}%，'
-        '亮面占月盘 ${moon.measuredPercent}。');
+    final buffer = StringBuffer(t('这张照片拍的是月亮。'));
+    buffer.write(t('月盘占画面约 {0}%，亮面占月盘 {1}。', [(analysis.moonDisc!.discAreaFraction * 100).toStringAsFixed(2), moon.measuredPercent]));
     if (moon.phaseName != null) {
-      buffer.write('按拍摄时刻算，这时月亮是${moon.phaseName}');
-      buffer.write('（亮面 $moon.ephemerisPercent）。');
+      buffer.write(t('按拍摄时刻算，这时月亮是{0}', [moon.phaseName]));
+      // 这里原来是 `'（亮面 $moon.ephemerisPercent）。'`：Dart 的 `$名字` 只吃一个
+      // 标识符，`.ephemerisPercent` 会被当成字面量原样打出来，报告里于是出现过
+      // 「亮面 0.63.ephemerisPercent」。定位符得写成整段表达式。
+      buffer.write(t('（亮面 {0}）。', [moon.ephemerisPercent]));
     } else {
-      buffer.write('没有拍摄时刻，所以算不出相名，也说不清是在盈还是在亏。');
+      buffer.write(t('没有拍摄时刻，所以算不出相名，也说不清是在盈还是在亏。'));
     }
-    buffer.write('画面里没有可用的星场——拍月亮的时候基本拍不到别的。');
+    buffer.write(t('画面里没有可用的星场——拍月亮的时候基本拍不到别的。'));
     return buffer.toString();
   }
   final buffer = StringBuffer();
@@ -1114,30 +1068,24 @@ String _summary(
           ? solve.constellations.first
           : null;
   if (solve == null) {
-    buffer.write('这张照片还没能认出是哪一片星空。');
+    buffer.write(t('这张照片还没能认出是哪一片星空。'));
   } else if (constellation != null) {
-    buffer.write('这张照片拍的是 $constellation 一带的天区，');
+    buffer.write(t('这张照片拍的是 {0} 一带的天区，', [constellation]));
   } else {
-    buffer.write('这张照片的天区已经解开，');
+    buffer.write(t('这张照片的天区已经解开，'));
   }
   if (solve != null) {
     buffer.write(
-      '中心在 ${formatRa(solve.centerRa)} / ${formatDec(solve.centerDec)}，'
-      '视场对角 ${formatFieldOfView(solve.fieldOfViewDegrees)}，'
-      '每像素 ${solve.arcsecPerPixel.toStringAsFixed(1)} 角秒。',
+      t('中心在 {0} / {1}，视场对角 {2}，每像素 {3} 角秒。', [formatRa(solve.centerRa), formatDec(solve.centerDec), formatFieldOfView(solve.fieldOfViewDegrees), solve.arcsecPerPixel.toStringAsFixed(1)]),
     );
-    buffer.write('与星表比对上 ${solve.matchedCount} 颗恒星。');
+    buffer.write(tn('与星表比对上 {0} 颗恒星。', solve.matchedCount, [solve.matchedCount]));
   }
   buffer.write(
-    '图上检出 ${analysis.compactSources.length} 个紧凑点源，'
-    '点源半高全宽约 ${analysis.fwhm.toStringAsFixed(1)} 像素，'
-    '背景${describeSkyBrightness(analysis.backgroundIndex)}，'
-    '整体质量${analysis.quality}。',
+    t('图上检出 {0} 个紧凑点源，点源半高全宽约 {1} 像素，背景{2}，整体质量{3}。', [analysis.compactSources.length, analysis.fwhm.toStringAsFixed(1), describeSkyBrightness(analysis.backgroundIndex), analysis.quality]),
   );
   if (magnitudes.isNotEmpty) {
     buffer.write(
-      '能测到的最亮星等约 ${magnitudes.reduce((a, b) => a < b ? a : b).toStringAsFixed(1)}，'
-      '最暗约 ${magnitudes.reduce((a, b) => a > b ? a : b).toStringAsFixed(1)}。',
+      t('能测到的最亮星等约 {0}，最暗约 {1}。', [magnitudes.reduce((a, b) => a < b ? a : b).toStringAsFixed(1), magnitudes.reduce((a, b) => a > b ? a : b).toStringAsFixed(1)]),
     );
   }
   // 画面里的深空天体比「拍到了哪颗星」更接近用户真正想拍的东西，所以放在
@@ -1148,14 +1096,13 @@ String _summary(
         .take(3)
         .map((entry) => entry.category.isEmpty
             ? entry.name
-            : '${entry.name}（${entry.category}）')
-        .join('、');
+            : t('{0}（{1}）', [entry.name, entry.category]))
+        .join(t('、'));
     final main = entries.first;
     final coverage =
-        main.coverageLabel.isEmpty ? '' : '，${main.coverageLabel}';
+        main.coverageLabel.isEmpty ? '' : t('，{0}', [main.coverageLabel]);
     buffer.write(
-      '画面里有 ${solve.deepSkyObjects.length} 个深空天体，'
-      '其中最主要的是 $names——${main.sizeLabel}$coverage。',
+      t('画面里有 {0} 个深空天体，其中最主要的是 {1}——{2}{3}。', [solve.deepSkyObjects.length, names, main.sizeLabel, coverage]),
     );
   }
   // 行星是这张照片里唯一「只在这一刻成立」的东西，所以它有话说的时候要单独
@@ -1171,14 +1118,10 @@ String _summary(
         if (!entry.detected) entry,
     ];
     if (detected.isNotEmpty) {
-      buffer.write('另外，图上 '
-          '${detected.map((entry) => '${entry.name}（${entry.kind.label}）${entry.describeWithoutName}').join('、')}，'
-          '疑似是行星这一类会动的天体——'
-          '这个判断依赖拍摄时刻，也依赖星历的精度，所以只说疑似。');
+      buffer.write(t('另外，图上 {0}，疑似是行星这一类会动的天体——这个判断依赖拍摄时刻，也依赖星历的精度，所以只说疑似。', [detected.map((entry) => t('{0}（{1}）{2}', [entry.name, t(entry.kind.label), entry.describeWithoutName])).join(t('、'))]));
     }
     if (unidentified.isNotEmpty) {
-      buffer.write('${detected.isEmpty ? '另外，' : ''}这张照片上还应该有 '
-          '${unidentified.map((entry) => entry.describe).join('、')}。');
+      buffer.write(t('{0}这张照片上还应该有 {1}。', [detected.isEmpty ? t('另外，') : '', unidentified.map((entry) => entry.describe).join(t('、'))]));
     }
   }
   return buffer.toString();

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as imglib;
 
+import 'strings.dart';
 import 'models.dart';
 import 'moon_disc.dart';
 
@@ -275,7 +276,7 @@ class SkyAnalysis {
             .whereType<Map<Object?, Object?>>()
             .map((item) => DetectedStar.fromJson(Map<String, Object?>.from(item)))
             .toList(growable: false),
-        quality: json['quality'] as String? ?? '未知',
+        quality: json['quality'] as String? ?? t('未知'),
         background: _asDouble(json['background']),
         noise: _asDouble(json['noise']),
         backgroundIndex: _asDouble(json['background_index']),
@@ -312,8 +313,8 @@ class SkyAnalysis {
   }) {
     final decoded = decodeImageOrRawPreview(bytes);
     if (decoded == null) {
-      throw const FormatException(
-        '无法解码此图片或 RAW 内嵌预览。请在相机应用中导出 JPG/PNG 后重试。',
+      throw FormatException(
+        t('无法解码此图片或 RAW 内嵌预览。请在相机应用中导出 JPG/PNG 后重试。'),
       );
     }
     final image = _downscale(decoded);
@@ -451,8 +452,7 @@ class SkyAnalysis {
     );
     if (excludedRegions.isNotEmpty) {
       diagnostics.add(
-        '已按用户确认的视觉建议排除 ${excludedRegions.length} 个非星空区域；'
-        '只影响测量，原图保持不变。',
+        t('已按用户确认的视觉建议排除 {0} 个非星空区域；只影响测量，原图保持不变。', [excludedRegions.length]),
       );
     }
 
@@ -546,26 +546,16 @@ SkyAnalysis _analyzeMoon(
     width: width,
     height: height,
     stars: const [],
-    quality: '月面',
+    quality: t('月面'),
     background: background,
     noise: noise,
     backgroundIndex: background * 100,
     saturatedFraction: saturatedFraction,
     diagnostics: [
-      '这张照片以月面为主，走的是月面分析，不做星点检测。'
-          '月亮比任何恒星都亮得多，在它身上找「星」找到的只是环形山和噪点；'
-          '这类照片里通常也没有可用的星场。',
-      '月盘：圆心 (${disc.centerX.round()}, ${disc.centerY.round()}) 像素，'
-          '半径 ${disc.radiusPixels.toStringAsFixed(1)} 像素，'
-          '占画面 $discPercent%。',
-      '亮面占比 $litPercent%：这是数出来的——'
-          '被照亮的像素数除以整个月盘的面积。月面是球，投影到画面上是正圆，'
-          '明暗界线投影成半个椭圆，亮面那块占整个圆的比恰好就是亮面占比，'
-          '所以直接数像素就是准的。',
-      '注意这个数只说明「多大一块亮着」，说明不了「在盈还是在亏」：'
-          '单张照片里相机有没有镜像、有没有上下翻转是看不出来的'
-          '（加了天顶镜的折射镜是镜像的，牛顿式是旋转的）。'
-          '月的盈亏和相名要靠拍摄时刻算，见报告里的月相一条。',
+      t('这张照片以月面为主，走的是月面分析，不做星点检测。月亮比任何恒星都亮得多，在它身上找「星」找到的只是环形山和噪点；这类照片里通常也没有可用的星场。'),
+      t('月盘：圆心 ({0}, {1}) 像素，半径 {2} 像素，占画面 {3}%。', [disc.centerX.round(), disc.centerY.round(), disc.radiusPixels.toStringAsFixed(1), discPercent]),
+      t('亮面占比 {0}%：这是数出来的——被照亮的像素数除以整个月盘的面积。月面是球，投影到画面上是正圆，明暗界线投影成半个椭圆，亮面那块占整个圆的比恰好就是亮面占比，所以直接数像素就是准的。', [litPercent]),
+      t('注意这个数只说明「多大一块亮着」，说明不了「在盈还是在亏」：单张照片里相机有没有镜像、有没有上下翻转是看不出来的（加了天顶镜的折射镜是镜像的，牛顿式是旋转的）。月的盈亏和相名要靠拍摄时刻算，见报告里的月相一条。'),
     ],
     preview: preview,
     // 处理图那条链路是「扣背景、拉伸、抹掉非星空区域、只留星场」，
@@ -588,7 +578,7 @@ List<MaskRegion> _applyImageExclusions(
   List<ImageExclusion> exclusions,
 ) {
   if (exclusions.length > 8) {
-    throw const FormatException('一次最多只能排除 8 个图像区域。');
+    throw FormatException(t('一次最多只能排除 8 个图像区域。'));
   }
   final regions = <MaskRegion>[];
   var totalArea = 0.0;
@@ -606,7 +596,7 @@ List<MaskRegion> _applyImageExclusions(
         exclusion.height <= 0 ||
         exclusion.x + exclusion.width > 1 ||
         exclusion.y + exclusion.height > 1) {
-      throw const FormatException('图像排除区域的坐标无效。');
+      throw FormatException(t('图像排除区域的坐标无效。'));
     }
     final region = MaskRegion(
       x: exclusion.x * width,
@@ -618,7 +608,7 @@ List<MaskRegion> _applyImageExclusions(
     if (region.width < 2 ||
         region.height < 2 ||
         region.area > width * height * 0.25) {
-      throw const FormatException('图像排除区域尺寸超出允许范围。');
+      throw FormatException(t('图像排除区域尺寸超出允许范围。'));
     }
     if (regions.any(
       (other) =>
@@ -627,11 +617,11 @@ List<MaskRegion> _applyImageExclusions(
           region.y < other.y + other.height &&
           region.y + region.height > other.y,
     )) {
-      throw const FormatException('图像排除区域不能互相重叠。');
+      throw FormatException(t('图像排除区域不能互相重叠。'));
     }
     totalArea += region.area;
     if (totalArea > width * height * 0.3) {
-      throw const FormatException('建议排除区域总面积过大，已拒绝应用。');
+      throw FormatException(t('建议排除区域总面积过大，已拒绝应用。'));
     }
     _replaceRegionWithBoundaryMedian(gray, width, height, region);
     regions.add(region);
@@ -657,7 +647,7 @@ void _replaceRegionWithBoundaryMedian(
     }
   }
   if (samples.isEmpty) {
-    throw const FormatException('无法为图像排除区域估计背景。');
+    throw FormatException(t('无法为图像排除区域估计背景。'));
   }
   samples.sort();
   final middle = samples.length ~/ 2;
@@ -1535,12 +1525,11 @@ List<String> _buildDiagnostics({
 
   if (!starfield.isStarfield) {
     diagnostics.add(
-      '这张图看起来不是纯粹的星空照片：检出的密集亮点更像文字、表格或界面元素。'
-      '请换一张以星场为主的照片，或先在相册里裁掉文字区域。',
+      t('这张图看起来不是纯粹的星空照片：检出的密集亮点更像文字、表格或界面元素。请换一张以星场为主的照片，或先在相册里裁掉文字区域。'),
     );
   }
   if (usedRelaxedThreshold) {
-    diagnostics.add('标准阈值检出的点源偏少，已自动降低阈值重试；弱点源中可能混入噪声。');
+    diagnostics.add(t('标准阈值检出的点源偏少，已自动降低阈值重试；弱点源中可能混入噪声。'));
   }
   final textRegions =
       regions.where((region) => region.kind == MaskKind.text).length;
@@ -1549,57 +1538,55 @@ List<String> _buildDiagnostics({
   final lineRegions =
       regions.where((region) => region.kind == MaskKind.line).length;
   if (textRegions > 0) {
-    diagnostics.add('已屏蔽 $textRegions 处疑似文字/表格笔画，这些位置不参与星点统计。');
+    diagnostics.add(tn('已屏蔽 {0} 处疑似文字/表格笔画，这些位置不参与星点统计。', textRegions, [textRegions]));
   }
   if (blobRegions > 0) {
-    diagnostics.add('已屏蔽 $blobRegions 处大面积亮斑（可能是月亮、路灯或建筑），不做星点处理。');
+    diagnostics.add(tn('已屏蔽 {0} 处大面积亮斑（可能是月亮、路灯或建筑），不做星点处理。', blobRegions, [blobRegions]));
   }
   if (lineRegions > 0) {
-    diagnostics.add('已屏蔽 $lineRegions 处直线结构（可能是表格边框、电缆或栏杆）。');
+    diagnostics.add(tn('已屏蔽 {0} 处直线结构（可能是表格边框、电缆或栏杆）。', lineRegions, [lineRegions]));
   }
   if (suppressedText > 0) {
     diagnostics.add(
-      '已忽略 $suppressedText 个疑似文字或图标的亮点：它们大小相近、亮度一致、'
-      '还排成整齐的一行，是印刷品的特征，不是星空。',
+      t('已忽略 {0} 个疑似文字或图标的亮点：它们大小相近、亮度一致、还排成整齐的一行，是印刷品的特征，不是星空。', [suppressedText]),
     );
   }
   if (trails.isNotEmpty) {
     diagnostics.add(
-      '检出 ${trails.length} 个拉长的亮点候选，可能是拖线、失焦或飞机/卫星轨迹；'
-      '单张照片不能据此确认，请在下方逐个判断是否保留。',
+      t('检出 {0} 个拉长的亮点候选，可能是拖线、失焦或飞机/卫星轨迹；单张照片不能据此确认，请在下方逐个判断是否保留。', [trails.length]),
     );
   }
   if (compact.length < 8) {
-    diagnostics.add('检出的紧凑亮点较少；可能曝光不足、虚焦或云雾遮挡。');
+    diagnostics.add(t('检出的紧凑亮点较少；可能曝光不足、虚焦或云雾遮挡。'));
   }
-  if (noise > 0.06) diagnostics.add('背景噪声偏高，弱星检测和相对亮度测量可靠性下降。');
-  if (saturatedFraction > 0.01) diagnostics.add('部分像素接近饱和，亮星核心的亮度信息可能丢失。');
+  if (noise > 0.06) diagnostics.add(t('背景噪声偏高，弱星检测和相对亮度测量可靠性下降。'));
+  if (saturatedFraction > 0.01) diagnostics.add(t('部分像素接近饱和，亮星核心的亮度信息可能丢失。'));
   if (background > 0.38) {
-    diagnostics.add('图像背景偏亮；受曝光影响，不能直接换算成 SQM 或 Bortle 等级。');
+    diagnostics.add(t('图像背景偏亮；受曝光影响，不能直接换算成 SQM 或 Bortle 等级。'));
   }
   if (fwhm > 8 && compact.isNotEmpty) {
-    diagnostics.add('星点弥散较大（约 ${fwhm.toStringAsFixed(1)} px），可能是轻微失焦或手抖。');
+    diagnostics.add(t('星点弥散较大（约 {0} px），可能是轻微失焦或手抖。', [fwhm.toStringAsFixed(1)]));
   }
   if (compact.isNotEmpty &&
       compact.take(30).map((star) => star.confidence).reduce((a, b) => a + b) /
               math.min(30, compact.length) <
           0.38) {
-    diagnostics.add('点源形态不够集中，可能存在抖动、虚焦或强降噪；测光置信度偏低。');
+    diagnostics.add(t('点源形态不够集中，可能存在抖动、虚焦或强降噪；测光置信度偏低。'));
   }
   if (compact.length < 8) {
-    diagnostics.add('拍摄建议：固定设备并重新手动对焦；避开云雾和灯光直射后再试。');
+    diagnostics.add(t('拍摄建议：固定设备并重新手动对焦；避开云雾和灯光直射后再试。'));
   }
   if (noise > 0.06) {
-    diagnostics.add('拍摄建议：优先拍摄多张较短曝光用于后续叠加，避免只提高 ISO。');
+    diagnostics.add(t('拍摄建议：优先拍摄多张较短曝光用于后续叠加，避免只提高 ISO。'));
   }
   if (saturatedFraction > 0.01) {
-    diagnostics.add('拍摄建议：降低曝光或增益，避免亮星核心过曝。');
+    diagnostics.add(t('拍摄建议：降低曝光或增益，避免亮星核心过曝。'));
   }
   if (background > 0.38) {
-    diagnostics.add('拍摄建议：若现场天空也明显发亮，可换到更暗地点并缩短单张曝光。');
+    diagnostics.add(t('拍摄建议：若现场天空也明显发亮，可换到更暗地点并缩短单张曝光。'));
   }
   if (diagnostics.isEmpty) {
-    diagnostics.add('检出紧凑亮点；准确星名仍需可靠的天球坐标解算。');
+    diagnostics.add(t('检出紧凑亮点；准确星名仍需可靠的天球坐标解算。'));
   }
   return diagnostics;
 }
@@ -1611,10 +1598,10 @@ String _qualityLabel({
   required double starfieldConfidence,
 }) {
   final compact = stars.where((star) => !star.isElongated).length;
-  if (starfieldConfidence < 0.45) return '较弱';
-  if (compact >= 25 && noise < 0.04 && saturatedFraction < 0.01) return '较好';
-  if (compact >= 8) return '一般';
-  return '较弱';
+  if (starfieldConfidence < 0.45) return t('较弱');
+  if (compact >= 25 && noise < 0.04 && saturatedFraction < 0.01) return t('较好');
+  if (compact >= 8) return t('一般');
+  return t('较弱');
 }
 
 /// 处理图：扣背景 → 反双曲正弦拉伸 → 抹掉非星空区域，只留下星场。

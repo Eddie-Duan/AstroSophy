@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show rootBundle;
 
+import 'strings.dart';
 import 'exif.dart';
 
 /// APP 自带的四张演示星图。
@@ -38,26 +39,26 @@ class DemoImage {
 /// 演示图列表。
 ///
 /// 用 `final` 而不是 `const`：土星那条要带 `DateTime`，而它没有 const 构造。
-final demoImages = <DemoImage>[
-  const DemoImage(
+List<DemoImage> get demoImages => <DemoImage>[
+  DemoImage(
     asset: 'assets/demo/demo_m31.jpg',
-    title: '仙女座大星系 M31',
-    subtitle: '旋涡星系，画面左下同时能看到它的伴星系 M110',
+    title: t('仙女座大星系 M31'),
+    subtitle: t('旋涡星系，画面左下同时能看到它的伴星系 M110'),
   ),
-  const DemoImage(
+  DemoImage(
     asset: 'assets/demo/demo_m45.jpg',
-    title: '昴星团 M45',
-    subtitle: '疏散星团，亮星周围蓝色的雾状是反射星云',
+    title: t('昴星团 M45'),
+    subtitle: t('疏散星团，亮星周围蓝色的雾状是反射星云'),
   ),
-  const DemoImage(
+  DemoImage(
     asset: 'assets/demo/demo_vesta.jpg',
-    title: '灶神星所在的天区',
-    subtitle: '主带小行星，星点稀疏——适合看本机解算星少时怎么退回在线',
+    title: t('灶神星所在的天区'),
+    subtitle: t('主带小行星，星点稀疏——适合看本机解算星少时怎么退回在线'),
   ),
   DemoImage(
     asset: 'assets/demo/demo_saturn.jpg',
-    title: '土星所在的天区',
-    subtitle: '画面正中最亮的那一点就是土星，它周围的点全是恒星',
+    title: t('土星所在的天区'),
+    subtitle: t('画面正中最亮的那一点就是土星，它周围的点全是恒星'),
     moment: CaptureMoment(
       // 拍摄者给的当地时间：2026-09-01 22:38，东八区。
       local: DateTime(2026, 9, 1, 22, 38),
@@ -67,8 +68,8 @@ final demoImages = <DemoImage>[
   ),
   DemoImage(
     asset: 'assets/demo/demo_moon.jpg',
-    title: '月亮',
-    subtitle: '一张月球照：画面上除了它几乎什么都没有，走的是月面那条链路',
+    title: t('月亮'),
+    subtitle: t('一张月球照：画面上除了它几乎什么都没有，走的是月面那条链路'),
     moment: CaptureMoment(
       // 拍摄者给的当地时间：2026-06-25 19:38，东八区。这张图的 EXIF 也在
       // 入库时丢了，但时刻对月面分析是必需的——盈亏只能由它决定，而且它是

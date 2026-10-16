@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'strings.dart';
 
 /// 数据模型层：只放可序列化的结果对象，不依赖 Flutter UI，便于历史记录存取和单测。
 ///
@@ -42,10 +43,10 @@ class DetectedStar {
   bool get isElongated => axisRatio >= 2.2;
 
   String get confidenceLabel => confidence >= 0.7
-      ? '较可信'
+      ? t('较可信')
       : confidence >= 0.35
-          ? '供参考'
-          : '低可信';
+          ? t('供参考')
+          : t('低可信');
 
   /// 由通量误差换算的星等误差；通量为 0 或误差缺失时返回 null。
   double? get magnitudeError {
@@ -151,7 +152,7 @@ class SkyObject {
       };
 
   static SkyObject fromJson(Map<String, Object?> json) => SkyObject(
-        json['name'] as String? ?? '未命名',
+        json['name'] as String? ?? t('未命名'),
         _number(json['ra']),
         _number(json['dec']),
         json['category'] as String? ?? '',
@@ -457,12 +458,12 @@ class Wcs {
         values[key] = card.substring(10, 80).split('/').first.trim();
       }
     }
-    if (!ended) throw const FormatException('星图解算没有返回有效 FITS 天球坐标。');
+    if (!ended) throw FormatException(t('星图解算没有返回有效 FITS 天球坐标。'));
     double number(String key) {
       final raw = values[key]?.replaceAll('D', 'E');
       final value = raw == null ? null : double.tryParse(raw);
       if (value == null || !value.isFinite) {
-        throw FormatException('解算结果缺少有效的 $key。');
+        throw FormatException(t('解算结果缺少有效的 {0}。', [key]));
       }
       return value;
     }
@@ -488,7 +489,7 @@ class Wcs {
         int.tryParse(values['IMAGEW'] ?? '') ?? int.tryParse(values['NAXIS1'] ?? '');
     final height =
         int.tryParse(values['IMAGEH'] ?? '') ?? int.tryParse(values['NAXIS2'] ?? '');
-    if (width == null || height == null) throw const FormatException('解算结果缺少有效图像尺寸。');
+    if (width == null || height == null) throw FormatException(t('解算结果缺少有效图像尺寸。'));
     return Wcs(
       width: width,
       height: height,
@@ -630,7 +631,7 @@ class MovingBodySuspicion {
   /// 老记录里没有这个键，读出来就是空的。
   static MovingBodySuspicion fromJson(Map<String, Object?> json) =>
       MovingBodySuspicion(
-        name: json['name'] as String? ?? '未命名',
+        name: json['name'] as String? ?? t('未命名'),
         ra: _number(json['ra_deg']),
         dec: _number(json['dec_deg']),
         x: _number(json['x']),
@@ -1039,8 +1040,8 @@ String formatDec(double degrees) {
 
 /// 视场大小用“度”或“角分”展示，小于 1 度时换成角分更好读。
 String formatFieldOfView(double degrees) {
-  if (degrees <= 0) return '未知';
-  if (degrees < 1) return '${(degrees * 60).toStringAsFixed(1)} 角分';
+  if (degrees <= 0) return t('未知');
+  if (degrees < 1) return t('{0} 角分', [(degrees * 60).toStringAsFixed(1)]);
   return '${degrees.toStringAsFixed(2)}°';
 }
 

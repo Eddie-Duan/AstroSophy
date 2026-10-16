@@ -9,6 +9,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'strings.dart';
 import 'agent_tools.dart';
 import 'analysis.dart';
 import 'astrometry.dart';
@@ -64,9 +65,19 @@ class AstroSophyApp extends StatelessWidget {
   const AstroSophyApp({super.key});
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
+  Widget build(BuildContext context) {
+    // 换语言要把整棵树重建一遍：文字是查表查出来的，表换了之后已经建好的 widget
+    // 不会自己重算。挂在最外层，`ValueNotifier` 一变整屏就跟着换。
+    return ValueListenableBuilder<AppLanguage>(
+      valueListenable: appLanguage,
+      builder: (context, language, _) => MaterialApp(
         title: 'AstroSophy',
         debugShowCheckedModeBanner: false,
+        // 让 Material 自带的文字（对话框按钮、日期控件之类）跟着走。
+        locale: Locale(language.code),
+        supportedLocales: [
+          for (final item in AppLanguage.values) Locale(item.code),
+        ],
         theme: ThemeData(
           brightness: Brightness.dark,
           scaffoldBackgroundColor: kBackground,
@@ -86,7 +97,9 @@ class AstroSophyApp extends StatelessWidget {
           ),
         ),
         home: const AnalysisScreen(),
-      );
+      ),
+    );
+  }
 }
 
 class AnalysisScreen extends StatefulWidget {
@@ -355,13 +368,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     try {
       final upload = await _storage.read(key: 'allowUpload');
       final astrometry = await _storage.read(key: 'astrometryKey') ?? '';
+      final language = await _storage.read(key: 'language');
       if (!mounted) return;
+      // 语言那根线是全局的，赋值本身就够——`AstroSophyApp` 挂在它上面，一变
+      // 整棵树就重建。没有存过就保持默认的中文。
+      appLanguage.value = AppLanguage.fromCode(language);
       setState(() {
         _uploadAllowed = upload == 'true';
         _astrometryKeyPresent = astrometry.trim().isNotEmpty;
       });
     } on Exception catch (error) {
-      _showError('无法读取设置：$error');
+      _showError(t('无法读取设置：{0}', [error]));
     }
   }
 
@@ -413,7 +430,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
       );
     } on Exception catch (error) {
-      _showError('无法打开新手引导：$error');
+      _showError(t('无法打开新手引导：{0}', [error]));
     }
   }
 
@@ -441,7 +458,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       if (!mounted) return;
       _setImage(bytes, file.name);
     } catch (error) {
-      _showError('读取图片失败：$error');
+      _showError(t('读取图片失败：{0}', [error]));
     }
   }
 
@@ -458,11 +475,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       if (result == null || result.files.isEmpty) return;
       final file = result.files.single;
       final bytes = file.bytes;
-      if (bytes == null) throw StateError('没有读取到图片内容。');
+      if (bytes == null) throw StateError(t('没有读取到图片内容。'));
       if (!mounted) return;
       _setImage(bytes, file.name);
     } catch (error) {
-      _showError('读取图片失败：$error');
+      _showError(t('读取图片失败：{0}', [error]));
     }
   }
 
@@ -533,7 +550,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       // `_setImage` 会照常去读文件，读不到就是「未读到」。
       _setImage(bytes, '${choice.title}.jpg', moment: choice.moment);
     } catch (error) {
-      _showError('读取演示图片失败：$error');
+      _showError(t('读取演示图片失败：{0}', [error]));
     }
   }
 
@@ -550,7 +567,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     if (bytes == null) return;
     final job = _jobCenter.start(
       bytes: bytes,
-      filename: _filename ?? '未命名',
+      filename: _filename ?? t('未命名'),
       moment: _moment,
       question: _questionController.text,
     );
@@ -626,8 +643,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     _jobCenter.detach(job);
     _clearWorkspace();
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('后台运行，自动存进仓库。'),
+      SnackBar(
+        content: Text(t('后台运行，自动存进仓库。')),
       ),
     );
   }
@@ -642,7 +659,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final settings = await _readModelSettings();
     if (!mounted || imageGeneration != _imageGeneration) return;
     if (!settings.hasAnyModel) {
-      _showError('请先在设置中配置至少一个兼容 OpenAI 接口的模型 API Key。');
+      _showError(t('请先在设置中配置至少一个兼容 OpenAI 接口的模型 API Key。'));
       return;
     }
     setState(() {
@@ -672,16 +689,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           setState(() => _agentActivity = [
                 ..._agentActivity,
                 switch (name) {
-                  'get_current_report' => '读取当前分析报告',
-                  'find_catalog_object' => '查询当前视场天体',
-                  'find_small_body' => '查询太阳系小天体位置',
-                  'list_observations' => '读取本机观测摘要',
-                  'save_current_observation' => '请求保存观测',
-                  'rename_observation' => '请求重命名观测',
-                  'delete_observation' => '请求删除观测',
-                  'request_online_solve' => '请求在线解算',
-                  'propose_non_sky_regions' => '请求视觉遮罩建议',
-                  _ => '调用工具：$name',
+                  'get_current_report' => t('读取当前分析报告'),
+                  'find_catalog_object' => t('查询当前视场天体'),
+                  'find_small_body' => t('查询太阳系小天体位置'),
+                  'list_observations' => t('读取本机观测摘要'),
+                  'save_current_observation' => t('请求保存观测'),
+                  'rename_observation' => t('请求重命名观测'),
+                  'delete_observation' => t('请求删除观测'),
+                  'request_online_solve' => t('请求在线解算'),
+                  'propose_non_sky_regions' => t('请求视觉遮罩建议'),
+                  _ => t('调用工具：{0}', [name]),
                 },
               ]);
         },
@@ -691,7 +708,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       }
     } catch (error) {
       if (mounted && imageGeneration == _imageGeneration) {
-        _showError('模型解读失败：$error');
+        _showError(t('模型解读失败：{0}', [error]));
       }
     } finally {
       if (mounted && imageGeneration == _imageGeneration) {
@@ -710,23 +727,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   ) async {
     final id = arguments['observation_id'];
     if (id is! String || !_isSafeObservationId(id)) {
-      throw const FormatException('记录编号无效。');
+      throw FormatException(t('记录编号无效。'));
     }
     final history = await _ensureHistory();
     final entries = await history.list();
     final entry = entries.where((item) => item.id == id).firstOrNull;
-    if (entry == null) throw StateError('找不到指定的本机观测记录。');
+    if (entry == null) throw StateError(t('找不到指定的本机观测记录。'));
 
     if (name == 'rename_observation') {
       final rawName = arguments['new_name'];
       if (rawName is! String ||
           rawName.trim().isEmpty ||
           rawName.length > 100) {
-        throw const FormatException('新名称不能为空且不能超过 100 个字符。');
+        throw FormatException(t('新名称不能为空且不能超过 100 个字符。'));
       }
       if (!await _confirmAgentAction(
-        '重命名观测记录',
-        '将把“${entry.name}”改名为“${rawName.trim()}”。',
+        t('重命名观测记录'),
+        t('将把“{0}”改名为“{1}”。', [entry.name, rawName.trim()]),
       )) {
         return {'renamed': false, 'cancelled': true};
       }
@@ -736,8 +753,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
 
     if (!await _confirmAgentAction(
-      '删除观测记录',
-      '将永久删除“${entry.name}”的测量结果和本机预览图，无法恢复；相册里的原图不受影响。',
+      t('删除观测记录'),
+      t('将永久删除“{0}”的测量结果和本机预览图，无法恢复；相册里的原图不受影响。', [entry.name]),
     )) {
       return {'deleted': false, 'cancelled': true};
     }
@@ -784,7 +801,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         unawaited(Future<void>.delayed(Duration.zero, _settings));
         return {'opened': 'settings'};
       }
-      throw const FormatException('可打开的页面只有 history 和 settings。');
+      throw FormatException(t('可打开的页面只有 history 和 settings。'));
     }
 
     // 记录类的操作不需要当前照片——Nox 常常是在「还没选图」的时候被问起
@@ -794,23 +811,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
 
     if (analysis == null) {
-      throw StateError('这个操作需要有正在看的照片，请先选一张图并解析。');
+      throw StateError(t('这个操作需要有正在看的照片，请先选一张图并解析。'));
     }
     if (!identical(_analysis, analysis)) {
-      throw StateError('当前照片已更换，请针对新照片重新发送请求。');
+      throw StateError(t('当前照片已更换，请针对新照片重新发送请求。'));
     }
     switch (name) {
       case 'save_current_observation':
         final rawName = arguments['name'];
         if (rawName is! String || rawName.trim().isEmpty || rawName.length > 100) {
-          throw const FormatException('观测名称不能为空且不能超过 100 个字符。');
+          throw FormatException(t('观测名称不能为空且不能超过 100 个字符。'));
         }
         if (_savedId != null) {
           return {'saved': true, 'already_saved': true, 'id': _savedId};
         }
         if (!await _confirmAgentAction(
-          '保存观测记录',
-          '将把当前测量结果和两张预览图保存到本机观测记录，名称为“${rawName.trim()}”。',
+          t('保存观测记录'),
+          t('将把当前测量结果和两张预览图保存到本机观测记录，名称为“{0}”。', [rawName.trim()]),
         )) {
           return {'saved': false, 'cancelled': true};
         }
@@ -831,19 +848,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       case 'rename_observation':
       case 'delete_observation':
         // 已经在 [_handleArchiveAction] 里处理过了，走不到这里。
-        throw StateError('内部错误：记录操作没有提前分流。');
+        throw StateError(t('内部错误：记录操作没有提前分流。'));
 
       case 'request_online_solve':
         if (_solve != null) {
-          return {'solved': true, 'message': '当前照片已经有天区解算结果。'};
+          return {'solved': true, 'message': t('当前照片已经有天区解算结果。')};
         }
         final key = (await _storage.read(key: 'astrometryKey') ?? '').trim();
         if (key.isEmpty) {
-          throw StateError('请先在本机 API 设置中填写 Astrometry.net Key。');
+          throw StateError(t('请先在本机 API 设置中填写 Astrometry.net Key。'));
         }
         if (!await _confirmAgentAction(
-          '在线解算天区',
-          '将把当前照片的分析预览图上传到 Astrometry.net。第三方服务可能留存数据。',
+          t('在线解算天区'),
+          t('将把当前照片的分析预览图上传到 Astrometry.net。第三方服务可能留存数据。'),
         )) {
           return {'solved': false, 'cancelled': true};
         }
@@ -861,12 +878,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       case 'propose_non_sky_regions':
         final settings = await _readModelSettings();
         if (!settings.hasAnyModel) {
-          throw StateError('请先在本机 API 设置中填写视觉模型 API Key。');
+          throw StateError(t('请先在本机 API 设置中填写视觉模型 API Key。'));
         }
         if (!await _confirmAgentAction(
-          '向视觉模型发送照片',
-          '将把当前照片预览发送到你设置的模型服务：${settings.baseUrl}。'
-              '服务商会收到图像；模型只返回疑似文字/水印区域，不会修改原图。',
+          t('向视觉模型发送照片'),
+          t('将把当前照片预览发送到你设置的模型服务：{0}。服务商会收到图像；模型只返回疑似文字/水印区域，不会修改原图。', [settings.baseUrl]),
         )) {
           return {'inspected': false, 'cancelled': true};
         }
@@ -892,7 +908,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           return {
             'inspected': true,
             'regions': 0,
-            'message': '视觉模型未发现可明确识别的水印或文字覆盖区域。',
+            'message': t('视觉模型未发现可明确识别的水印或文字覆盖区域。'),
           };
         }
         final boxes = regions
@@ -902,7 +918,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ' ${((region['width']! * 100).round())}%×'
                   '${((region['height']! * 100).round())}%',
             )
-            .join('、');
+            .join(t('、'));
         if (!await _confirmMaskApplication(
           analysis,
           regions,
@@ -949,7 +965,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         };
 
       default:
-        throw ArgumentError.value(name, 'name', '未知的 Agent 操作');
+        throw ArgumentError.value(name, 'name', t('未知的 Agent 操作'));
     }
   }
 
@@ -963,11 +979,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
+                child: Text(t('取消')),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('确认执行'),
+                child: Text(t('确认执行')),
               ),
             ],
           ),
@@ -977,7 +993,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   void _ensureCurrentAnalysis(SkyAnalysis analysis) {
     if (!mounted || !identical(_analysis, analysis)) {
-      throw StateError('当前照片已更换，请针对新照片重新发送请求。');
+      throw StateError(t('当前照片已更换，请针对新照片重新发送请求。'));
     }
   }
 
@@ -990,14 +1006,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     return await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('应用视觉遮罩建议'),
+            title: Text(t('应用视觉遮罩建议')),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '红框是模型建议排除的区域：$labels。确认后会重新运行本机分析与解算；'
-                  '原始照片不变。',
+                  t('红框是模型建议排除的区域：{0}。确认后会重新运行本机分析与解算；原始照片不变。', [labels]),
                 ),
                 const SizedBox(height: 12),
                 SizedBox(
@@ -1022,11 +1037,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('不应用'),
+                child: Text(t('不应用')),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('应用并重新分析'),
+                child: Text(t('应用并重新分析')),
               ),
             ],
           ),
@@ -1057,6 +1072,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         current: current,
         astrometryKey: astrometryKey,
         allowUpload: _uploadAllowed,
+        language: appLanguage.value,
         storage: _storage,
       ),
     );
@@ -1114,16 +1130,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               if (progress.moonOnly) ...[
                 const SizedBox(height: 8),
-                const Text(
-                  '这次只报月亮，没有解算天区',
-                  style: TextStyle(fontSize: 11.5, color: Color(0xFFC8D4E4)),
+                Text(
+                  t('这次只报月亮，没有解算天区'),
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFFC8D4E4)),
                 ),
               ],
               if (progress.solvedLocally) ...[
                 const SizedBox(height: 8),
-                const Text(
-                  '天区已在手机上算出来',
-                  style: TextStyle(fontSize: 11.5, color: Color(0xFFFF9A9A)),
+                Text(
+                  t('天区已在手机上算出来'),
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFFFF9A9A)),
                 ),
               ],
               // 停在这里等用户拍板。
@@ -1143,7 +1159,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     child: OutlinedButton.icon(
                       onPressed: _detachJob,
                       icon: const Icon(Icons.move_to_inbox_outlined, size: 17),
-                      label: const Text('保存并退出'),
+                      label: Text(t('保存并退出')),
                     ),
                   ),
                 ],
@@ -1160,7 +1176,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: FilledButton.icon(
             onPressed: _run,
             icon: const Icon(Icons.auto_awesome),
-            label: Text(_analysis == null ? '一键解析' : '重新解析'),
+            label: Text(_analysis == null ? t('一键解析') : t('重新解析')),
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
             ),
@@ -1191,30 +1207,27 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.nightlight_round, size: 18, color: Color(0xFFFFDE77)),
-              SizedBox(width: 8),
-              Text('这是一个月亮',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              const Icon(Icons.nightlight_round, size: 18, color: Color(0xFFFFDE77)),
+              const SizedBox(width: 8),
+              Text(t('这是一个月亮'),
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             ],
           ),
           const SizedBox(height: 8),
           Text(
-            '月盘占画面 ${(disc.discAreaFraction * 100).toStringAsFixed(2)}%，'
-            '亮面 ${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%。',
+            t('月盘占画面 {0}%，亮面 {1}%。', [(disc.discAreaFraction * 100).toStringAsFixed(2), (disc.illuminatedFraction * 100).toStringAsFixed(1)]),
             style: const TextStyle(fontSize: 13, height: 1.5),
           ),
           const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerLeft,
             child: _HelpButton(
-              title: '「继续寻找」会发生什么',
+              title: t('「继续寻找」会发生什么'),
               message: uploads
-                  ? '会去做星点解算。月亮上没有任何恒星尺度的点源，本机多半解'
-                      '不出来，那时会把预览图上传到 Astrometry.net 排队。'
-                  : '会去做星点解算。月亮上没有任何恒星尺度的点源，本机多半解'
-                      '不出来；没开在线解算的话，这一趟就是白等。',
+                  ? t('会去做星点解算。月亮上没有任何恒星尺度的点源，本机多半解不出来，那时会把预览图上传到 Astrometry.net 排队。')
+                  : t('会去做星点解算。月亮上没有任何恒星尺度的点源，本机多半解不出来；没开在线解算的话，这一趟就是白等。'),
             ),
           ),
           const SizedBox(height: 6),
@@ -1223,14 +1236,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Expanded(
                 child: FilledButton(
                   onPressed: () => _answerMoon(false),
-                  child: const Text('直接报告月亮'),
+                  child: Text(t('直接报告月亮')),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => _answerMoon(true),
-                  child: const Text('继续寻找其他天体'),
+                  child: Text(t('继续寻找其他天体')),
                 ),
               ),
             ],
@@ -1264,10 +1277,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       : Icons.bookmark_added),
               label: Text(
                 _saving
-                    ? '正在保存…'
+                    ? t('正在保存…')
                     : _savedId == null
-                        ? '保存'
-                        : '已保存',
+                        ? t('保存')
+                        : t('已保存'),
               ),
             ),
           ),
@@ -1276,7 +1289,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             child: OutlinedButton.icon(
               onPressed: _running ? null : _exit,
               icon: const Icon(Icons.close_fullscreen_rounded),
-              label: const Text('退出'),
+              label: Text(t('退出')),
             ),
           ),
         ],
@@ -1330,12 +1343,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已存为「${saved.name}」')),
+        SnackBar(content: Text(t('已存为「{0}」', [saved.name]))),
       );
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _showError('保存失败：$error');
+      _showError(t('保存失败：{0}', [error]));
     }
   }
 
@@ -1452,7 +1465,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _resetPanelState();
       });
     } catch (error) {
-      _showError('打开历史记录失败：$error');
+      _showError(t('打开历史记录失败：{0}', [error]));
     }
   }
 
@@ -1532,8 +1545,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ],
       },
       if (analysis == null)
-        'note': '当前没有正在看的照片。用户问「这张」的时候要问清是哪一张，'
-            '不要去猜当前图片的分析结果。',
+        'note': t('当前没有正在看的照片。用户问「这张」的时候要问清是哪一张，不要去猜当前图片的分析结果。'),
     };
   }
 
@@ -1554,24 +1566,24 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         actions: [
           IconButton(
             onPressed: _openNox,
-            tooltip: '$noxName 助手',
+            tooltip: t('{0} 助手', [noxName]),
             // 只有它是主色：另外三个是「去某个地方」的入口，而这一个是
             // 「叫个人过来」。颜色是同一条信息，不必再用文字说一遍。
             icon: const Icon(noxIcon, color: kMint),
           ),
           IconButton(
             onPressed: () => _showOnboarding(),
-            tooltip: '使用引导',
+            tooltip: t('使用引导'),
             icon: const Icon(Icons.help_outline_rounded),
           ),
           IconButton(
             onPressed: _openHistory,
-            tooltip: '观星仓库',
+            tooltip: t('观星仓库'),
             icon: const Icon(Icons.collections_bookmark_outlined),
           ),
           IconButton(
             onPressed: _settings,
-            tooltip: 'API 设置',
+            tooltip: t('API 设置'),
             icon: const Icon(Icons.tune_rounded),
           ),
           const SizedBox(width: 8),
@@ -1716,20 +1728,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     ),
                   ),
                 ),
-                const Positioned(
+                Positioned(
                   left: 22,
                   bottom: 25,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '今夜，抬头见星。',
-                        style: TextStyle(fontSize: 23, fontWeight: FontWeight.w600),
+                        t('今夜，抬头见星。'),
+                        style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w600),
                       ),
-                      SizedBox(height: 7),
+                      const SizedBox(height: 7),
                       Text(
-                        '随手拍星，星象自明。',
-                        style: TextStyle(color: Color(0xFFB2C0D2), fontSize: 12),
+                        t('随手拍星，星象自明。'),
+                        style: const TextStyle(color: Color(0xFFB2C0D2), fontSize: 12),
                       ),
                     ],
                   ),
@@ -1744,7 +1756,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 child: FilledButton.icon(
                   onPressed: _selectFile,
                   icon: const Icon(Icons.photo_library_outlined),
-                  label: const Text('从相册选择'),
+                  label: Text(t('从相册选择')),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
@@ -1753,7 +1765,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               const SizedBox(width: 10),
               IconButton.filledTonal(
                 onPressed: () => _selectImage(ImageSource.camera),
-                tooltip: '拍摄照片',
+                tooltip: t('拍摄照片'),
                 icon: const Icon(Icons.camera_alt_outlined),
                 style: IconButton.styleFrom(
                   minimumSize: const Size(50, 50),
@@ -1767,7 +1779,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               TextButton.icon(
                 onPressed: _pickDemoImage,
                 icon: const Icon(Icons.auto_awesome, size: 16),
-                label: const Text('演示图', style: TextStyle(fontSize: 12)),
+                label: Text(t('演示图'), style: const TextStyle(fontSize: 12)),
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   minimumSize: const Size(0, 50),
@@ -1779,16 +1791,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          const Row(
+          Row(
             children: [
               Text(
-                '支持JPG / PNG / TIFF / RAW 格式',
-                style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+                t('支持JPG / PNG / TIFF / RAW 格式'),
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
               ),
               _HelpButton(
-                title: '能不能读 RAW',
-                message: '整份 RAW 不解码，只读相机嵌在里面的那张 JPEG 预览——'
-                    '它足够检出星点。读不到就请在相机应用里导出 JPG/PNG。',
+                title: t('能不能读 RAW'),
+                message: t('整份 RAW 不解码，只读相机嵌在里面的那张 JPEG 预览——它足够检出星点。读不到就请在相机应用里导出 JPG/PNG。'),
               ),
             ],
           ),
@@ -1822,12 +1833,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   Text(
                     known
                         ? _describeMoment(moment)
-                        : '未能从照片读取拍摄时间',
+                        : t('未能从照片读取拍摄时间'),
                     style: const TextStyle(fontSize: 13.5),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    known ? _momentNote(moment) : '是拍行星和小行星的前提',
+                    known ? _momentNote(moment) : t('是拍行星和小行星的前提'),
                     style: const TextStyle(
                       color: Color(0xFF8192A8),
                       fontSize: 11,
@@ -1837,14 +1848,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
             ),
             if (!known)
-              const _HelpButton(
-                title: '为什么要拍摄时间',
-                message: '行星、彗星和小行星的位置随时间变化，没有拍摄时刻就没法'
-                    '判断画面上多出来的那个亮点是什么。时区没读到就按本机时区算。',
+              _HelpButton(
+                title: t('为什么要拍摄时间'),
+                message: t('行星、彗星和小行星的位置随时间变化，没有拍摄时刻就没法判断画面上多出来的那个亮点是什么。时区没读到就按本机时区算。'),
               ),
             TextButton(
               onPressed: _pickCaptureTime,
-              child: Text(known ? '修改时间' : '设置时间'),
+              child: Text(known ? t('修改时间') : t('设置时间')),
             ),
           ],
         ),
@@ -1855,16 +1865,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   static String _describeMoment(CaptureMoment moment) {
     String two(int value) => value.toString().padLeft(2, '0');
     final local = moment.local;
-    return '拍摄时间  ${local.year}-${two(local.month)}-${two(local.day)} '
-        '${two(local.hour)}:${two(local.minute)}';
+    return t('拍摄时间  {0}-{1}-{2} {3}:{4}', [local.year, two(local.month), two(local.day), two(local.hour), two(local.minute)]);
   }
 
   static String _momentNote(CaptureMoment moment) {
-    final source = moment.source.label;
-    if (moment.hasKnownOffset) return '$source，时区也读到了';
+    final source = t(moment.source.label);
+    if (moment.hasKnownOffset) return t('{0}，时区也读到了', [source]);
     // 没读到时区就按本机时区算。手机照片基本就是设备本地时间拍的，这是能
     // 拿到的最接近的假设；报告里会写明这一条是假设，不是读出的事实。
-    return '$source；按当前时区算';
+    return t('{0}；按当前时区算', [source]);
   }
 
   /// 让用户修改或设置拍摄时间。
@@ -1879,13 +1888,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       initialDate: current.isAfter(now) ? now : current,
       firstDate: DateTime(1990),
       lastDate: now.add(const Duration(days: 1)),
-      helpText: '这张照片是哪天拍的',
+      helpText: t('这张照片是哪天拍的'),
     );
     if (date == null || !mounted) return;
     final time = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(current),
-      helpText: '拍摄时刻（当地时间）',
+      helpText: t('拍摄时刻（当地时间）'),
     );
     if (time == null || !mounted) return;
     final edited = DateTime(
@@ -1922,7 +1931,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     });
     if (_bytes != null && !_running) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('拍摄时间已更新，重新解析后会用到它')),
+        SnackBar(content: Text(t('拍摄时间已更新，重新解析后会用到它'))),
       );
     }
   }
@@ -1937,7 +1946,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: ListTile(
           leading: const Icon(Icons.image_outlined, color: kMint),
           title: Text(
-            _filename ?? '已选图片',
+            _filename ?? t('已选图片'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -1959,13 +1968,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             AspectRatio(
               aspectRatio: 0.82,
               child: _isRawName(_filename ?? '')
-                  ? const Center(
+                  ? Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.raw_on, size: 42, color: kMint),
-                          SizedBox(height: 10),
-                          Text('相机 RAW · 将尝试读取内嵌预览'),
+                          const Icon(Icons.raw_on, size: 42, color: kMint),
+                          const SizedBox(height: 10),
+                          Text(t('相机 RAW · 将尝试读取内嵌预览')),
                         ],
                       ),
                     )
@@ -1974,7 +1983,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       fit: BoxFit.contain,
                       errorBuilder: (_, error, __) => Center(
                         child: Text(
-                          '暂不支持此图片格式：$error',
+                          t('暂不支持此图片格式：{0}', [error]),
                           textAlign: TextAlign.center,
                         ),
                       ),
@@ -1986,15 +1995,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _filename ?? '已选图片',
+                  _filename ?? t('已选图片'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 10),
                 if (_cropping) ...[
-                  const Text(
-                    '拖四个角选范围',
-                    style: TextStyle(fontSize: 11.5, color: Color(0xFFA6B5C8)),
+                  Text(
+                    t('拖四个角选范围'),
+                    style: const TextStyle(fontSize: 11.5, color: Color(0xFFA6B5C8)),
                   ),
                   const SizedBox(height: 10),
                   Row(
@@ -2003,7 +2012,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         child: OutlinedButton.icon(
                           onPressed: _resetCrop,
                           icon: const Icon(Icons.restart_alt, size: 17),
-                          label: const Text('整幅'),
+                          label: Text(t('整幅')),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -2011,7 +2020,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         child: FilledButton.icon(
                           onPressed: _applyCrop,
                           icon: const Icon(Icons.crop_rounded, size: 17),
-                          label: const Text('应用裁剪'),
+                          label: Text(t('应用裁剪')),
                         ),
                       ),
                     ],
@@ -2025,7 +2034,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         _crop = CropRect.full;
                       }),
                       icon: const Icon(Icons.crop_rounded, size: 17),
-                      label: const Text('裁剪范围'),
+                      label: Text(t('裁剪范围')),
                     ),
                   ),
               ],
@@ -2055,7 +2064,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() => _cropping = false);
     // 裁剪会把嵌入的 EXIF 一起丢掉，所以已经读到的拍摄时刻要显式带过去，
     // 否则裁一刀就把「这张照片几点拍的」丢掉了——而月相和行星位置全靠它。
-    _setImage(cropped, _croppedName(_filename) ?? '裁剪后的图片', moment: _moment);
+    _setImage(cropped, _croppedName(_filename) ?? t('裁剪后的图片'), moment: _moment);
   }
 
   /// 裁剪之后文件名上留个记号，用户能看出这张图动过。保存时记录另按内容
@@ -2063,7 +2072,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   String? _croppedName(String? name) {
     if (name == null) return null;
     final dot = name.lastIndexOf('.');
-    return dot <= 0 ? '$name (裁剪)' : '${name.substring(0, dot)} (裁剪)';
+    return dot <= 0 ? t('{0} (裁剪)', [name]) : t('{0} (裁剪)', [name.substring(0, dot)]);
   }
 
   Widget _diagnosticsCard(SkyAnalysis analysis) => Card(
@@ -2072,15 +2081,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Row(
+              Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  SectionTitle('图像诊断', Icons.monitor_heart_outlined),
+                  SectionTitle(t('图像诊断'), Icons.monitor_heart_outlined),
                   _HelpButton(
-                    title: '图像指标说明',
+                    title: t('图像指标说明'),
                     message:
-                        '视觉背景指数会受曝光、ISO、白平衡和后期处理影响，不是 SQM 光度或 Bortle 等级。'
-                        '线状候选可能来自拖线、失焦或处理伪影，单张图片不能确认卫星或飞机。',
+                        t('视觉背景指数会受曝光、ISO、白平衡和后期处理影响，不是 SQM 光度或 Bortle 等级。线状候选可能来自拖线、失焦或处理伪影，单张图片不能确认卫星或飞机。'),
                   ),
                 ],
               ),
@@ -2089,12 +2097,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  MetricChip('质量', analysis.quality),
-                  MetricChip('紧凑点源', '${analysis.compactSources.length}'),
+                  MetricChip(t('质量'), analysis.quality),
+                  MetricChip(t('紧凑点源'), '${analysis.compactSources.length}'),
                   if (analysis.streakCandidates.isNotEmpty)
-                    MetricChip('线状候选', '${analysis.streakCandidates.length}'),
-                  MetricChip('背景噪声', '${(analysis.noise * 100).toStringAsFixed(1)}%'),
-                  MetricChip('视觉背景', '${analysis.backgroundIndex.toStringAsFixed(0)} / 100'),
+                    MetricChip(t('线状候选'), '${analysis.streakCandidates.length}'),
+                  MetricChip(t('背景噪声'), '${(analysis.noise * 100).toStringAsFixed(1)}%'),
+                  MetricChip(t('视觉背景'), '${analysis.backgroundIndex.toStringAsFixed(0)} / 100'),
                 ],
               ),
               ...analysis.diagnostics.take(2).map(
@@ -2287,10 +2295,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         moment: _moment?.local,
         originalFilename: _filename,
       );
-      final file = await saveAnnotatedPng(png, fileName: '$name 标注.png');
-      await shareExportedFile(file, text: 'AstroSophy 标注图');
+      final file = await saveAnnotatedPng(png, fileName: t('{0} 标注.png', [name]));
+      await shareExportedFile(file, text: t('AstroSophy 标注图'));
     } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text('导出失败：$error')));
+      messenger.showSnackBar(SnackBar(content: Text(t('导出失败：{0}', [error]))));
     }
   }
 
@@ -2321,9 +2329,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 是加工过的，不能拿来判断「我到底拍到了什么」。所以两张都留着，默认给
   /// 用户看没动过的原图。
   Widget _imageModeToggle() => SegmentedButton<bool>(
-        segments: const [
-          ButtonSegment(value: false, label: Text('原图')),
-          ButtonSegment(value: true, label: Text('处理图')),
+        segments: [
+          ButtonSegment(value: false, label: Text(t('原图'))),
+          ButtonSegment(value: true, label: Text(t('处理图'))),
         ],
         selected: {_showProcessed},
         showSelectedIcon: false,
@@ -2377,26 +2385,25 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           .where((item) => item.name == _selectedMovingBodyName)
           .firstOrNull;
       text = body == null
-          ? '系内天体 · $_selectedMovingBodyName'
-          : '系内天体 · ${body.name}（${body.kind.label}）'
-              '${body.magnitude == null ? '' : ' · 约 ${body.magnitude!.toStringAsFixed(1)} 等'}';
+          ? t('系内天体 · {0}', [_selectedMovingBodyName])
+          : t('系内天体 · {0}（{1}）{2}', [body.name, t(body.kind.label), body.magnitude == null ? '' : t(' · 约 {0} 等', [body.magnitude!.toStringAsFixed(1)])]);
     } else if (_selectedDeepSkyName != null) {
       final object = solve?.deepSkyObjects
           .where((item) => item.name == _selectedDeepSkyName)
           .firstOrNull;
-      text = '深空天体 · ${object == null ? _selectedDeepSkyName! : deepSkyCaption(object.name, object.category)}';
+      text = t('深空天体 · {0}', [object == null ? _selectedDeepSkyName! : deepSkyCaption(object.name, object.category)]);
     } else if (index == null || index >= targets.length) {
       return const SizedBox.shrink();
     } else {
       final star = targets[index];
       final position =
-          '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)})';
+          t('像素 ({0}, {1})', [star.x.toStringAsFixed(0), star.y.toStringAsFixed(0)]);
       if (star.isRejected) {
-        text = '第 ${index + 1} 号 · $position · 已判为非天体，不计入报告';
+        text = t('第 {0} 号 · {1} · 已判为非天体，不计入报告', [index + 1, position]);
       } else {
         final name = _nearestNamed(star, solve?.namedStars ?? const []);
-        final what = name?.name ?? (star.isElongated ? '拉长点源' : '未匹配点源');
-        text = '第 ${index + 1} 号 · $what · $position';
+        final what = name?.name ?? (star.isElongated ? t('拉长点源') : t('未匹配点源'));
+        text = t('第 {0} 号 · {1} · {2}', [index + 1, what, position]);
       }
     }
     return Container(
@@ -2477,13 +2484,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
             child: Row(
               children: [
-                const Expanded(
-                  child: SectionTitle('图上目标', Icons.blur_on_rounded),
+                Expanded(
+                  child: SectionTitle(t('图上目标'), Icons.blur_on_rounded),
                 ),
                 // 各分组的 − / + 分别管理，这两个一次管全部。
                 _batchButton(
                   Icons.remove_circle_outline,
-                  '把图上所有的圆圈都隐去',
+                  t('把图上所有的圆圈都隐去'),
                   hidden.length +
                           _hiddenDeepSkyObjects.length +
                           _hiddenMovingBodies.length <
@@ -2494,60 +2501,40 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
-                  '把图上所有的圆圈都显示回来',
+                  t('把图上所有的圆圈都显示回来'),
                   hidden.isNotEmpty ||
                       _hiddenDeepSkyObjects.isNotEmpty ||
                       _hiddenMovingBodies.isNotEmpty,
                   () => _setAllCircles(false, deepSkyObjects, markableBodies),
                 ),
-                const _HelpButton(
-                  title: '图上目标',
+                _HelpButton(
+                  title: t('图上目标'),
                   message:
-                      '星点编号与上图里的编号一一对应，点一行就能在图上定位到那一颗；'
-                      '深空天体和系内天体按名称单独管理。'
-                      '双指捏合可以把图放大。放大之后圆圈跟着一起放大。'
-                      '每一行右边的 − 把那一颗的圆圈从图上隐去，+ 显示回来；'
-                      '组标题右边的 − / + 一次管整组，'
-                      '卡片标题右边这两个一次管全部。'
-                      '星点编号颜色表示识别可信度：薄荷绿较高、黄色中等、粉红色较低。'
-                      '图上四类目标用四种记号，互不相同：亮星是薄荷绿实线圆，'
-                      '深空天体是粉色实线圆（大小跟着天体自身的角尺寸），'
-                      '行星和矮行星是琥珀色虚线圆加十字，'
-                      '小行星和彗星是浅蓝色四角框加十字。'
-                      '虚线和方框都在说同一件事：这个位置是算出来的，不是看出来的。'
-                      '隐去只是不画，测量结果、报告和星表匹配一个字都不变。'
-                      '「系内天体」里写着「图上没有对上」的那几条画的是点线圆，'
-                      '位置就是星历算出来的那一个——它们说的是「按星历它在这张照片的'
-                      '这个位置上，但亮度不够，没能在图上认出来」，用的是这里最弱的'
-                      '一种记号。'
-                      '「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——'
-                      '判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。'
-                      '拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星，'
-                      '单张照片无法确认是哪一种。',
+                      t('星点编号与上图里的编号一一对应，点一行就能在图上定位到那一颗；深空天体和系内天体按名称单独管理。双指捏合可以把图放大。放大之后圆圈跟着一起放大。每一行右边的 − 把那一颗的圆圈从图上隐去，+ 显示回来；组标题右边的 − / + 一次管整组，卡片标题右边这两个一次管全部。星点编号颜色表示识别可信度：薄荷绿较高、黄色中等、粉红色较低。图上四类目标用四种记号，互不相同：亮星是薄荷绿实线圆，深空天体是粉色实线圆（大小跟着天体自身的角尺寸），行星和矮行星是琥珀色虚线圆加十字，小行星和彗星是浅蓝色四角框加十字。虚线和方框都在说同一件事：这个位置是算出来的，不是看出来的。隐去只是不画，测量结果、报告和星表匹配一个字都不变。「系内天体」里写着「图上没有对上」的那几条画的是点线圆，位置就是星历算出来的那一个——它们说的是「按星历它在这张照片的这个位置上，但亮度不够，没能在图上认出来」，用的是这里最弱的一种记号。「可疑飞线」那一组另外有一对 ✓ / ✗，用来判断它到底是不是天体——判为 ✗ 的会从测光和报告里排除，但仍在图上和列表里，随时能改回来。拉长的亮点可能是卫星、飞机或赤道仪抖动，也可能是被拖了尾的恒星，单张照片无法确认是哪一种。'),
                 ),
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 3, 12, 8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 3, 12, 8),
             child: Text.rich(
               TextSpan(
-                style: TextStyle(fontSize: 10.5),
+                style: const TextStyle(fontSize: 10.5),
                 children: [
-                  TextSpan(text: '颜色置信度：'),
+                  TextSpan(text: t('颜色置信度：')),
                   TextSpan(
-                    text: '较高 ≥70%',
-                    style: TextStyle(color: kMint),
+                    text: t('较高 ≥70%'),
+                    style: const TextStyle(color: kMint),
                   ),
-                  TextSpan(text: ' · '),
+                  const TextSpan(text: ' · '),
                   TextSpan(
-                    text: '中等 35–69%',
-                    style: TextStyle(color: Color(0xFFFFDE77)),
+                    text: t('中等 35–69%'),
+                    style: const TextStyle(color: Color(0xFFFFDE77)),
                   ),
-                  TextSpan(text: ' · '),
+                  const TextSpan(text: ' · '),
                   TextSpan(
-                    text: '较低 <35%',
-                    style: TextStyle(color: Color(0xFFFF7B8C)),
+                    text: t('较低 <35%'),
+                    style: const TextStyle(color: Color(0xFFFF7B8C)),
                   ),
                 ],
               ),
@@ -2564,9 +2551,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         // 找点源。照直写「没有检出目标」，用户会以为这张图白拍了，
                         // 而其实月盘、亮面占比、相名都算出来了，只是画在图上了。
                         analysis.moonDisc != null
-                            ? '这是月面照片：星点、深空天体和系内天体都不在月面上找。'
-                                '月盘的位置和亮面占比已经标在图上了。'
-                            : '没有检出目标。',
+                            ? t('这是月面照片：星点、深空天体和系内天体都不在月面上找。月盘的位置和亮面占比已经标在图上了。')
+                            : t('没有检出目标。'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Color(0xFF8192A8)),
                       ),
@@ -2579,9 +2565,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       _intraSolarGroup(solve),
                       _targetGroup(
                         id: 'named',
-                        title: '亮星',
+                        title: t('亮星'),
                         icon: Icons.star_outline_rounded,
-                        emptyHint: '没有和星表对上名字的星。',
+                        emptyHint: t('没有和星表对上名字的星。'),
                         targets: targets,
                         items: groups.named,
                         hidden: hidden,
@@ -2589,9 +2575,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ),
                       _targetGroup(
                         id: 'unnamed',
-                        title: '未匹配星点',
+                        title: t('未匹配星点'),
                         icon: Icons.blur_on_rounded,
-                        emptyHint: '没有未命名的点源。',
+                        emptyHint: t('没有未命名的点源。'),
                         targets: targets,
                         items: groups.unnamed,
                         hidden: hidden,
@@ -2599,9 +2585,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ),
                       _targetGroup(
                         id: 'streaks',
-                        title: '可疑飞线',
+                        title: t('可疑飞线'),
                         icon: Icons.horizontal_rule_rounded,
-                        emptyHint: '没有发现拉长的亮点。',
+                        emptyHint: t('没有发现拉长的亮点。'),
                         targets: targets,
                         items: groups.streaks,
                         hidden: hidden,
@@ -2710,7 +2696,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '深空天体  ${objects.length}',
+                    t('深空天体  {0}', [objects.length]),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -2721,7 +2707,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 _batchButton(
                   Icons.remove_circle_outline,
-                  '把深空天体的标记从图上隐去',
+                  t('把深空天体的标记从图上隐去'),
                   canHide,
                   () => setState(() {
                     _hiddenDeepSkyObjects.addAll(
@@ -2731,7 +2717,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
-                  '显示全部深空天体标记',
+                  t('显示全部深空天体标记'),
                   canShow,
                   () => setState(() => _hiddenDeepSkyObjects.clear()),
                 ),
@@ -2741,11 +2727,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
         if (!collapsed)
           if (objects.isEmpty)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(38, 2, 12, 10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(38, 2, 12, 10),
               child: Text(
-                '这片视场没有识别到深空天体。',
-                style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+                t('这片视场没有识别到深空天体。'),
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
               ),
             )
           else
@@ -2763,17 +2749,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     // 「有中文常用名」这件事现在是标题上看得见的：M 16 写成「M 16 鹰状星云」。
     // 之前是拿「名字里有没有汉字」来判的，那对 M 16 这种编号根本不成立——
     // 于是它在列表里是灰的，而报告里却写着鹰状星云。
-    final nickname = chineseNicknameOf(object.name);
+    final nickname = nicknameOf(object.name);
     final angularSize = object.angularSizeArcmin;
     final details = <String>[
       // 昵称已经写进标题了，副标题里不再重复类型——「鹰状星云 · 星云」是废话。
       if (nickname == null && object.category.isNotEmpty) object.category,
       if (angularSize != null && angularSize > 0)
         angularSize < 1
-            ? '约 ${(angularSize * 60).round()}″'
+            ? t('约 {0}″', [(angularSize * 60).round()])
             : angularSize < 60
-                ? '约 ${angularSize.toStringAsFixed(1)}′'
-                : '约 ${(angularSize / 60).toStringAsFixed(2)}°',
+                ? t('约 {0}′', [angularSize.toStringAsFixed(1)])
+                : t('约 {0}°', [(angularSize / 60).toStringAsFixed(2)]),
     ];
     if (angularSize != null && angularSize > 0) {
       final field = solve?.fieldOfViewDegrees ?? 0;
@@ -2781,8 +2767,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         final fraction = (angularSize / 60) / field;
         details.add(
           fraction >= 1
-              ? '大于视场对角线'
-              : '约占视场 ${(fraction * 100).round()}%',
+              ? t('大于视场对角线')
+              : t('约占视场 {0}%', [(fraction * 100).round()]),
         );
       }
     }
@@ -2830,24 +2816,24 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           // 什么也不会发生的开关，比没有开关更让人困惑。
           if (markable) ...[            _batchButton(
               Icons.remove_circle_outline,
-              '把 ${object.name} 的标记从图上隐去',
+              t('把 {0} 的标记从图上隐去', [object.name]),
               !isHidden,
               () => setState(() => _hiddenDeepSkyObjects.add(object.name)),
               dense: true,
             ),
             _batchButton(
               Icons.add_circle_outline,
-              '显示 ${object.name} 的标记',
+              t('显示 {0} 的标记', [object.name]),
               isHidden,
               () => setState(() => _hiddenDeepSkyObjects.remove(object.name)),
               dense: true,
             ),
           ] else
-            const Padding(
-              padding: EdgeInsets.only(left: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
               child: Text(
-                '弥漫星体',
-                style: TextStyle(fontSize: 11, color: Color(0xFF8192A8)),
+                t('弥漫星体'),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF8192A8)),
               ),
             ),
         ],
@@ -2920,7 +2906,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '系内天体  ${bodies.length}',
+                    t('系内天体  {0}', [bodies.length]),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -2931,7 +2917,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 _batchButton(
                   Icons.remove_circle_outline,
-                  '把系内天体的标记从图上隐去',
+                  t('把系内天体的标记从图上隐去'),
                   canHide,
                   () => setState(() {
                     _hiddenMovingBodies.addAll(
@@ -2941,7 +2927,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
-                  '显示全部系内天体标记',
+                  t('显示全部系内天体标记'),
                   canShow,
                   () => setState(() => _hiddenMovingBodies.clear()),
                 ),
@@ -2951,12 +2937,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
         if (!collapsed)
           if (bodies.isEmpty)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(38, 2, 12, 10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(38, 2, 12, 10),
               child: Text(
-                '这张照片里没有算得出位置的系内天体。'
-                '（要有拍摄时刻才算得出来。）',
-                style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+                t('这张照片里没有算得出位置的系内天体。（要有拍摄时刻才算得出来。）'),
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
               ),
             )
           else
@@ -2975,22 +2960,22 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ? const Color(0xFFFFAB40)
         : const Color(0xFF7FD8FF);
     final details = <String>[
-      body.kind.label,
+      t(body.kind.label),
       if (!body.detected)
-        '图上没有对上'
+        t('图上没有对上')
       else if (body.separationArcsec < movingBodyCoincidenceArcsec)
-        '位置重合'
+        t('位置重合')
       else
-        '和星历差 ${body.separationArcsec.round()}″',
+        t('和星历差 {0}″', [body.separationArcsec.round()]),
       if (body.magnitude != null && !body.magnitudeIsRough)
-        '约 ${body.magnitude!.toStringAsFixed(1)} 等'
+        t('约 {0} 等', [body.magnitude!.toStringAsFixed(1)])
       else if (body.magnitude != null)
-        '亮度大约 ${body.magnitude!.round()} 等'
+        t('亮度大约 {0} 等', [body.magnitude!.round()])
       else
-        '亮度未知',
+        t('亮度未知'),
       if (body.distanceAu != null)
-        '距地球 ${body.distanceAu!.toStringAsFixed(2)} AU',
-      if (body.catalogBuilt != null) '表建于 ${body.catalogBuilt}',
+        t('距地球 {0} AU', [body.distanceAu!.toStringAsFixed(2)]),
+      if (body.catalogBuilt != null) t('表建于 {0}', [body.catalogBuilt]),
     ];
 
     return ListTile(
@@ -3028,14 +3013,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         children: [
           _batchButton(
             Icons.remove_circle_outline,
-            '把 ${body.name} 的标记从图上隐去',
+            t('把 {0} 的标记从图上隐去', [body.name]),
             !isHidden,
             () => setState(() => _hiddenMovingBodies.add(body.name)),
             dense: true,
           ),
           _batchButton(
             Icons.add_circle_outline,
-            '显示 ${body.name} 的标记',
+            t('显示 {0} 的标记', [body.name]),
             isHidden,
             () => setState(() => _hiddenMovingBodies.remove(body.name)),
             dense: true,
@@ -3139,7 +3124,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
                 if (rejected > 0)
                   Text(
-                    '已判非天体 $rejected',
+                    t('已判非天体 {0}', [rejected]),
                     style: const TextStyle(
                       color: Color(0xFF8192A8),
                       fontSize: 11,
@@ -3147,13 +3132,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 _batchButton(
                   Icons.remove_circle_outline,
-                  '把这组的圆圈从图上隐去',
+                  t('把这组的圆圈从图上隐去'),
                   canHide,
                   () => _setGroupCircles(id, false, items),
                 ),
                 _batchButton(
                   Icons.add_circle_outline,
-                  '把这组的圆圈显示回来',
+                  t('把这组的圆圈显示回来'),
                   canShow,
                   () => _setGroupCircles(id, true, items),
                 ),
@@ -3380,7 +3365,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
       ),
       title: Text(
-        name?.name ?? (star.isElongated ? '拉长点源' : '未匹配点源'),
+        name?.name ?? (star.isElongated ? t('拉长点源') : t('未匹配点源')),
         style: TextStyle(
           color: muted
               ? const Color(0xFF8192A8)
@@ -3406,14 +3391,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           if (star.isElongated) ...[
             _judgeButton(
               Icons.check_circle_outline,
-              '判为天体，计入报告',
+              t('判为天体，计入报告'),
               !star.isRejected,
               kMint,
               () => _setRejection(star, false),
             ),
             _judgeButton(
               Icons.cancel_outlined,
-              '判为非天体，不计入报告',
+              t('判为非天体，不计入报告'),
               star.isRejected,
               const Color(0xFFFF7B8C),
               () => _setRejection(star, true),
@@ -3422,14 +3407,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           // 和组标题上那两个是同一对意思，只是只管这一颗。
           _batchButton(
             Icons.remove_circle_outline,
-            '把这一颗的圆圈从图上隐去',
+            t('把这一颗的圆圈从图上隐去'),
             !isHidden,
             () => _setTargetCircle(index, false),
             dense: true,
           ),
           _batchButton(
             Icons.add_circle_outline,
-            '把这一颗的圆圈显示回来',
+            t('把这一颗的圆圈显示回来'),
             isHidden,
             () => _setTargetCircle(index, true),
             dense: true,
@@ -3460,10 +3445,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   String _highlightSubtitle(DetectedStar star, SkyObject? name) {
     final position =
-        '像素 (${star.x.toStringAsFixed(0)}, ${star.y.toStringAsFixed(0)})';
+        t('像素 ({0}, {1})', [star.x.toStringAsFixed(0), star.y.toStringAsFixed(0)]);
     if (star.isElongated) {
-      return '长宽比 ${star.axisRatio.toStringAsFixed(1)}:1 · '
-          '可能是卫星、飞机或抖动 · $position';
+      return t('长宽比 {0}:1 · 可能是卫星、飞机或抖动 · {1}', [star.axisRatio.toStringAsFixed(1), position]);
     }
     final category =
         name?.category.isNotEmpty == true ? '${name!.category} · ' : '';
@@ -3498,14 +3482,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         shape: const Border(),
         collapsedShape: const Border(),
         leading: const Icon(Icons.straighten_rounded, color: kMint),
-        title: const Text(
-          '亮星与测光',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+        title: Text(
+          t('亮星与测光'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           zeroPoint == null
-              ? '尚未标定星等零点，只能比较图内相对亮度'
-              : 'Gaia G 近似标定 · 零点 ${zeroPoint.toStringAsFixed(2)}',
+              ? t('尚未标定星等零点，只能比较图内相对亮度')
+              : t('Gaia G 近似标定 · 零点 {0}', [zeroPoint.toStringAsFixed(2)]),
           style: const TextStyle(fontSize: 11),
         ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -3514,20 +3498,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              MetricChip('可测光点源', '${stars.length}'),
-              MetricChip('点源 FWHM', '${analysis.fwhm.toStringAsFixed(1)} px'),
+              MetricChip(t('可测光点源'), '${stars.length}'),
+              MetricChip(t('点源 FWHM'), '${analysis.fwhm.toStringAsFixed(1)} px'),
               if (solve?.magnitudeScatter != null)
                 MetricChip(
-                  '标定散布',
-                  '±${solve!.magnitudeScatter!.toStringAsFixed(2)} 等',
+                  t('标定散布'),
+                  t('±{0} 等', [solve!.magnitudeScatter!.toStringAsFixed(2)]),
                 ),
             ],
           ),
           const SizedBox(height: 8),
           if (stars.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text('没有可用于恒星测光的紧凑点源。'),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(t('没有可用于恒星测光的紧凑点源。')),
             )
           else
             ...stars.take(8).map((star) {
@@ -3536,10 +3520,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               return ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text(name?.name ?? '未匹配点源'),
+                title: Text(name?.name ?? t('未匹配点源')),
                 subtitle: Text(
-                  '孔径通量 ${star.flux.toStringAsFixed(0)}'
-                  '${error == null ? '' : ' · 星等误差 ±${error.toStringAsFixed(2)}'}',
+                  t('孔径通量 {0}{1}', [star.flux.toStringAsFixed(0), error == null ? '' : t(' · 星等误差 ±{0}', [error.toStringAsFixed(2)])]),
                   style: const TextStyle(fontSize: 11),
                 ),
                 trailing: Text(
@@ -3551,21 +3534,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               );
             }),
           const SizedBox(height: 6),
-          const Row(
+          Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Text(
-                  'Gaia G 是近似标定，不含相机光谱响应、白平衡、饱和与后期处理'
-                  '带来的系统误差，只适合与同一台设备的其他照片比较。',
-                  style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
+                  t('Gaia G 是近似标定，不含相机光谱响应、白平衡、饱和与后期处理带来的系统误差，只适合与同一台设备的其他照片比较。'),
+                  style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
                 ),
               ),
               _HelpButton(
-                title: '测光误差',
+                title: t('测光误差'),
                 message:
-                    '星等误差只算了光子噪声和天空背景估计的误差，不包含相机光谱响应、'
-                    '白平衡、饱和、镜头暗角和图像处理造成的系统误差。结果仅供参考。',
+                    t('星等误差只算了光子噪声和天空背景估计的误差，不包含相机光谱响应、白平衡、饱和、镜头暗角和图像处理造成的系统误差。结果仅供参考。'),
               ),
             ],
           ),
@@ -3602,14 +3583,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Row(
+              Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  SectionTitle('这片天在哪儿', Icons.travel_explore),
+                  SectionTitle(t('这片天在哪儿'), Icons.travel_explore),
                   _HelpButton(
-                    title: '全天图怎么看',
-                    message: '十字是这张照片的中心，黄圈示意视场大小。横轴赤经向左'
-                        '增大，绿线是天赤道。',
+                    title: t('全天图怎么看'),
+                    message: t('十字是这张照片的中心，黄圈示意视场大小。横轴赤经向左增大，绿线是天赤道。'),
                   ),
                 ],
               ),
@@ -3622,7 +3602,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               const SizedBox(height: 10),
               Text(
                 '${formatRa(solve.centerRa)} · ${formatDec(solve.centerDec)}'
-                '${solve.fieldOfViewDegrees > 0 ? '   ·   视场对角 ${formatFieldOfView(solve.fieldOfViewDegrees)}' : ''}',
+                '${solve.fieldOfViewDegrees > 0 ? t('   ·   视场对角 {0}', [formatFieldOfView(solve.fieldOfViewDegrees)]) : ''}',
                 style: const TextStyle(fontSize: 12),
               ),
             ],
@@ -3636,16 +3616,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Row(
+              Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  SectionTitle('天区识别', Icons.public_rounded),
+                  SectionTitle(t('天区识别'), Icons.public_rounded),
                   _HelpButton(
-                    title: '天区识别与隐私',
+                    title: t('天区识别与隐私'),
                     message:
-                        '优先在手机本机解算，不上传任何图片。本机解算不出来时，'
-                        '如果已在设置里授权，才会把分析预览图上传到 Astrometry.net。'
-                        '不解算也能查看本机星点与画质分析。',
+                        t('优先在手机本机解算，不上传任何图片。本机解算不出来时，如果已在设置里授权，才会把分析预览图上传到 Astrometry.net。不解算也能查看本机星点与画质分析。'),
                   ),
                 ],
               ),
@@ -3659,14 +3637,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     // 的那次是用户自己选的；从仓库里翻出来的那条，用户早忘了
                     // 当时点过什么，说「这是月面链路」才对他有用。
                     _moonOnly
-                        ? '这次只报告了月亮，没有解算天区。'
-                        : '这张照片走的是月面链路，没有解算天区。',
+                        ? t('这次只报告了月亮，没有解算天区。')
+                        : t('这张照片走的是月面链路，没有解算天区。'),
                   ),
                 )
               else if (solve == null)
-                const Padding(
-                  padding: EdgeInsets.only(top: 10),
-                  child: Text('解析失败。'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(t('解析失败。')),
                 )
               else ...[
                 const SizedBox(height: 10),
@@ -3675,26 +3653,31 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   runSpacing: 8,
                   children: [
                     MetricChip(
-                      '解算方式',
-                      solve.source == SolveSource.local ? '本机离线' : 'Astrometry.net',
+                      t('解算方式'),
+                      solve.source == SolveSource.local ? t('本机离线') : 'Astrometry.net',
                     ),
                     if (solve.constellations.isNotEmpty)
-                      MetricChip('星座', solve.constellations.first),
+                      MetricChip(t('星座'), solve.constellations.first),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  '中心 RA ${formatRa(solve.centerRa)}  ·  Dec ${solve.centerDec.toStringAsFixed(4)}°',
+                  t('中心 RA {0}  ·  Dec {1}°', [formatRa(solve.centerRa), solve.centerDec.toStringAsFixed(4)]),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '像素比例 ${solve.arcsecPerPixel.toStringAsFixed(2)}″/px'
-                  '   ·   视场对角 ${solve.fieldOfViewDegrees.toStringAsFixed(2)}°',
+                  t('像素比例 {0}″/px   ·   视场对角 {1}°', [solve.arcsecPerPixel.toStringAsFixed(2), solve.fieldOfViewDegrees.toStringAsFixed(2)]),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '匹配 ${solve.matchedCount == 0 ? solve.matchedStars.length : solve.matchedCount} 颗星'
-                  '${solve.rotationDegrees == 0 ? '' : '   ·   画面旋转 ${solve.rotationDegrees.toStringAsFixed(1)}°'}',
+                  tn(
+                    '匹配 {0} 颗星{1}',
+                    solve.matchedCount == 0 ? solve.matchedStars.length : solve.matchedCount,
+                    [
+                      solve.matchedCount == 0 ? solve.matchedStars.length : solve.matchedCount,
+                      solve.rotationDegrees == 0 ? '' : t('   ·   画面旋转 {0}°', [solve.rotationDegrees.toStringAsFixed(1)]),
+                    ],
+                  ),
                 ),
               ],
             ],
@@ -3760,34 +3743,29 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                SectionTitle('观星记录', Icons.nights_stay_rounded),
+                SectionTitle(t('观星记录'), Icons.nights_stay_rounded),
                 _HelpButton(
-                  title: '观星记录怎么来的',
+                  title: t('观星记录怎么来的'),
                   message:
-                      '名字、编号、星座、视场这些是星表和解算给的，是事实；'
-                      '亮面占比、点源大小、星等这些是从这张照片本身量出来的，'
-                      '会随曝光、ISO、光圈和后期处理变化。换个晚上、换台机器就'
-                      '不一样，适合和「你自己过去拍的」比，不适合和别人的照片比。',
+                      t('名字、编号、星座、视场这些是星表和解算给的，是事实；亮面占比、点源大小、星等这些是从这张照片本身量出来的，会随曝光、ISO、光圈和后期处理变化。换个晚上、换台机器就不一样，适合和「你自己过去拍的」比，不适合和别人的照片比。'),
                 ),
               ],
             ),
             if (online) ...[
               const SizedBox(height: 10),
-              const Row(
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.cloud_upload_outlined,
+                  const Icon(Icons.cloud_upload_outlined,
                       size: 15, color: kOnlineAmber),
-                  SizedBox(width: 6),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      '使用 Astrometry.net 在线解算：这张照片的分析预览已上传至 '
-                      'nova.astrometry.net，中心坐标与天体名来自该服务。'
-                      '本机解算没有成功，所以这一次照片出过设备。',
-                      style: TextStyle(
+                      t('使用 Astrometry.net 在线解算：这张照片的分析预览已上传至 nova.astrometry.net，中心坐标与天体名来自该服务。本机解算没有成功，所以这一次照片出过设备。'),
+                      style: const TextStyle(
                         fontSize: 12,
                         height: 1.5,
                         color: kOnlineAmber,
@@ -3806,23 +3784,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                MetricChip('画质', record.quality),
-                MetricChip('天空背景', record.skyBrightness),
+                MetricChip(t('画质'), record.quality),
+                MetricChip(t('天空背景'), record.skyBrightness),
                 // 月面照片不走星点链路，点源 FWHM、星表匹配这些数在这里没有
                 // 意义——报出来只会让用户以为测了，其实是零。
                 if (record.moon == null)
-                  MetricChip('点源 FWHM',
+                  MetricChip(t('点源 FWHM'),
                       '${analysis.fwhm.toStringAsFixed(1)} px'),
                 if (solve != null) ...[
-                  MetricChip('星表匹配', '${record.matchedStars} 颗'),
-                  MetricChip('视场对角', record.fieldOfView),
-                  MetricChip('像素比例', record.scale),
+                  MetricChip(t('星表匹配'), t('{0} 颗', [record.matchedStars])),
+                  MetricChip(t('视场对角'), record.fieldOfView),
+                  MetricChip(t('像素比例'), record.scale),
                 ],
               ],
             ),
             if (record.brightest != null) ...[
               const SizedBox(height: 10),
-              Text('画面最亮：${record.brightest}',
+              Text(t('画面最亮：{0}', [record.brightest]),
                   style: const TextStyle(fontSize: 13)),
             ],
             if (record.movingBodies.isNotEmpty) ...[
@@ -3847,8 +3825,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 说不出是在盈还是在亏。
   Widget _moonBlock(MoonFacts moon) {
     final phaseLabel = moon.phaseName == null
-        ? '填上拍摄时间即可算出相名'
-        : '${moon.waxing == true ? '盈' : '亏'} · ${moon.phaseName}';
+        ? t('填上拍摄时间即可算出相名')
+        : '${moon.waxing == true ? t('盈') : t('亏')} · ${moon.phaseName}';
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       decoration: BoxDecoration(
@@ -3859,14 +3837,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('月面', style: TextStyle(fontWeight: FontWeight.w600)),
+          Text(t('月面'), style: const TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           Row(
             children: [
-              _moonMetric('亮面占比（图上量的）', moon.measuredPercent),
+              _moonMetric(t('亮面占比（图上量的）'), moon.measuredPercent),
               const SizedBox(width: 12),
               _moonMetric(
-                '亮面占比（按时刻算的）',
+                t('亮面占比（按时刻算的）'),
                 moon.ephemerisPercent ?? '—',
               ),
             ],
@@ -3925,13 +3903,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               children: [
-                Icon(Icons.public_rounded, size: 15, color: Colors.orangeAccent),
-                SizedBox(width: 6),
+                const Icon(Icons.public_rounded, size: 15, color: Colors.orangeAccent),
+                const SizedBox(width: 6),
                 Text(
-                  '疑似运动天体',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  t('疑似运动天体'),
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                 ),
               ],
             ),
@@ -3940,14 +3918,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 3),
                 child: Text(
-                  '${body.name}（${body.kind.label}）${body.describeWithoutName}',
+                  t('{0}（{1}）{2}', [body.name, t(body.kind.label), body.describeWithoutName]),
                   style: const TextStyle(fontSize: 13, height: 1.4),
                 ),
               ),
             const SizedBox(height: 6),
-            const Text(
+            // movingBodyCaution 现在是 getter（文案要跟着语言走，不能是编译期常量）
+            Text(
               movingBodyCaution,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 11.5,
                 height: 1.45,
                 color: Color(0xFF8192A8),
@@ -3955,9 +3934,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ),
             if (bodies.any((body) => !body.detected)) ...[
               const SizedBox(height: 5),
-              const Text(
+              Text(
                 unidentifiedBodyCaution,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 11.5,
                   height: 1.45,
                   color: Color(0xFF8192A8),
@@ -3980,14 +3959,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                SectionTitle('视场内的恒星', Icons.table_chart_outlined),
+                SectionTitle(t('视场内的恒星'), Icons.table_chart_outlined),
                 _HelpButton(
-                  title: '星名和星等从哪来',
-                  message: '星名按已匹配的目录星和解算位置标注；星等是这张照片'
-                      '量出来的仪器星等，减去星等零点之后才是标定值。',
+                  title: t('星名和星等从哪来'),
+                  message: t('星名按已匹配的目录星和解算位置标注；星等是这张照片量出来的仪器星等，减去星等零点之后才是标定值。'),
                 ),
               ],
             ),
@@ -4003,13 +3981,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   fontWeight: FontWeight.w600,
                 ),
                 dataTextStyle: const TextStyle(fontSize: 12),
-                columns: const [
-                  DataColumn(label: Text('星名')),
-                  DataColumn(label: Text('类型')),
-                  DataColumn(label: Text('星等')),
-                  DataColumn(label: Text('赤经')),
-                  DataColumn(label: Text('赤纬')),
-                  DataColumn(label: Text('图上置信度')),
+                columns: [
+                  DataColumn(label: Text(t('星名'))),
+                  DataColumn(label: Text(t('类型'))),
+                  DataColumn(label: Text(t('星等'))),
+                  DataColumn(label: Text(t('赤经'))),
+                  DataColumn(label: Text(t('赤纬'))),
+                  DataColumn(label: Text(t('图上置信度'))),
                 ],
                 rows: [
                   for (final row in rows.take(20))
@@ -4038,7 +4016,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                               const SizedBox(width: 4),
                               Text(
                                 row.confidence == null
-                                    ? '未检出'
+                                    ? t('未检出')
                                     : '${(row.confidence! * 100).toStringAsFixed(0)}%',
                                 style: TextStyle(
                                   color: row.confidence == null
@@ -4058,7 +4036,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  '共 ${rows.length} 颗，此处显示最亮的 20 颗。',
+                  t('共 {0} 颗，此处显示最亮的 20 颗。', [rows.length]),
                   style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
                 ),
               ),
@@ -4066,7 +4044,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  '名称目录暂不可用：${solve.catalogWarning}',
+                  t('名称目录暂不可用：{0}', [solve.catalogWarning]),
                   style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
                 ),
               ),
@@ -4085,17 +4063,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                SectionTitle('星等分布', Icons.bar_chart_rounded),
+                SectionTitle(t('星等分布'), Icons.bar_chart_rounded),
                 _HelpButton(
-                  title: '星等分布怎么看',
+                  title: t('星等分布怎么看'),
                   message:
-                      '横轴是星等，往右越暗；纵轴是落在这个亮度区间的星数。'
-                      '右边最后几根柱子就是你这次的探测极限——再暗一等的星就淹在背景噪声里了。'
-                      '如果分布在最暗那端突然掉到零，说明是设备极限；'
-                      '如果整条分布都在很亮的几档里堆着，多半是曝光不足或天空太亮。',
+                      t('横轴是星等，往右越暗；纵轴是落在这个亮度区间的星数。右边最后几根柱子就是你这次的探测极限——再暗一等的星就淹在背景噪声里了。如果分布在最暗那端突然掉到零，说明是设备极限；如果整条分布都在很亮的几档里堆着，多半是曝光不足或天空太亮。'),
                 ),
               ],
             ),
@@ -4123,19 +4098,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                SectionTitle('画面中的深空天体', Icons.scatter_plot),
+                SectionTitle(t('画面中的深空天体'), Icons.scatter_plot),
                 _HelpButton(
-                  title: '深空天体是怎么认出来的',
+                  title: t('深空天体是怎么认出来的'),
                   message:
-                      '这些天体不在本机的亮星表里，是解算出天球坐标之后按目录'
-                      '位置标注的，所以位置可靠、亮度不可靠——延展的星云和星系'
-                      '没有「一个点」的星等。\n\n'
-                      '占像场的比例是天体长轴与像场对角线的比：接近或超过 100% '
-                      '说明画面只是它的一部分，这张属于特写；只有百分之几说明'
-                      '目标在这套器材下还偏小，可以再上更长的焦距。',
+                      t('这些天体不在本机的亮星表里，是解算出天球坐标之后按目录位置标注的，所以位置可靠、亮度不可靠——延展的星云和星系没有「一个点」的星等。\n\n占像场的比例是天体长轴与像场对角线的比：接近或超过 100% 说明画面只是它的一部分，这张属于特写；只有百分之几说明目标在这套器材下还偏小，可以再上更长的焦距。'),
                 ),
               ],
             ),
@@ -4149,7 +4119,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   [
                     entry.sizeLabel,
                     if (entry.coverageLabel.isNotEmpty) entry.coverageLabel,
-                  ].join('　·　'),
+                  ].join(t('　·　')),
                   style: const TextStyle(fontSize: 12),
                 ),
                 trailing: Icon(
@@ -4172,13 +4142,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SectionTitle('Agent 解读', Icons.chat_bubble_outline_rounded),
+              SectionTitle(t('Agent 解读'), Icons.chat_bubble_outline_rounded),
               const SizedBox(height: 10),
               TextField(
                 controller: _questionController,
-                decoration: const InputDecoration(
-                  hintText: '例如：哪些测量结果可靠？',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  hintText: t('例如：哪些测量结果可靠？'),
+                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 10),
@@ -4186,13 +4156,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 width: double.infinity,
                 child: FilledButton.tonal(
                   onPressed: _explaining ? null : _explain,
-                  child: Text(_explaining ? 'Agent 正在处理…' : '发送给 Agent'),
+                  child: Text(_explaining ? t('Agent 正在处理…') : t('发送给 Agent')),
                 ),
               ),
               if (_agentActivity.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(
-                  '本轮工具调用：${_agentActivity.join('、')}',
+                  t('本轮工具调用：{0}', [_agentActivity.join(t('、'))]),
                   style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFFA6B5C8),
@@ -4233,17 +4203,17 @@ class DemoPickerSheet extends StatelessWidget {
           // 内容少的时候卡片跟着内容收，不要撑满整屏。
           shrinkWrap: true,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
               child: Text(
-                '试一张演示星图',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                t('试一张演示星图'),
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
               ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
               child: Text(
-                '${demoImages.length} 张真实拍摄的照片',
+                t('{0} 张真实拍摄的照片', [demoImages.length]),
                 style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
             ),
@@ -4353,7 +4323,7 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
               top: 12,
               child: SafeArea(child: _roundButton(
                 icon: Icons.close_fullscreen,
-                tooltip: '退出全屏',
+                tooltip: t('退出全屏'),
                 onTap: () => Navigator.of(context).pop(),
               )),
             ),
@@ -4362,7 +4332,7 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
               top: 12,
               child: SafeArea(child: _roundButton(
                 icon: _exporting ? Icons.hourglass_top : Icons.ios_share,
-                tooltip: '导出带标注的图',
+                tooltip: t('导出带标注的图'),
                 onTap: _exporting ? null : _export,
               )),
             ),
@@ -4435,7 +4405,7 @@ class _HelpButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IconButton(
-        tooltip: '了解更多',
+        tooltip: t('了解更多'),
         visualDensity: VisualDensity.compact,
         onPressed: () => showDialog<void>(
           context: context,
@@ -4445,7 +4415,7 @@ class _HelpButton extends StatelessWidget {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('知道了'),
+                child: Text(t('知道了')),
               ),
             ],
           ),
@@ -4460,12 +4430,14 @@ class SettingsForm extends StatefulWidget {
     required this.current,
     required this.astrometryKey,
     required this.allowUpload,
+    required this.language,
     required this.storage,
   });
 
   final ModelSettings current;
   final String astrometryKey;
   final bool allowUpload;
+  final AppLanguage language;
   final FlutterSecureStorage storage;
 
   @override
@@ -4483,6 +4455,7 @@ class _SettingsFormState extends State<SettingsForm> {
   bool _obscureStrong = true;
   bool _obscureAstrometry = true;
   late bool _allowUpload = widget.allowUpload;
+  late AppLanguage _language = widget.language;
 
   /// 快速模板：只预填 Base URL 和型号名，不含 Key。
   ///
@@ -4504,51 +4477,51 @@ class _SettingsFormState extends State<SettingsForm> {
   ///     `hunyuan-turbos-latest` 这一个可直接引用的型号名，所以两个槽都填它——
   ///     宁可重复，也不编一个没核对过的名字。该页同时声明混元正在迁往 TokenHub、
   ///     旧控制台将下线，届时应按 TokenHub 的型号表更新。
-  static const _apiTemplates = <_AgentApiTemplate>[
-    _AgentApiTemplate(
+  static final _apiTemplates = <_AgentApiTemplate>[
+    const _AgentApiTemplate(
       name: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com/v1',
       lightModel: 'deepseek-chat',
       strongModel: 'deepseek-reasoner',
     ),
-    _AgentApiTemplate(
+    const _AgentApiTemplate(
       name: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       lightModel: 'gpt-4.1-mini',
       strongModel: 'gpt-4.1',
     ),
-    _AgentApiTemplate(
+    const _AgentApiTemplate(
       name: 'OpenRouter',
       baseUrl: 'https://openrouter.ai/api/v1',
       lightModel: 'deepseek/deepseek-chat',
       strongModel: 'deepseek/deepseek-r1',
     ),
     _AgentApiTemplate(
-      name: '硅基流动',
+      name: t('硅基流动'),
       baseUrl: 'https://api.siliconflow.cn/v1',
       lightModel: 'deepseek-ai/DeepSeek-V3',
       strongModel: 'deepseek-ai/DeepSeek-R1',
     ),
     _AgentApiTemplate(
-      name: '阿里云百炼',
+      name: t('阿里云百炼'),
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       lightModel: 'qwen3.8-flash',
       strongModel: 'qwen3.8-max',
     ),
     _AgentApiTemplate(
-      name: '智谱 GLM',
+      name: t('智谱 GLM'),
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       lightModel: 'glm-5.3-flash',
       strongModel: 'glm-5.3',
     ),
-    _AgentApiTemplate(
+    const _AgentApiTemplate(
       name: 'Kimi',
       baseUrl: 'https://api.moonshot.cn/v1',
       lightModel: 'kimi-k2.6',
       strongModel: 'kimi-k3',
     ),
     _AgentApiTemplate(
-      name: '腾讯混元',
+      name: t('腾讯混元'),
       baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
       lightModel: 'hunyuan-turbos-latest',
       strongModel: 'hunyuan-turbos-latest',
@@ -4567,13 +4540,14 @@ class _SettingsFormState extends State<SettingsForm> {
     final uri = Uri.tryParse(_baseUrl.text.trim());
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请填写有效的模型 Base URL。')),
+        SnackBar(content: Text(t('请填写有效的模型 Base URL。'))),
       );
       return;
     }
     final values = {
       // 授权是个开关不是密钥，空值也照样写进去。
       'allowUpload': _allowUpload ? 'true' : 'false',
+      'language': _language.code,
       'modelBaseUrl': _baseUrl.text.trim(),
       'lightKey': _lightKey.text.trim(),
       'lightModel': _lightModel.text.trim(),
@@ -4583,7 +4557,7 @@ class _SettingsFormState extends State<SettingsForm> {
     };
     try {
       for (final entry in values.entries) {
-        if (entry.key == 'allowUpload') {
+        if (entry.key == 'allowUpload' || entry.key == 'language') {
           await widget.storage.write(key: entry.key, value: entry.value);
         } else if (entry.value.isEmpty) {
           await widget.storage.delete(key: entry.key);
@@ -4594,7 +4568,7 @@ class _SettingsFormState extends State<SettingsForm> {
     } on Exception catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('安全存储设置失败：$error')),
+          SnackBar(content: Text(t('安全存储设置失败：{0}', [error]))),
         );
       }
       return;
@@ -4645,20 +4619,18 @@ class _SettingsFormState extends State<SettingsForm> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SectionTitle('本机 API-key 设置', Icons.lock_outline),
+              SectionTitle(t('本机 API-key 设置'), Icons.lock_outline),
               const SizedBox(height: 14),
-              const Text(
-                '快速模板',
-                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              Text(
+                t('快速模板'),
+                style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
-              const Align(
+              Align(
                 alignment: Alignment.centerRight,
                 child: _HelpButton(
-                  title: '模型 API 模板',
+                  title: t('模型 API 模板'),
                   message:
-                      '模板仅预填兼容接口的 Base URL 和模型名，不包含 API Key。'
-                      '请在服务商处自行申请 Key，核对模型是否仍可用。'
-                      '填写的密钥保存在本机安全存储，并发送至你配置的模型服务。',
+                      t('模板仅预填兼容接口的 Base URL 和模型名，不包含 API Key。请在服务商处自行申请 Key，核对模型是否仍可用。填写的密钥保存在本机安全存储，并发送至你配置的模型服务。'),
                 ),
               ),
               const SizedBox(height: 8),
@@ -4674,23 +4646,45 @@ class _SettingsFormState extends State<SettingsForm> {
                 ],
               ),
               const SizedBox(height: 12),
-              _field('模型 API Base URL', _baseUrl),
-              _field('轻量模型名称', _lightModel),
+              _field(t('模型 API Base URL'), _baseUrl),
+              _field(t('轻量模型名称'), _lightModel),
               _field(
-                '轻量模型 API Key',
+                t('轻量模型 API Key'),
                 _lightKey,
                 secret: true,
                 obscure: _obscureLight,
                 toggle: () => setState(() => _obscureLight = !_obscureLight),
               ),
-              _field('强推理模型名称', _strongModel),
+              _field(t('强推理模型名称'), _strongModel),
               _field(
-                '强推理模型 API Key',
+                t('强推理模型 API Key'),
                 _strongKey,
                 secret: true,
                 obscure: _obscureStrong,
                 toggle: () => setState(() => _obscureStrong = !_obscureStrong),
               ),
+              const SizedBox(height: 8),
+              // 语言放在最上面那块设置里、API Key 之前：它是唯一一个「改完立刻
+              // 影响整屏」的选项，而下面那些都要配好 Key 才有用。
+              DropdownButtonFormField<AppLanguage>(
+                initialValue: _language,
+                decoration: InputDecoration(
+                  labelText: t('界面语言'),
+                  border: const OutlineInputBorder(),
+                ),
+                items: [
+                  for (final item in AppLanguage.values)
+                    DropdownMenuItem(
+                      value: item,
+                      // 用这门语言自己的写法称呼它：找「繁體中文」的人未必认得
+                      // 「Traditional Chinese」。
+                      child: Text(item.nativeName),
+                    ),
+                ],
+                onChanged: (value) =>
+                    setState(() => _language = value ?? _language),
+              ),
+              const SizedBox(height: 16),
               _field(
                 'Astrometry.net API Key',
                 _astrometryKey,
@@ -4703,19 +4697,18 @@ class _SettingsFormState extends State<SettingsForm> {
                 controlAffinity: ListTileControlAffinity.leading,
                 value: _allowUpload,
                 onChanged: (value) => setState(() => _allowUpload = value ?? false),
-                title: const Text('允许在必要时把图片上传至 Astrometry.net'),
-                subtitle: const Text(
-                  '默认关闭，本机解算失败才会用到；\n'
-                  '请登录Astrometry.net获取APIKey。',
-                  style: TextStyle(fontSize: 12, color: Color(0xFFA6B5C8)),
+                title: Text(t('允许在必要时把图片上传至 Astrometry.net')),
+                subtitle: Text(
+                  t('默认关闭，本机解算失败才会用到；\n请登录Astrometry.net获取APIKey。'),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFFA6B5C8)),
                 ),
               ),
-              const Text(
-                '密钥保存在本地安全存储。',
-                style: TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
+              Text(
+                t('密钥保存在本地安全存储。'),
+                style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 12),
               ),
               const SizedBox(height: 16),
-              SizedBox(width: double.infinity, child: FilledButton(onPressed: _save, child: const Text('保存设置'))),
+              SizedBox(width: double.infinity, child: FilledButton(onPressed: _save, child: Text(t('保存设置')))),
             ],
           ),
         ),

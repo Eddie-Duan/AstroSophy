@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'strings.dart';
 import 'orbit.dart';
 
 /// 月相：从拍摄时刻算出来的亮面占比和盈亏。
@@ -33,11 +34,11 @@ class MoonPhase {
   /// 名字必须结合 [waxing] 一起说。
   String get name {
     final k = illuminatedFraction;
-    if (k < 0.02) return '新月';
-    if (k > 0.98) return '满月';
-    if (k < 0.48) return waxing ? '娥眉月' : '残月';
-    if (k <= 0.52) return waxing ? '上弦月' : '下弦月';
-    return waxing ? '盈凸月' : '亏凸月';
+    if (k < 0.02) return t('新月');
+    if (k > 0.98) return t('满月');
+    if (k < 0.48) return waxing ? t('娥眉月') : t('残月');
+    if (k <= 0.52) return waxing ? t('上弦月') : t('下弦月');
+    return waxing ? t('盈凸月') : t('亏凸月');
   }
 }
 

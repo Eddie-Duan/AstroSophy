@@ -1,3 +1,4 @@
+import 'strings.dart';
 import 'analysis.dart';
 import 'deepsky_names.dart';
 import 'models.dart';
@@ -45,7 +46,7 @@ String _subjectOf(
   String? originalFilename,
 ) {
   // 月面最先判——它有自己的判据，而且判出来了就不该再拿星场那套去猜。
-  if (analysis.isMoonShot) return '月亮';
+  if (analysis.isMoonShot) return t('月亮');
 
   // 行星/小行星：整张图上最稀有的那个结论，也是最像「我拍的是它」的东西。
   final bodies = buildMovingBodyEntries(solve);
@@ -59,7 +60,7 @@ String _subjectOf(
     final entry = deepSky.first;
     // 有中文常用名就用常用名（「昴星团」比「M 45」好认），没有就用编号，
     // 但要把空格去掉——带空格的文件名在分享和命令行里都是麻烦。
-    final nickname = chineseNicknameOf(entry.name);
+    final nickname = nicknameOf(entry.name);
     return _sanitise(nickname ?? entry.name.replaceAll(' ', ''));
   }
 
@@ -75,7 +76,7 @@ String _subjectOf(
   final fallback = _stem(originalFilename);
   if (fallback != null && fallback.isNotEmpty) return _sanitise(fallback);
 
-  return '星空';
+  return t('星空');
 }
 
 /// 「月亮_261015」。没有拍摄时刻就只留前半截。

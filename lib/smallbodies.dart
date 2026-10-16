@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/services.dart' show AssetBundle;
 
+import 'strings.dart';
 import 'ephemeris.dart';
 import 'models.dart';
 import 'moving.dart';
@@ -122,7 +123,7 @@ class SmallBody {
           : (json['kind'] == 'dwarf_planet'
               ? BodyKind.dwarfPlanet
               : BodyKind.asteroid),
-      name: json['name'] as String? ?? '未命名',
+      name: json['name'] as String? ?? t('未命名'),
       designation: json['designation'] as String? ?? '',
       epoch: _number(json['epoch']),
       semiMajorAxis: _number(json['a']),

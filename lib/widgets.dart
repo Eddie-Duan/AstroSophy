@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'deepsky_names.dart';
 import 'models.dart';
@@ -181,9 +182,9 @@ class MissingImage extends StatelessWidget {
               ),
               if (!compact) ...[
                 const SizedBox(height: 10),
-                const Text(
-                  '这张图已经不在手机上了',
-                  style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+                Text(
+                  t('这张图已经不在手机上了'),
+                  style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
                 ),
               ],
             ],
@@ -323,7 +324,7 @@ class DetectedStarsPainter extends CustomPainter {
       );
       final caption = TextPainter(
         text: TextSpan(
-          text: '月面 · 亮 ${(moon.illuminatedFraction * 100).toStringAsFixed(1)}%',
+          text: t('月面 · 亮 {0}%', [(moon.illuminatedFraction * 100).toStringAsFixed(1)]),
           style: const TextStyle(
             color: kMint,
             fontSize: 11,
@@ -560,7 +561,7 @@ class DetectedStarsPainter extends CustomPainter {
         );
         final missed = TextPainter(
           text: TextSpan(
-            text: '${body.name} · 图上没有对上',
+            text: t('{0} · 图上没有对上', [body.name]),
             style: major ? bodyLabelStyle : smallBodyLabelStyle,
           ),
           textDirection: TextDirection.ltr,
@@ -602,8 +603,8 @@ class DetectedStarsPainter extends CustomPainter {
       final label = TextPainter(
         text: TextSpan(
           text: separation < movingBodyCoincidenceArcsec
-              ? '${body.name} · 位置重合'
-              : '${body.name} · 差 ${separation.round()}″',
+              ? t('{0} · 位置重合', [body.name])
+              : t('{0} · 差 {1}″', [body.name, separation.round()]),
           style: major ? bodyLabelStyle : smallBodyLabelStyle,
         ),
         textDirection: TextDirection.ltr,
@@ -1104,11 +1105,11 @@ class _DeepBadge extends StatelessWidget {
           color: const Color(0xFF1D3F73),
           borderRadius: BorderRadius.circular(9),
         ),
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
           child: Text(
-            '本地深度思考',
-            style: TextStyle(
+            t('本地深度思考'),
+            style: const TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
               color: Color(0xFFC7DBFF),
@@ -1128,7 +1129,7 @@ class _MoonBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: '认出月面',
+        message: t('认出月面'),
         child: SizedBox(
           width: 18,
           height: 18,
@@ -1410,9 +1411,9 @@ class MagnitudeHistogram extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bins.isEmpty) {
-      return const Text(
-        '没有可用于星等统计的点源。',
-        style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+      return Text(
+        t('没有可用于星等统计的点源。'),
+        style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
       );
     }
     return Column(
@@ -1426,8 +1427,8 @@ class MagnitudeHistogram extends StatelessWidget {
         const SizedBox(height: 6),
         Text(
           calibrated
-              ? '横轴：标定星等（数值越大越暗）\n 纵轴：星数'
-              : '横轴：图内相对星等（未标定，不是真实星等）\n 纵轴：星数',
+              ? t('横轴：标定星等（数值越大越暗）\n 纵轴：星数')
+              : t('横轴：图内相对星等（未标定，不是真实星等）\n 纵轴：星数'),
           style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
         ),
       ],

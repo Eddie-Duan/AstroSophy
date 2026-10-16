@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'strings.dart';
 import 'history.dart';
 import 'models.dart';
 import 'theme.dart';
@@ -50,20 +51,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除这条记录？'),
+        title: Text(t('删除这条记录？')),
         content: Text(
-          '「${entry.name}」的测量结果和两张图片会一起删掉，无法恢复。'
-          '你手机相册里的原图不受影响。',
+          t('「{0}」的测量结果和两张图片会一起删掉，无法恢复。你手机相册里的原图不受影响。', [entry.name]),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            child: Text(t('取消')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB3455A)),
-            child: const Text('删除'),
+            child: Text(t('删除')),
           ),
         ],
       ),
@@ -76,14 +76,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('观星仓库'),
+          title: Text(t('观星仓库')),
           actions: [
             if (_totalBytes > 0)
               Padding(
                 padding: const EdgeInsets.only(right: 16),
                 child: Center(
                   child: Text(
-                    '占用 ${formatBytes(_totalBytes)}',
+                    t('占用 {0}', [formatBytes(_totalBytes)]),
                     style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
                   ),
                 ),
@@ -105,7 +105,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Text('读取历史记录失败：$_error', textAlign: TextAlign.center),
+          child: Text(t('读取历史记录失败：{0}', [_error]), textAlign: TextAlign.center),
         ),
       );
     }
@@ -127,20 +127,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 
-  Widget _emptyState() => const Center(
+  Widget _emptyState() => Center(
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.nights_stay_outlined, size: 46, color: Color(0xFF46556B)),
-              SizedBox(height: 14),
-              Text('还没有保存过观测记录'),
-              SizedBox(height: 8),
+              const Icon(Icons.nights_stay_outlined, size: 46, color: Color(0xFF46556B)),
+              const SizedBox(height: 14),
+              Text(t('还没有保存过观测记录')),
+              const SizedBox(height: 8),
               Text(
-                '解析完一张星图之后点「保存」，就能在这里回看。',
+                t('解析完一张星图之后点「保存」，就能在这里回看。'),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFF8192A8), fontSize: 12),
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 12),
               ),
             ],
           ),
@@ -186,13 +186,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         children: [
                           _roundButton(
                             Icons.edit_outlined,
-                            '重命名',
+                            t('重命名'),
                             () => _rename(entry),
                           ),
                           const SizedBox(width: 6),
                           _roundButton(
                             Icons.delete_outline,
-                            '删除',
+                            t('删除'),
                             () => _confirmDelete(entry),
                           ),
                         ],
@@ -218,12 +218,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       // 换成那轮月亮的实际读数才说明得了这一条记录是什么。
                       entry.isMoon
                           ? _moonLine(entry)
-                          : '${entry.starCount} 个点源 · ${entry.quality}',
+                          : tn('{0} 个点源 · {1}', entry.starCount,
+                              [entry.starCount, entry.quality]),
                       style: const TextStyle(color: Color(0xFFA6B5C8), fontSize: 11),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      entry.constellation ?? entry.outcome.label,
+                      entry.constellation ?? t(entry.outcome.label),
                       style: TextStyle(
                         color: entry.constellation == null
                             ? outcomeColor(entry.outcome)
@@ -250,8 +251,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   /// 不编一个数——这一行是给用户扫一眼用的，编出来的数会被当成量过的结果。
   String _moonLine(SavedAnalysis entry) {
     final fraction = entry.moonIlluminatedFraction;
-    if (fraction == null) return '月面照片 · ${entry.quality}';
-    return '月面 · 亮面约 ${(fraction * 100).round()}% · ${entry.quality}';
+    if (fraction == null) return t('月面照片 · {0}', [entry.quality]);
+    return t('月面 · 亮面约 {0}% · {1}', [(fraction * 100).round(), entry.quality]);
   }
 
   /// 改名。
@@ -264,26 +265,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('重命名'),
+        title: Text(t('重命名')),
         content: TextFormField(
           initialValue: entry.name,
           autofocus: true,
           maxLength: 40,
           onChanged: (value) => draft = value,
           onFieldSubmitted: (value) => Navigator.of(context).pop(value),
-          decoration: const InputDecoration(
-            labelText: '记录名称',
+          decoration: InputDecoration(
+            labelText: t('记录名称'),
             counterText: '',
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
+            child: Text(t('取消')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(draft),
-            child: const Text('保存'),
+            child: Text(t('保存')),
           ),
         ],
       ),
@@ -294,12 +295,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已改名为「${name.trim()}」')),
+        SnackBar(content: Text(t('已改名为「{0}」', [name.trim()]))),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('重命名失败：$error')),
+        SnackBar(content: Text(t('重命名失败：{0}', [error]))),
       );
     }
   }
@@ -315,7 +316,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         border: Border.all(color: color.withValues(alpha: 0.7)),
       ),
       child: Text(
-        outcome.label,
+        t(outcome.label),
         style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w600),
       ),
     );
@@ -365,6 +366,6 @@ String formatSavedAt(DateTime at) {
 /// 把星座名和坐标写成一行摘要，历史详情和主界面都用得上。
 String describeSavedTarget(SavedAnalysis entry) {
   final solve = entry.solve;
-  if (solve == null) return '未解算天区';
-  return '${entry.constellation ?? '未知星座'} · ${formatRa(solve.centerRa)}';
+  if (solve == null) return t('未解算天区');
+  return '${entry.constellation ?? t('未知星座')} · ${formatRa(solve.centerRa)}';
 }

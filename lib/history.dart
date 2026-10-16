@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'strings.dart';
 import 'analysis.dart';
 import 'models.dart';
 
@@ -282,7 +283,7 @@ class HistoryStore {
 
     final jsonFile = File(p.join(directory.path, '${entry.id}.json'));
     final decoded = jsonDecode(await jsonFile.readAsString());
-    if (decoded is! Map) throw const FormatException('记录文件格式不对。');
+    if (decoded is! Map) throw FormatException(t('记录文件格式不对。'));
     final json = Map<String, Object?>.from(decoded);
     json['name'] = trimmed;
     // 用和保存时同一个编码器写回：缩进一致，键的顺序也不变，用户拿文件
@@ -355,7 +356,7 @@ class HistoryStore {
         json['id'] as String? ?? p.basenameWithoutExtension(source.path);
     final rawAnalysis = json['analysis'];
     if (rawAnalysis is! Map) {
-      throw const FormatException('记录缺少测量结果。');
+      throw FormatException(t('记录缺少测量结果。'));
     }
     final summary = json['summary'] is Map
         ? Map<String, Object?>.from(json['summary']! as Map)
@@ -367,10 +368,10 @@ class HistoryStore {
     final starCount = _asInt(summary['star_count']);
     return SavedAnalysis(
       id: id,
-      name: json['name'] as String? ?? '未命名',
+      name: json['name'] as String? ?? t('未命名'),
       savedAt:
           DateTime.tryParse(json['saved_at'] as String? ?? '') ?? DateTime.now(),
-      quality: summary['quality'] as String? ?? '未知',
+      quality: summary['quality'] as String? ?? t('未知'),
       starCount: starCount,
       constellation:
           summary['constellation'] as String? ?? _firstOrNull(solve?.constellations),
