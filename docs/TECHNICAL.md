@@ -143,6 +143,7 @@ p ≈ 图内星点数 × π × 3² / 像面面积        期望假解数 ≈ C(�
 - `lib/solver.dart`：本机离线天区解算（三角形指纹匹配 → 相似变换 → 内点精修）。
 - `lib/astrometry.dart`：Astrometry.net 上传与轮询，以及 Gaia DR3 / SIMBAD 查询。
 - `lib/model.dart`：OpenAI 兼容模型服务的双模型路由。
+- `lib/agent_tools.dart`：Agent 的固定工具集（当前报告、视场目录对象、小天体位置、观测记录读写、在线解算、视觉遮罩建议）。每个工具的参数由 App 校验后执行，写入与联网动作逐次确认；没有任意文件、URL 或代码执行工具。
 - `lib/pipeline.dart`：一键解析流程与后台 isolate（`SkyWorker`）。
 - `lib/report.dart`：爱好者报告（表格、直方图分箱、摘要与建议）。
 - `lib/moon.dart`：月相算式（亮面占比、盈亏、相名），只要拍摄时刻。

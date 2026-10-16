@@ -60,7 +60,7 @@ flutter run
 
 首次打开会显示整屏新手引导；各卡片的“?”可随时查看该指标的解释，顶部问号可以重播引导。
 
-星等、天空背景指数、RAW 支持边界和隐私说明见 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)。
+星等、天空背景指数、RAW 支持边界和隐私说明见 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)；AI 现在做什么、接下来还能做什么、哪些方向明确不做，见 [`docs/AI-ROADMAP.md`](./docs/AI-ROADMAP.md)。
 
 ## 致谢
 
