@@ -1090,13 +1090,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   Text(
                     '${(progress.fraction * 100).round()}%',
                     style: TextStyle(
-                      color: progress.solvedLocally
-                          ? const Color(0xFFFF6B6B)
-                          : progress.online
-                              ? const Color(0xFFFFDE77)
-                              : progress.deep
-                                  ? const Color(0xFF4C8DFF)
-                                  : kMint,
+                      color: progress.moonOnly
+                          ? const Color(0xFFE8EEF5)
+                          : progress.solvedLocally
+                              ? const Color(0xFFFF6B6B)
+                              : progress.online
+                                  ? const Color(0xFFFFDE77)
+                                  : progress.deep
+                                      ? const Color(0xFF4C8DFF)
+                                      : kMint,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1107,9 +1109,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 value: progress.fraction,
                 online: progress.online,
                 moon: progress.moon,
+                moonOnly: progress.moonOnly,
                 solvedLocally: progress.solvedLocally,
                 deep: progress.deep,
               ),
+              if (progress.moonOnly) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  '这次只报月亮，没有解算天区',
+                  style: TextStyle(fontSize: 11.5, color: Color(0xFFC8D4E4)),
+                ),
+              ],
               if (progress.solvedLocally) ...[
                 const SizedBox(height: 8),
                 const Text(
@@ -1357,6 +1367,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   height: 6,
                   online: job.progress?.online ?? false,
                   moon: job.progress?.moon ?? false,
+                  moonOnly: job.progress?.moonOnly ?? false,
                   solvedLocally: job.progress?.solvedLocally ?? false,
                 ),
               ),
@@ -1582,7 +1593,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ),
                 ),
                 const Text(
-                  '把随手拍下的星空，变成一张看得懂的观星记录。',
+                  'Snap the sky, read the stars.',
                   style: TextStyle(color: Color(0xFFA6B5C8)),
                 ),
                 const SizedBox(height: 20),
@@ -1718,7 +1729,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ),
                       SizedBox(height: 7),
                       Text(
-                        '上传一张星空照片，开始探索它的故事。',
+                        '随手拍星，星象自明。',
                         style: TextStyle(color: Color(0xFFB2C0D2), fontSize: 12),
                       ),
                     ],
@@ -1772,7 +1783,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           const Row(
             children: [
               Text(
-                'JPG / PNG / TIFF · 也试读相机 RAW 内嵌预览',
+                '支持JPG / PNG / TIFF / RAW 格式',
                 style: TextStyle(color: Color(0xFF8192A8), fontSize: 11),
               ),
               _HelpButton(
@@ -1854,7 +1865,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     if (moment.hasKnownOffset) return '$source，时区也读到了';
     // 没读到时区就按本机时区算。手机照片基本就是设备本地时间拍的，这是能
     // 拿到的最接近的假设；报告里会写明这一条是假设，不是读出的事实。
-    return '$source；没有时区信息，按本机当前时区算';
+    return '$source；按当前时区算';
   }
 
   /// 让用户修改或设置拍摄时间。
@@ -2523,7 +2534,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               TextSpan(
                 style: TextStyle(fontSize: 10.5),
                 children: [
-                  TextSpan(text: '星点编号颜色：'),
+                  TextSpan(text: '颜色置信度：'),
                   TextSpan(
                     text: '较高 ≥70%',
                     style: TextStyle(color: kMint),

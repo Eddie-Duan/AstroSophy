@@ -843,6 +843,7 @@ class SkyProgressBar extends StatelessWidget {
     this.height = 10,
     this.online = false,
     this.moon = false,
+    this.moonOnly = false,
     this.solvedLocally = false,
     this.deep = false,
   });
@@ -863,7 +864,20 @@ class SkyProgressBar extends StatelessWidget {
   /// 真的时候在进度条**左侧**挂一个标记。位置是有讲究的：进度条本身说的是
   /// 「还要等多久」，而这句话说的是「等一下，这可能是另一回事」——它必须
   /// 出现在用户视线起点的左边，而不是混进右边的百分比里当又一个数字。
+  ///
+  /// 注意它和 [moonOnly] 是两件事：[moon] 说的是「认出来了，正等他拿主意」，
+  /// [moonOnly] 说的是「他拿了主意，这次就报月亮」。
   final bool moon;
+
+  /// 用户已经选了「直接分析月球」，这一次只报月亮。
+  ///
+  /// 换成银白底加蓝斑点。和其余四套配色都不一样，因为它说的是这四种都不是的
+  /// 一件事：**这条链路已经不在找天体了**。薄荷绿、蓝、琥珀、红都在说「星图
+  /// 解算走到哪一步」，而这一次压根没有解算——月亮上没有星表对得上的点源，
+  /// 星场那一整套（星点检测、星表匹配、测光）全都跳过去了。银白是月色，蓝点
+  /// 是夜里剩下的那点星光；用一套没有出现在别处的配色，用户就不用去分辨
+  /// 「这次的红为什么和上次的不一样」。
+  final bool moonOnly;
 
   /// 本机解算已经成功。
   ///
@@ -917,6 +931,17 @@ class SkyProgressBar extends StatelessWidget {
     Color(0xFFFFC9C9),
   ];
 
+  /// 「只报月亮」那一次的填充色：银白。
+  ///
+  /// 三档都压得很淡，右端几乎是白——月色底下不要有太重的东西。蓝斑点由
+  /// [_MoonDustPainter] 点上去：底色已经够亮，斑点要比底色**深**才看得见，
+  /// 这和别的几档（深底浅点）正好相反，所以它单独一个 painter。
+  static const _moonColours = <Color>[
+    Color(0xFF9FB0C4),
+    Color(0xFFE8EEF5),
+    Color(0xFFFBFDFF),
+  ];
+
   @override
   Widget build(BuildContext context) => Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -959,16 +984,25 @@ class SkyProgressBar extends StatelessWidget {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: solvedLocally
-                              ? _solvedColours
-                              : online
-                                  ? _onlineColours
-                                  : deep
-                                      ? _deepColours
-                                      : _localColours,
+                          // 顺序有意义：只报月亮是「这条链路不在找天体」，
+                          // 它压过其余四种状态——真到那一刻，剩下的几种
+                          // 说的都不是这次发生的事。
+                          colors: moonOnly
+                              ? _moonColours
+                              : solvedLocally
+                                  ? _solvedColours
+                                  : online
+                                      ? _onlineColours
+                                      : deep
+                                          ? _deepColours
+                                          : _localColours,
                         ),
                       ),
-                      child: const CustomPaint(painter: _StarRushPainter()),
+                      child: CustomPaint(
+                        painter: moonOnly
+                            ? const _MoonDustPainter()
+                            : const _StarRushPainter(),
+                      ),
                     ),
                   ),
                 ],
@@ -977,6 +1011,33 @@ class SkyProgressBar extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// 进度条上的蓝斑点，只在「只报月亮」那一次用。
+///
+/// 和 [_StarRushPainter] 的区别不只是颜色：那边是深底子上的白点，这边是**亮
+/// 底子上的深点**。同一个白点画在银白底上等于没画——这也是它单独一个类、而
+/// 不是给原来那个加个颜色参数的原因。
+class _MoonDustPainter extends CustomPainter {
+  const _MoonDustPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 2 || size.height <= 2) return;
+    final paint = Paint()..color = const Color(0xFF2F6BD8).withValues(alpha: 0.85);
+    final faint = Paint()..color = const Color(0xFF5B8FE0).withValues(alpha: 0.55);
+    for (var i = 0; i < 7; i++) {
+      // 和原来的星点同一套位置（黄金比取模，完全确定，没有随机数），
+      // 所以同一张图上前后两次画出来的斑点位置一致。
+      final x = ((i * 0.618 + 0.11) % 1.0) * size.width;
+      final y = ((i * 0.377 + 0.29) % 1.0) * size.height;
+      final radius = i.isEven ? 1.4 : 1.0;
+      canvas.drawCircle(Offset(x, y), radius, i.isEven ? paint : faint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MoonDustPainter oldDelegate) => false;
 }
 
 /// 进度条左边那句「本地深度思考」。

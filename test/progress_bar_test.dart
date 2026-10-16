@@ -3,12 +3,12 @@ import 'package:astrosophy/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 进度条上那两件事：用到最深那层星表时换成蓝色调，并在左端挂一句
-/// 「本地深度思考」。
+/// 进度条上那几件事：用到最深那层星表时换成蓝色调并在左端挂一句
+/// 「本地深度思考」；用户选了「直接分析月球」之后换成银白底加蓝斑点。
 ///
-/// 单独测它是因为这条信息只能靠配色和一句短语传出去：这一步要等的时间比
-/// 前面几层高一个量级，用户得先知道「还在算、而且这次算得久」，才不会以为
-/// 程序卡死了。
+/// 单独测它是因为这两条信息只能靠配色和一句短语传出去：前者要等的时间比
+/// 前面几层高一个量级，用户得先知道「还在算、而且这次算得久」；后者压根不是
+/// 进度，而是「这一次不在找天体」——星点检测、星表匹配、测光全跳过了。
 void main() {
   Future<void> pump(WidgetTester tester, Widget bar) => tester.pumpWidget(
         MaterialApp(home: Scaffold(body: Center(child: SizedBox(child: bar)))),
@@ -77,5 +77,48 @@ void main() {
     );
     expect(find.text('本地深度思考'), findsOneWidget);
     expect(find.byType(Tooltip), findsOneWidget);
+  });
+
+  testWidgets('选了「直接分析月球」之后：银白底，蓝斑点', (tester) async {
+    await pump(
+      tester,
+      const SkyProgressBar(value: 0.7, moon: true, moonOnly: true),
+    );
+
+    final colours = fillGradient(tester).colors;
+    // 银白：三档都很亮，也就是「底色是亮的」——这一点和其余四套（深底浅点）
+    // 正相反，蓝斑点正是靠这个才看得见。
+    for (final colour in colours) {
+      expect(colour.r, greaterThan(0.5));
+      expect(colour.g, greaterThan(0.5));
+      expect(colour.b, greaterThan(0.5));
+    }
+    // 右端几乎纯白，中段接近中性（左端带一点灰蓝，那是「银」的那一侧）。
+    expect(colours.last.b, greaterThan(0.95));
+    expect((colours[1].r - colours[1].b).abs(), lessThan(0.08));
+  });
+
+  testWidgets('银白那一套压过其余四种状态', (tester) async {
+    // 只报月亮说的是「这条链路不在找天体」，和「走到哪一步」不是同一件事。
+    // 真到那一刻，别的几种状态说的都不是这次发生的事，所以让位。
+    await pump(
+      tester,
+      const SkyProgressBar(
+        value: 0.7,
+        moon: true,
+        moonOnly: true,
+        online: true,
+        deep: true,
+        solvedLocally: true,
+      ),
+    );
+    expect(fillGradient(tester).colors[1], const Color(0xFFE8EEF5));
+  });
+
+  testWidgets('只认出月亮、还没选的时候，还是原来的配色', (tester) async {
+    // 「认出月亮」和「决定只报月亮」是两件事：前者只是挂个标记问一句，
+    // 后者才换配色。混在一起的话，用户还没拿主意就先看到一套新颜色。
+    await pump(tester, const SkyProgressBar(value: 0.2, moon: true));
+    expect(fillGradient(tester).colors[1], kMint);
   });
 }

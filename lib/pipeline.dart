@@ -22,6 +22,7 @@ class PipelineProgress {
     this.stage, {
     this.online = false,
     this.moon = false,
+    this.moonOnly = false,
     this.solvedLocally = false,
     this.deep = false,
   });
@@ -44,6 +45,16 @@ class PipelineProgress {
   /// 一直换，而「这是一个月亮」这件事是整条链路上最早定下来、也最该被看到的
   /// 一个结论——它决定后面还跑不跑。
   final bool moon;
+
+  /// 用户已经选了「直接分析月球」，这一次只报月亮。
+  ///
+  /// 界面靠它把进度条换成银白底加蓝斑点。这条链路和其余几种状态说的不是同
+  /// 一件事：别的时候进度条在报「星图解算走到哪一步」，而这一次压根没有解算
+  /// ——月亮上没有能和星表对上的点源，星点检测、星表匹配、测光全都跳过了。
+  ///
+  /// 它和 [moon] 是两件事：[moon] 说的是「认出来了，正等他拿主意」，
+  /// [moonOnly] 说的是「他拿了主意，这一次就报月亮」。
+  final bool moonOnly;
 
   /// 本机解算**已经成功**。
   ///
@@ -156,6 +167,10 @@ class SkyPipeline {
 
     // 本机解算成没成功。成功后进度条就换成另一套配色，一路持续到最后。
     var solvedLocally = false;
+    // 用户选了「只报月亮」之后，剩下的每一步都带着这个标记——进度条换成银白
+    // 底加蓝斑点，直到这一屏结束。和 [solvedLocally] 一样，一路持续到最后：
+    // 中间漏带一次，颜色就会在那一瞬间翻回去。
+    var moonOnlyReported = false;
 
     void report(int index, double local, [String? text, bool deep = false]) {
       if (index >= bounds.length) return;
@@ -166,6 +181,7 @@ class SkyPipeline {
           text ?? stages[index].name,
           online: stages[index].online,
           solvedLocally: solvedLocally,
+          moonOnly: moonOnlyReported,
           deep: deep,
         ),
       );
@@ -199,6 +215,19 @@ class SkyPipeline {
       );
       moonOnly = !(await onMoonDetected?.call(analysis) ?? false);
       if (moonOnly) {
+        // 这里就把标记立起来，并且**当场报一次进度**：用户刚点完「直接分析
+        // 月球」，进度条得立刻变成银白色给出回话，而不是等下一步的 report
+        // 走到才换——中间的解读阶段有时候要等好几秒。
+        moonOnlyReported = true;
+        onProgress?.call(
+          PipelineProgress(
+            bounds.first.$2,
+            '只报月亮 · 亮面 '
+            '${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%',
+            moon: true,
+            moonOnly: true,
+          ),
+        );
         warnings.add(
           '这次只报告月亮：月盘、亮面占比，以及按拍摄时刻算出来的相名。'
           '想在这张图里找别的天体，重新解析时选「继续寻找其他天体」。',
@@ -310,13 +339,15 @@ class SkyPipeline {
       }
     }
 
-    // 最后这条也要带上 solvedLocally：不带的话进度条会在收尾的一瞬间从红
-    // 变回薄荷绿，像是「本机解算又没成功」——这正是测试抓到过一次的。
+    // 最后这条也要带上 solvedLocally 和 moonOnly：不带的话进度条会在收尾的
+    // 一瞬间翻回默认配色，像是「刚才那件事没发生过」——solvedLocally 漏带的
+    // 那一次就是测试抓出来的。
     onProgress?.call(
       PipelineProgress(
         1,
         '解析完成',
         moon: analysis.isMoonShot,
+        moonOnly: moonOnlyReported,
         solvedLocally: solvedLocally,
       ),
     );
