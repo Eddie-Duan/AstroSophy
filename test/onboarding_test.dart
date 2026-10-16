@@ -36,36 +36,40 @@ Future<void> pumpOnboarding(
 }
 
 void main() {
-  testWidgets('第一页讲清楚这是什么，按钮是「下一步」', (tester) async {
+  // 语言是全局量：某条用例改完没放回去，后面几条就会拿到另一门语言，
+  // 一失败就是一片。统一在每条之后复位。
+  tearDown(() => appLanguage.value = AppLanguage.zh);
+
+  testWidgets('第一页是选语言，按钮是「下一步」', (tester) async {
     await pumpOnboarding(tester, onDone: (_) {});
-    expect(find.text('AstroSophy'), findsOneWidget);
-    expect(find.text('拍下星空，剩下交给它'), findsOneWidget);
+    // 语言排在第一位：它决定后面几页用什么语言读。
+    expect(find.text('选一门语言'), findsOneWidget);
+    expect(find.text('English'), findsOneWidget);
+    expect(find.text('简体中文'), findsOneWidget);
     expect(find.text('下一步'), findsOneWidget);
     expect(find.text('确认并进入'), findsNothing);
+    appLanguage.value = AppLanguage.zh;
   });
 
-  testWidgets('翻到最后一页，按钮变成「确认并进入」并带回选中的语言', (tester) async {
+  testWidgets('第一页选的语言最后回给调用方', (tester) async {
     AppLanguage? chosen;
     await pumpOnboarding(tester, onDone: (language) => chosen = language);
 
-    for (var page = 0; page < 4; page++) {
-      await tester.tap(find.text('下一步'));
-      await tester.pumpAndSettle();
-    }
-    expect(find.text('确认并进入'), findsOneWidget);
-    expect(find.text('下一步'), findsNothing);
-
-    // 换成英文再确认：回调要带回英文，而不是默认的中文。这一页选完立刻生效，
-    // 所以连按钮上的字都跟着换成英文了——要按的是英文那一个。
+    // 第一页就换：换完这一页自己的文案也跟着变，所以按钮从「下一步」变成「Next」。
     await tester.tap(find.text('English'));
     await tester.pumpAndSettle();
+    expect(find.text('Next'), findsOneWidget);
+
+    for (var page = 0; page < 4; page++) {
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+    }
     expect(find.text('Confirm and enter'), findsOneWidget);
     await tester.tap(find.text('Confirm and enter'));
     await tester.pumpAndSettle();
     expect(chosen, AppLanguage.en);
 
-    // 这一页选完立刻生效，是为了让用户当场看到效果——所以这里收尾时要把全局
-    // 语言放回中文，否则后面几条用例会拿到一门被上一条改过的语言。
+    // 全局语言放回中文，否则后面几条用例会拿到一门被上一条改过的语言。
     appLanguage.value = AppLanguage.zh;
   });
 
@@ -73,11 +77,11 @@ void main() {
     await pumpOnboarding(tester, onDone: (_) {});
     // 每页的标题，翻了就该出现。
     const titles = [
+      '选一门语言',
       'AstroSophy',
       '照片不出手机',
       '点一下，认出是哪颗',
       '存下来，随时翻',
-      '选一门语言',
     ];
     for (var page = 0; page < titles.length; page++) {
       expect(find.text(titles[page]), findsOneWidget, reason: '第 ${page + 1} 页');
@@ -86,6 +90,7 @@ void main() {
         await tester.pumpAndSettle();
       }
     }
+    expect(find.text('确认并进入'), findsOneWidget);
   });
 
   testWidgets('圆点能直接跳页', (tester) async {
@@ -93,7 +98,7 @@ void main() {
     // 第三个圆点的语义标签就是「第 3 页，共 5 页」，点它应该跳到结果那一页。
     await tester.tap(find.bySemanticsLabel('第 3 页，共 5 页'));
     await tester.pumpAndSettle();
-    expect(find.text('点一下，认出是哪颗'), findsOneWidget);
+    expect(find.text('照片不出手机'), findsOneWidget);
   });
 
   testWidgets('首次启动只给「跳过」，不给返回键', (tester) async {
@@ -103,10 +108,21 @@ void main() {
     expect(find.byType(BackButton), findsNothing);
   });
 
-  testWidgets('重播时能返回，也不再显示「跳过」', (tester) async {
+  testWidgets('重播时能返回，不再显示「跳过」，也不再问语言', (tester) async {
     await pumpOnboarding(tester, onDone: (_) {}, isReplay: true);
     expect(find.text('跳过'), findsNothing);
     expect(find.byType(BackButton), findsOneWidget);
+    // 语言那一步属于「第一次进来」的事：重播是来重看用法的，不该被再问一遍。
+    expect(find.text('选一门语言'), findsNothing);
+    expect(find.text('拍下星空，剩下交给它'), findsOneWidget);
+
+    // 只剩四页，翻三下就到末页。
+    for (var page = 0; page < 3; page++) {
+      await tester.tap(find.text('下一步'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('存下来，随时翻'), findsOneWidget);
+    expect(find.text('确认并进入'), findsOneWidget);
   });
 
   testWidgets('引导文案里不再出现「查看指标说明」这类指路', (tester) async {
@@ -126,6 +142,9 @@ void main() {
 
   testWidgets('吉祥物是从资源里读的，缺图会在测试里暴露', (tester) async {
     await pumpOnboarding(tester, onDone: (_) {});
+    // 吉祥物在第二页（第一页是选语言）。
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
     final images = tester
         .widgetList<Image>(find.byType(Image))
         .where((image) => image.image is AssetImage)

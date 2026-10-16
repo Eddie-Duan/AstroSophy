@@ -1,7 +1,7 @@
 name: astrosophy
 description: A local-first astronomy companion for amateur astrophotography.
 publish_to: none
-version: 0.3.2+5
+version: 0.3.3+6
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -10,6 +10,11 @@ dependencies:
   flutter:
     sdk: flutter
   file_picker: ^8.3.7
+  # Material 自带文案（返回键 tooltip、弹窗遮罩的无障碍标签等）的中英文版本。
+  # 缺了它，`MaterialApp` 一旦把 `locale` 设成 zh，`MaterialLocalizations` 就
+  # 不存在——默认 delegate 只认 en。见 lib/main.dart 里 `localizationsDelegates`。
+  flutter_localizations:
+    sdk: flutter
   flutter_secure_storage: ^9.2.4
   http: ^1.3.0
   image: ^4.5.3
@@ -34,7 +39,7 @@ flutter:
     - assets/brand/astrosophy_app_icon.svg
     - assets/brand/astrosophy_app_icon.png
     - assets/brand/astrosophy_app_icon_recraft.svg
-    # 引导页插画（四页各一张），由 tools/make_onboarding_art.py 用 Recraft 生成。
+    # 引导页插画（五页各一张），由 tools/make_onboarding_art.py 用 Recraft 生成。
     # 只有 PNG 进安装包——SVG 是无头浏览器栅格化之前的矢量源稿，留在仓库里只为
     # 日后重新导出别的尺寸。
     - assets/brand/astrosophy_mascot.png

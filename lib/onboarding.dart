@@ -5,14 +5,15 @@ import 'theme.dart';
 
 /// 新用户引导：首次启动时自动展示，之后可从右上角的问号重播。
 ///
-/// 结构沿用自 iGEM Fermenter 的引导页：整屏四页 slide，底部操作条固定不动，
-/// 所以无论左右滑还是点按钮，圆点和按钮都不会跳位。四页的顺序按用户第一次
-/// 拿到照片的真实顺序排：先导入，再看它在本机跑出了什么，然后是怎么读结果，
-/// 最后是保存下来以后还能翻。
+/// 结构沿用自 iGEM Fermenter 的引导页：整屏 slide，底部操作条固定不动，
+/// 所以无论左右滑还是点按钮，圆点和按钮都不会跳位。首次启动是五页，顺序按用户
+/// 拿到照片的真实顺序排：先选语言，再导入，然后看它在本机跑出了什么、怎么读结果，
+/// 最后是保存下来以后还能翻。从问号重播时只有后四页——语言那一步属于「第一次
+/// 进来」的事，用户点问号是想重看用法，再问他一遍语言只是挡路。
 ///
 /// 文案刻意压到「一句主张 + 一句补充 + 三个短语」：引导页是广告位，用户只会扫
 /// 一眼，成段的解释放在帮助里更合适。每页配一张自己的插画（见
-/// `tools/make_onboarding_art.py`），四页四种风格，翻页才有节奏。
+/// `tools/make_onboarding_art.py`），翻页才有节奏。
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key, required this.onDone, this.isReplay = false});
 
@@ -30,16 +31,37 @@ class OnboardingPage extends StatefulWidget {
 }
 
 class _OnboardingPageState extends State<OnboardingPage> {
-  static const _pageCount = 5;
   static const _pageDuration = Duration(milliseconds: 360);
 
   final _controller = PageController();
   int _index = 0;
 
+  /// 这几种模式下的页面，按显示顺序。重播时去掉语言那一步。
+  ///
+  /// 用「先列出来、再按位置包一层」的写法，而不是把顺序散在 `PageView` 的
+  /// children 里：`_SlideIn` 的动画要靠自己那一页的下标，顺序一改就得跟着改
+  /// 五处数字，漏一处就会出现「翻到第二页而动画还在第一页」这种看不出原因的
+  /// 错位。
+  late final List<Widget> _pages = () {
+    final builders = <Widget Function()>[
+      if (!widget.isReplay) _languageSlide,
+      _welcomeSlide,
+      _localSlide,
+      _resultSlide,
+      _keepSlide,
+    ];
+    return [
+      for (var index = 0; index < builders.length; index++)
+        _slide(index, builders[index]()),
+    ];
+  }();
+
+  int get _pageCount => _pages.length;
+
   bool get _isLast => _index == _pageCount - 1;
 
-  /// 用户在最后一页选的语言。跟着页面走而不是直接写进全局：滑走了再滑回来
-  /// 要看到他刚才选的那个，而不是又跳回默认值。
+  /// 用户选的语言。跟着页面走而不是直接写进全局：滑走了再滑回来要看到他刚才
+  /// 选的那个，而不是又跳回默认值。
   late AppLanguage _language = appLanguage.value;
 
   @override
@@ -87,13 +109,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                     child: PageView(
                       controller: _controller,
                       onPageChanged: (index) => setState(() => _index = index),
-                      children: [
-                        _slide(0, _welcomeSlide()),
-                        _slide(1, _localSlide()),
-                        _slide(2, _resultSlide()),
-                        _slide(3, _keepSlide()),
-                        _slide(4, _languageSlide()),
-                      ],
+                      children: _pages,
                     ),
                   ),
                   _dots(),
@@ -123,7 +139,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Widget _slide(int index, Widget child) =>
       _SlideIn(index: index, controller: _controller, child: child);
 
-  // -- 四页内容 --
+  // -- 五页内容 --
 
   Widget _welcomeSlide() => _pageShell([
         _Hero(
@@ -173,12 +189,14 @@ class _OnboardingPageState extends State<OnboardingPage> {
         _Chips([t('一键保存'), t('书架回看'), t('随时删除')]),
       ]);
 
-  /// 最后一页：选语言。
+  /// 第一页：选语言。
   ///
-  /// 放在最后而不是最前，是因为这一页的按钮就是「确认并进入主页」——用户翻完
-  /// 四页知道这是个什么应用了，再决定用什么语言读它，比一进来先面对一个语言
-  /// 列表更顺。选中的那一刻整页立刻换成那门语言，这是最直观的确认方式：不用
-  /// 描述「切过去会怎样」，直接给他看。
+  /// 放在最前，是因为它决定了后面几页**用什么语言读**——用户一进来就选完，
+  /// 之后每一页都是他已经认得的那门语言，不用先读四页中文再回头发现自己想要
+  /// 英文。选中那一刻整页立刻换语言，这是最直接的确认方式：不用描述「切过去
+  /// 会怎样」，直接给他看。
+  ///
+  /// 重播时不出现（见 [_pages]）：那时用户已经选过语言了。
   Widget _languageSlide() => _pageShell([
         _Hero(
           asset: 'assets/brand/astrosophy_onboarding_language.png',
@@ -256,7 +274,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
 /// 每页顶上那张插画。
 ///
-/// 四页各用一张不同风格的图（见 `tools/make_onboarding_art.py`），而不是同一
+/// 每页各用一张不同风格的图（见 `tools/make_onboarding_art.py`），而不是同一
 /// 张换个台词——翻到第二页还能看到新东西，用户才有往下翻的理由。图本身是深蓝
 /// 底的，压在页面背景上不会出现一块亮斑。
 class _Hero extends StatelessWidget {

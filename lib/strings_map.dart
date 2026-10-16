@@ -691,7 +691,7 @@ const Map<String, Map<String, String>> kLocalizedStrings = {
     '重命名失败：{0}': 'Rename failed: {0}',
     '重命名观测记录': 'Rename observation',
     '重新解析': 'Solve again',
-    '重看这五页，或者随时回到这里看这份说明': 'Revisit these five pages, or come back here any time for this guide',
+    '重看引导，或者随时回到这里看这份说明': 'Revisit the walkthrough, or come back here any time for this guide',
     '野鸭星团': 'Wild Duck Cluster',
     '金星': 'Venus',
     '针状星系': 'Needle Galaxy',

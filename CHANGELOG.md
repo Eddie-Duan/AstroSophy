@@ -2,6 +2,19 @@
 
 版本号取自 [`pubspec.yaml`](./pubspec.yaml) 的 `version`，对应的 Git 标签是 `v<版本名>`。推送标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建 release APK 并发布到 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases)。
 
+## [0.3.3] - 2026-10-16
+
+### 修复
+
+- **中文下整个应用是「坏的」**：右上角那几个入口进不去、点「？」没反应、报告页最后那块「问 Agent」的输入框是一大片空白。起因是一个里外都看不出来的疏漏：界面文案走的是我们自己的翻译表，但框架自带的那部分文字——AppBar 返回键的提示、弹窗遮罩的无障碍标签、输入框的计数与提示——由 `MaterialLocalizations` 提供，而默认那一份**只承认英文**。上一版把 `locale` 设成了中文、`supportedLocales` 也列出了中文，却没有提供支持中文的 delegate，于是 `MaterialLocalizations` 整个缺席。debug 构建下断言会当场报错（整屏变红），release 构建下断言被编译掉，`MaterialLocalizations.of(context)` 取到 `null!`、抛在构建里：页面一进入就渲染成空白，图标照常画着但点下去没有反应。现在补上 `GlobalMaterialLocalizations` / `GlobalWidgetsLocalizations` / `GlobalCupertinoLocalizations`（Cupertino 那一份不给，框架同样会判定「这个 locale 没有全部支持」）。**英文界面一直是好的**，所以这个问题只在中文下出现。
+- **窄屏下右上角最右两个入口被挤出屏幕**。一排四个图标加 `API` 胶囊在 320dp 上溢出 60px、360dp 上溢出 20px：横排排不下时，超出的部分落在屏幕外，看得见一半、点不到。现在每个图标的占位从 48 收到 40×44（Material 允许的最小触摸目标），胶囊的内边距也收了一档，三个宽度下五个入口都完整落在屏幕里。
+- **首页「支持 JPG / PNG / TIFF / RAW 格式」那一行会溢出**，紧挨着的「？」被挤到屏幕外——同样点了没反应。给文字加了弹性：宽裕时尺寸不变，挤的时候让文字先让位。
+
+### 变更
+
+- **引导流程把「选一门语言」挪到第一页**。它决定后面几页用什么语言读，先选完，之后每一页都是用户已经认得的那门语言，不用先读四页中文再回头发现自己想要英文。
+- **从右上角问号重播引导时不再问语言**，只有后四页——语言属于「第一次进来」的那一步，重播是来重看用法的。
+
 ## [0.3.2] - 2026-10-16
 
 ### 新增
