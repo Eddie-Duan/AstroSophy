@@ -354,12 +354,20 @@ class SkyAnalysis {
 
     var classified = _classify(
       _findComponents(gray, width, height, threshold.primary, grid),
+      gray,
+      width,
+      height,
+      grid,
     );
     // 标准阈值下点源太少时，降低阈值再试一次：手机夜景常见的欠曝照片能多救回一些星。
     var usedRelaxedThreshold = false;
     if (classified.stars.length < 8) {
       final relaxed = _classify(
         _findComponents(gray, width, height, threshold.relaxed, grid),
+        gray,
+        width,
+        height,
+        grid,
       );
       if (relaxed.stars.length > classified.stars.length) {
         classified = relaxed;
@@ -773,7 +781,7 @@ class _BackgroundGrid {
     noise = Float32List(cols * rows);
 
     final buffer = Float32List(tileSize * tileSize);
-    final deviations = Float32List(tileSize * tileSize);
+    final differences = Float64List(tileSize * tileSize);
     for (var ty = 0; ty < rows; ty++) {
       for (var tx = 0; tx < cols; tx++) {
         final x0 = tx * tileSize;
@@ -787,14 +795,36 @@ class _BackgroundGrid {
           }
         }
         final view = Float32List.sublistView(buffer, 0, count)..sort();
-        final median = _medianSorted(view);
-        background[ty * cols + tx] = median;
-        for (var i = 0; i < count; i++) {
-          deviations[i] = (view[i] - median).abs();
+        background[ty * cols + tx] = _medianSorted(view);
+
+        // 噪声用**相邻像素差值的中位数**估，而不是块内像素的 MAD。
+        //
+        // 差别全在星云上：MAD 量的是块内像素的离散度，于是**平滑的亮度梯度也
+        // 被算成噪声**。一块 32×32 压在星云边缘时，块内亮度落差可能有 0.1，折算
+        // 出的 σ ≈ 0.02；而平坦夜空里 σ ≈ 0.002。阈值是「背景 + 5σ」，两个数一
+        // 乘就是十倍之差——嵌在星云上的星够不到门槛，整片天区里的星连同解算一起
+        // 丢。实测：三裂星云那张照片里的星就是这么消失的。
+        //
+        // 相邻像素之差对平滑梯度几乎免疫：星云在相邻两像素之间的变化远小于噪声
+        // 本身，而噪声和星点都贡献差值。除以 √2 是因为两个独立量之差的方差是单
+        // 个的两倍。
+        var pairs = 0;
+        for (var y = y0; y < y1; y++) {
+          final row = y * width;
+          for (var x = x0; x + 1 < x1; x++) {
+            differences[pairs++] = (gray[row + x + 1] - gray[row + x]).abs();
+          }
         }
-        final deviationView = Float32List.sublistView(deviations, 0, count)..sort();
-        noise[ty * cols + tx] =
-            math.max(1.4826 * _medianSorted(deviationView), 1 / 255);
+        if (pairs == 0) {
+          noise[ty * cols + tx] = 1 / 255;
+          continue;
+        }
+        final differenceView =
+            Float64List.sublistView(differences, 0, pairs)..sort();
+        noise[ty * cols + tx] = math.max(
+          1.4826 * _medianSorted(differenceView) / math.sqrt2,
+          1 / 255,
+        );
       }
     }
 
@@ -925,6 +955,46 @@ class _Component {
   }
 }
 
+/// 从一批像素统计一个组件：通量、重心、峰值、包围盒、二阶矩。
+///
+/// 只写这一处，因为有两处要用它：[_findComponents] 把一整个连通域交给它，
+/// [_splitAtPeaks] 把拆分后的每一份也交给它。两边各写一份迟早会算出不同的数
+/// ——而这两边的数会直接比较。
+_Component _measurePixels(
+  List<int> pixels,
+  Float32List gray,
+  int width,
+  _BackgroundGrid grid,
+) {
+  final first = pixels.first;
+  final component = _Component(first % width, first ~/ width)
+    ..maxX = first % width
+    ..maxY = first ~/ width;
+  for (final index in pixels) {
+    final px = index % width;
+    final py = index ~/ width;
+    final signal = gray[index] - grid.backgroundAt(px.toDouble(), py.toDouble());
+    component.pixels.add(index);
+    component.flux += signal;
+    component.weightedX += signal * px;
+    component.weightedY += signal * py;
+    if (signal > component.peakSignal) component.peakSignal = signal;
+    if (px < component.minX) component.minX = px;
+    if (py < component.minY) component.minY = py;
+    if (px > component.maxX) component.maxX = px;
+    if (py > component.maxY) component.maxY = py;
+  }
+  if (component.flux > 0) {
+    component.centroidX = component.weightedX / component.flux;
+    component.centroidY = component.weightedY / component.flux;
+  } else {
+    component.centroidX = (component.minX + component.maxX) / 2;
+    component.centroidY = (component.minY + component.maxY) / 2;
+  }
+  _computeMoments(component, gray, width, grid);
+  return component;
+}
+
 /// 在阈值掩膜上做 8 连通标记，同时累计形态统计。
 /// 每个像素只归属一个连通域，统计结果不会有跨域污染。
 List<_Component> _findComponents(
@@ -937,31 +1007,21 @@ List<_Component> _findComponents(
   final visited = Uint8List(width * height);
   final components = <_Component>[];
   final stack = <int>[];
+  final pixels = <int>[];
 
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       final start = y * width + x;
       if (visited[start] != 0 || gray[start] < threshold[start]) continue;
 
-      final component = _Component(x, y);
+      pixels.clear();
       stack.add(start);
       visited[start] = 1;
       while (stack.isNotEmpty) {
         final index = stack.removeLast();
         final px = index % width;
         final py = index ~/ width;
-        final signal =
-            gray[index] - grid.backgroundAt(px.toDouble(), py.toDouble());
-
-        component.pixels.add(index);
-        component.flux += signal;
-        component.weightedX += signal * px;
-        component.weightedY += signal * py;
-        if (signal > component.peakSignal) component.peakSignal = signal;
-        if (px < component.minX) component.minX = px;
-        if (py < component.minY) component.minY = py;
-        if (px > component.maxX) component.maxX = px;
-        if (py > component.maxY) component.maxY = py;
+        pixels.add(index);
 
         for (var dy = -1; dy <= 1; dy++) {
           final ny = py + dy;
@@ -978,15 +1038,8 @@ List<_Component> _findComponents(
         }
       }
 
-      if (component.flux > 0) {
-        component.centroidX = component.weightedX / component.flux;
-        component.centroidY = component.weightedY / component.flux;
-      } else {
-        component.centroidX = (component.minX + component.maxX) / 2;
-        component.centroidY = (component.minY + component.maxY) / 2;
-      }
-      _computeMoments(component, gray, width, grid);
-      components.add(component);
+      final component = _measurePixels(pixels.toList(), gray, width, grid);
+      if (component.flux > 0) components.add(component);
     }
   }
   return components;
@@ -1031,6 +1084,307 @@ void _computeMoments(
   }
 }
 
+/// 两个峰至少隔多远才算两颗星。
+///
+/// 按这颗组件的短轴 σ 缩放，而不是写死像素数：换一台机器、换一个焦段，PSF 就
+/// 变了，写死的数会在这台机器上拆得太碎、在另一台上又拆不开。取 2.2σ ≈ 0.94
+/// 倍 FWHM——比一个 PSF 还近的两个峰，物理上分不出是两颗星还是一个核。
+///
+/// 下限 3 px 是给噪声留的：σ 估得很小时不该退化成「每个像素一个峰」。
+const _splitPeakSigmaFactor = 2.2;
+const _splitPeakMinimumSeparation = 3.0;
+
+/// 拆出来的一份至少要占整块通量的这一比例，才算一颗独立的星。
+///
+/// 亮星旁边的碎片（光晕里 JPEG 振铃造成的假峰）通量只有主星的百分之几，单独
+/// 列出来只是往列表里塞噪声。实测真实照片上，这个门槛把亮星周围 5 个这类碎片
+/// 挡掉，而两颗真星之间通量差 2 等时较小的那颗仍然留得住。
+const _splitPartMinimumFluxShare = 0.08;
+
+/// 「不够圆但有核心」的组件，细过这个宽度就还当它是笔画，不拆。
+///
+/// 实测：这一档里粘在一起的星点短边 9–19 px，而文字笔画和电缆都 ≤ 6 px。
+const _mergeMinimumThickness = 8.0;
+
+/// 把一个「不够圆、但有明确核心」的组件按亮度峰拆成几颗星。
+///
+/// **为什么非拆不可**：两颗星挨得近时，5σ 阈值以上的光晕会连成一块，这块的轴比
+/// 必然超过 2.2，而它的重心落在两颗星**中间**。旧行为是把它当「线状非星空」掩膜
+/// 掉，于是两颗星一起消失——实测一张真实照片里 6 颗被削顶的亮星和 31 颗密集处的
+/// 星就是这么丢的。只改成「当一颗星收下」也不行：圆心会画在两者之间，位置仍然是
+/// 错的。所以要真的把它们分开。
+///
+/// 拆法是最朴素的就近归属：先找局部极大，去掉同一片平顶里的重复峰，再把每个
+/// 像素归给最近的那个峰。只有一处峰时就整块归还——调用方照旧当一颗星处理。
+List<_Component> _splitAtPeaks(
+  _Component component,
+  Float32List gray,
+  int width,
+  int height,
+  _BackgroundGrid grid,
+) {
+  final peaks = <int>[];
+  for (final index in component.pixels) {
+    final px = index % width;
+    final py = index ~/ width;
+    var isPeak = true;
+    for (var dy = -1; dy <= 1 && isPeak; dy++) {
+      final ny = py + dy;
+      if (ny < 0 || ny >= height) continue;
+      for (var dx = -1; dx <= 1; dx++) {
+        final nx = px + dx;
+        if (nx < 0 || nx >= width) continue;
+        if (gray[ny * width + nx] > gray[index]) {
+          isPeak = false;
+          break;
+        }
+      }
+    }
+    if (isPeak) peaks.add(index);
+  }
+  if (peaks.isEmpty) return const [];
+
+  // 按亮度从高到低留峰，彼此太近的丢掉：饱和的核心是一片平顶，不去重会把
+  // 一颗星拆成几十份。间距按这颗组件的 PSF 缩放，见 [_splitPeakSigmaFactor]。
+  peaks.sort((a, b) => gray[b].compareTo(gray[a]));
+  final separation = math.max(
+    _splitPeakMinimumSeparation,
+    _splitPeakSigmaFactor * component.minorSigma,
+  );
+  final kept = <int>[];
+  for (final peak in peaks) {
+    final px = peak % width;
+    final py = peak ~/ width;
+    var tooClose = false;
+    for (final other in kept) {
+      final dx = (px - other % width).toDouble();
+      final dy = (py - other ~/ width).toDouble();
+      if (math.sqrt(dx * dx + dy * dy) < separation) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (!tooClose) kept.add(peak);
+  }
+  if (kept.length <= 1) return [component];
+
+  final buckets = <List<int>>[for (final _ in kept) <int>[]];
+  for (final index in component.pixels) {
+    final px = index % width;
+    final py = index ~/ width;
+    var best = 0;
+    var bestDistance = double.infinity;
+    for (var i = 0; i < kept.length; i++) {
+      final dx = (px - kept[i] % width).toDouble();
+      final dy = (py - kept[i] ~/ width).toDouble();
+      final distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = i;
+      }
+    }
+    buckets[best].add(index);
+  }
+
+  final parts = <_Component>[];
+  for (final bucket in buckets) {
+    if (bucket.length < 3) continue;
+    parts.add(_measurePixels(bucket, gray, width, grid));
+  }
+  // 拆不出两块以上就别拆：碎片不够成星，整块交回去让调用方按老规矩处理。
+  if (parts.length < 2) return [component];
+  // 只留占整块通量足够大的一份：亮星光晕里的振铃峰通量极小，列出来只是噪声。
+  var total = 0.0;
+  for (final part in parts) {
+    total += part.flux;
+  }
+  final significant = [
+    for (final part in parts)
+      if (total <= 0 || part.flux >= total * _splitPartMinimumFluxShare) part,
+  ];
+  return significant.length >= 2 ? significant : [component];
+}
+
+/// 在一大块「像星云」的连通域里，把嵌在它上面的星找回来。
+///
+/// **为什么需要这一步**：星云的辉光只要在小尺度上有点结构，就会整片越过阈值、
+/// 连成一块面积几千的连通域。压在它上面的星于是被这块吞掉——阈值、连通域、分类
+/// 三步都过了，唯一没过的是「面积太大 ⇒ 当非星空」这一刀。用户那张三裂星云就是
+/// 这么丢星的：红框罩住星云核心，核心上明明有亮星，图上一个圈都没有。
+///
+/// 判据和主检测是同一条，只是换成局部的说法：峰要高出**周围一圈环带的中位数**
+/// 至少 5σ（σ 用对梯度免疫的那份估计）。星点是点，立刻高出一截；星云自己的纹理
+/// 是平滑的，高不出来。环带取环形的中位数而不是「减去背景面」，是因为背景面在
+/// 星云内部本来就被星云自己抬高了，减不出局部反差。
+List<_Component> _starsInsideNebula(
+  _Component component,
+  Float32List gray,
+  int width,
+  int height,
+  _BackgroundGrid grid,
+) {
+  final peaks = <int>[];
+  for (final index in component.pixels) {
+    final px = index % width;
+    final py = index ~/ width;
+    var isPeak = true;
+    for (var dy = -1; dy <= 1 && isPeak; dy++) {
+      final ny = py + dy;
+      if (ny < 0 || ny >= height) continue;
+      for (var dx = -1; dx <= 1; dx++) {
+        final nx = px + dx;
+        if (nx < 0 || nx >= width) continue;
+        if (gray[ny * width + nx] > gray[index]) {
+          isPeak = false;
+          break;
+        }
+      }
+    }
+    if (isPeak) peaks.add(index);
+  }
+  if (peaks.isEmpty) return const [];
+
+  peaks.sort((a, b) => gray[b].compareTo(gray[a]));
+  final kept = <int>[];
+  for (final peak in peaks) {
+    final px = peak % width;
+    final py = peak ~/ width;
+    var tooClose = false;
+    for (final other in kept) {
+      final dx = (px - other % width).toDouble();
+      final dy = (py - other ~/ width).toDouble();
+      if (math.sqrt(dx * dx + dy * dy) < _nebulaPeakSeparation) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) continue;
+
+    // 环带中位数当局部天空：星云被算进去是应该的，要的正是「这颗高出它周围多少」。
+    final samples = <double>[];
+    for (var y = py - _nebulaPeakOuterRadius; y <= py + _nebulaPeakOuterRadius; y++) {
+      if (y < 0 || y >= height) continue;
+      for (var x = px - _nebulaPeakOuterRadius; x <= px + _nebulaPeakOuterRadius; x++) {
+        if (x < 0 || x >= width) continue;
+        final dx = x - px;
+        final dy = y - py;
+        final squared = dx * dx + dy * dy;
+        if (squared < _nebulaPeakInnerRadius * _nebulaPeakInnerRadius) continue;
+        if (squared > _nebulaPeakOuterRadius * _nebulaPeakOuterRadius) continue;
+        samples.add(gray[y * width + x]);
+      }
+    }
+    if (samples.isEmpty) continue;
+    samples.sort();
+    final sky = _medianSorted(samples);
+    final sigma = math.max(
+      grid.noiseAt(px.toDouble(), py.toDouble()),
+      1 / 255,
+    );
+    if (gray[peak] - sky < _nebulaPeakSigma * sigma) continue;
+    // 光「比周围高」还不够，还得**像一颗点源**：从峰往八个方向走出去，信号都要
+    // 落下来。这条是拿真实照片和合成图量出来的——平顶上的每个像素都「比周围
+    // 高」，只判高低的话，一个半径 12 像素的亮斑里会凭空生出十颗星，表格的横线
+    // 也会变成一串星。
+    //
+    // 落幅取「4σ 和自身反差 25% 里较大的那个」。只看 σ 是不够的：合成图里噪声
+    // 接近零时 4σ 只有两三个灰度级，一条印刷线沿线抖两下就算「落下来了」，于是
+    // 表格又被认成一串星。星点是真的掉，掉的不止几个灰度级。
+    final fall = math.max(
+      _nebulaFalloffSigma * sigma,
+      _nebulaFalloffFraction * (gray[peak] - sky),
+    );
+    if (!_fallsOffInEveryDirection(
+      gray,
+      width,
+      height,
+      px,
+      py,
+      gray[peak] - fall,
+    )) {
+      continue;
+    }
+    kept.add(peak);
+  }
+  if (kept.isEmpty) return const [];
+
+  // 就近归属：每颗星只收自己周围那一小片像素，星云剩下的部分仍按非星空处理。
+  final parts = <_Component>[];
+  for (final peak in kept) {
+    final px = peak % width;
+    final py = peak ~/ width;
+    final cluster = <int>[
+      for (final index in component.pixels)
+        if (_withinCluster(index % width - px, index ~/ width - py)) index,
+    ];
+    if (cluster.length < 3) continue;
+    parts.add(_measurePixels(cluster, gray, width, grid));
+  }
+  return parts;
+}
+
+bool _withinCluster(int dx, int dy) =>
+    dx * dx + dy * dy <=
+    (_nebulaPeakClusterRadius * _nebulaPeakClusterRadius).round();
+
+/// 从某个像素往八个方向走出去，信号是不是都落下来了。
+///
+/// 这是「点源」和「一片东西」的分界：星的亮度朝四面八方都在掉；星云的平坦区域、
+/// 表格的横线竖线、大亮斑的内部，总有方向走上去**不降反平**——那些方向正是它
+/// 「不是点」的证据。
+///
+/// 八个方向里允许一个不掉（[_nebulaFalloffDirections] 取 7）：一颗星旁边紧挨着
+/// 另一颗星时，朝它那个方向本来就不会掉下来。
+bool _fallsOffInEveryDirection(
+  Float32List gray,
+  int width,
+  int height,
+  int px,
+  int py,
+  double level,
+) {
+  const directions = <(int, int)>[
+    (-1, -1), (0, -1), (1, -1),
+    (-1, 0), (1, 0),
+    (-1, 1), (0, 1), (1, 1),
+  ];
+  var dropped = 0;
+  for (final (dx, dy) in directions) {
+    var fell = true;
+    for (var step = 1; step <= _nebulaFalloffRadius; step++) {
+      final x = px + dx * step;
+      final y = py + dy * step;
+      // 走出画面当作「掉了」：贴着边角的星不该因为这个理由被丢掉。
+      if (x < 0 || y < 0 || x >= width || y >= height) break;
+      if (gray[y * width + x] <= level) break;
+      if (step == _nebulaFalloffRadius) fell = false;
+    }
+    if (fell) dropped++;
+  }
+  return dropped >= _nebulaFalloffDirections;
+}
+
+/// 星云里找星用的几个尺度。
+///
+/// 这里拿不到「这颗星多大」（FWHM 要等分类完才估得出来），所以用固定的像素尺度。
+/// 星点的核心就是几个像素宽，比这更近的两个峰无论如何分辨不开；环带取 3–6 px，
+/// 正好把星点排除在外、只量它周围的星云。
+const _nebulaPeakSeparation = 4.0;
+const _nebulaPeakInnerRadius = 3;
+const _nebulaPeakOuterRadius = 6;
+const _nebulaPeakClusterRadius = 3.0;
+const _nebulaPeakSigma = 5.0;
+
+/// 「像点源」那一条的尺度：往外走几步、要掉多少、几个方向算数。
+///
+/// 走得够远（5 px 超过一个 PSF），才穿得过饱和星那一片削平的核心。掉幅取
+/// 「4σ 和自身反差的 [_nebulaFalloffFraction] 里较大的那个」：σ 那条管噪声，
+/// 反差那条管「这一下到底算不算真的掉下来」——合成图噪声接近零时前者会失效。
+const _nebulaFalloffRadius = 5;
+const _nebulaFalloffSigma = 4.0;
+const _nebulaFalloffFraction = 0.25;
+const _nebulaFalloffDirections = 7;
+
 class _ClassifiedField {
   _ClassifiedField(this.stars, this.trails, this.regions, this.solverExtras);
 
@@ -1073,7 +1427,16 @@ const _solverMinThinness = 2.0;
 /// 略拉长但有明确核心的亮源正好落在这两套判据的缝里：它形态上是拖线，本质
 /// 上多半是一颗恒星。所以它**同时**进 trails（展示上照旧当拉线候选，用户
 /// 能看、能剔）和 solverExtras（解算时当点源用）。
-_ClassifiedField _classify(List<_Component> components) {
+/// 还有第三种情况，比上面那种更常见：**几颗星在阈值处连成了一块**。这块既不是
+/// 圆点（轴比过线）也不是细线（粗得多），旧代码把它当非星空掩膜掉，于是两颗
+/// 星一起消失。它必须被**拆开**，见 [_splitAtPeaks]。
+_ClassifiedField _classify(
+  List<_Component> components,
+  Float32List gray,
+  int width,
+  int height,
+  _BackgroundGrid grid,
+) {
   final stars = <_Component>[];
   final trails = <_Component>[];
   final regions = <MaskRegion>[];
@@ -1084,7 +1447,12 @@ _ClassifiedField _classify(List<_Component> components) {
 
     // 尺度远超星点：月亮、路灯、被照亮的建筑，以及表格、栏杆这类
     // 横跨大半个画面的长结构。
+    //
+    // 但**星云也落在这里**（辉光在小尺度上有结构，就会整片越过阈值连成一大块），
+    // 而压在星云上的星会被这块一起吞掉。所以先试着把里面嵌着的星捞出来，再按非
+    // 星空处理剩下的部分——捞不捞得着都不影响这一块自己的归类。
     if (component.area > 400 || component.spread > 64) {
+      stars.addAll(_starsInsideNebula(component, gray, width, height, grid));
       regions.add(_regionOf(component, _kindOf(component)));
       continue;
     }
@@ -1123,6 +1491,26 @@ _ClassifiedField _classify(List<_Component> components) {
         solverExtras.add(component);
       }
       continue;
+    }
+
+    // 不够圆、但有明确核心、而且不是细笔画：这是几颗星在阈值处粘成的一块。
+    //
+    // 既不拆也不收（旧行为）是把它们一起当非星空掩膜掉，两颗星一起消失；只收不拆
+    // 则是把圆圈画在它们中间，位置仍然是错的。所以先拆，拆不动再按老规矩处理。
+    // 细笔画（文字、电缆）不拆：它们的短边只有几个像素，拆出来的碎片不成星。
+    if (hasCore && component.thinness >= _mergeMinimumThickness) {
+      final parts = _splitAtPeaks(component, gray, width, height, grid);
+      final usable = [
+        for (final part in parts)
+          if (part.area >= 3 &&
+              part.axisRatio < 2.2 &&
+              (part.peakRatio >= 1.35 || part.concentration >= 0.30))
+            part,
+      ];
+      if (usable.length >= 2) {
+        stars.addAll(usable);
+        continue;
+      }
     }
 
     regions.add(_regionOf(component, _kindOf(component)));

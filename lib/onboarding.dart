@@ -16,8 +16,11 @@ import 'theme.dart';
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key, required this.onDone, this.isReplay = false});
 
-  /// 结束引导。首次启动时调用方负责关掉本页并写下「看过了」的标记。
-  final VoidCallback onDone;
+  /// 结束引导，并把用户在最后一页选的语言交回去。
+  ///
+  /// 语言要跟着这个回调走，而不是在页内直接落盘：写存储是调用方的事（它还负责
+  /// 写「看过了」那面旗子），两件事写在一处，中途退出才不会留下半个状态。
+  final ValueChanged<AppLanguage> onDone;
 
   /// 重播模式：显示返回键，不再写引导标记。
   final bool isReplay;
@@ -27,13 +30,17 @@ class OnboardingPage extends StatefulWidget {
 }
 
 class _OnboardingPageState extends State<OnboardingPage> {
-  static const _pageCount = 4;
+  static const _pageCount = 5;
   static const _pageDuration = Duration(milliseconds: 360);
 
   final _controller = PageController();
   int _index = 0;
 
   bool get _isLast => _index == _pageCount - 1;
+
+  /// 用户在最后一页选的语言。跟着页面走而不是直接写进全局：滑走了再滑回来
+  /// 要看到他刚才选的那个，而不是又跳回默认值。
+  late AppLanguage _language = appLanguage.value;
 
   @override
   void dispose() {
@@ -43,7 +50,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
   void _next() {
     if (_isLast) {
-      widget.onDone();
+      widget.onDone(_language);
       return;
     }
     _controller.nextPage(duration: _pageDuration, curve: Curves.easeOutCubic);
@@ -64,7 +71,10 @@ class _OnboardingPageState extends State<OnboardingPage> {
           automaticallyImplyLeading: widget.isReplay,
           actions: [
             if (!widget.isReplay)
-              TextButton(onPressed: widget.onDone, child: Text(t('跳过'))),
+              TextButton(
+                onPressed: () => widget.onDone(_language),
+                child: Text(t('跳过')),
+              ),
           ],
         ),
         body: SafeArea(
@@ -82,6 +92,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                         _slide(1, _localSlide()),
                         _slide(2, _resultSlide()),
                         _slide(3, _keepSlide()),
+                        _slide(4, _languageSlide()),
                       ],
                     ),
                   ),
@@ -96,7 +107,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       child: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 200),
                         child: Text(
-                          _isLast ? t('开始探索') : t('下一步'),
+                          _isLast ? t('确认并进入') : t('下一步'),
                           key: ValueKey<bool>(_isLast),
                         ),
                       ),
@@ -160,6 +171,31 @@ class _OnboardingPageState extends State<OnboardingPage> {
         _Lead(t('原图不动，只存预览')),
         const SizedBox(height: 18),
         _Chips([t('一键保存'), t('书架回看'), t('随时删除')]),
+      ]);
+
+  /// 最后一页：选语言。
+  ///
+  /// 放在最后而不是最前，是因为这一页的按钮就是「确认并进入主页」——用户翻完
+  /// 四页知道这是个什么应用了，再决定用什么语言读它，比一进来先面对一个语言
+  /// 列表更顺。选中的那一刻整页立刻换成那门语言，这是最直观的确认方式：不用
+  /// 描述「切过去会怎样」，直接给他看。
+  Widget _languageSlide() => _pageShell([
+        _Hero(
+          asset: 'assets/brand/astrosophy_onboarding_language.png',
+          label: t('一个地球和两个对话气泡'),
+        ),
+        const SizedBox(height: 18),
+        _Headline(t('选一门语言')),
+        _Lead(t('随时能在右上角换回来')),
+        const SizedBox(height: 18),
+        _LanguageChoices(
+          value: _language,
+          onChanged: (language) {
+            setState(() => _language = language);
+            // 立刻生效：这一页自己的文案跟着换，用户当场看到效果。
+            appLanguage.value = language;
+          },
+        ),
       ]);
 
   // -- 组件 --
@@ -295,6 +331,94 @@ class _Chips extends StatelessWidget {
         runSpacing: 8,
         children: [for (final item in items) _Pill(item)],
       );
+}
+
+/// 语言选择：两个并排的卡片，各自用**这门语言自己的写法**称呼自己。
+///
+/// 不用下拉菜单：一共两门（以后也不会多到几十门），两个选项摊开来比藏在菜单里
+/// 少一次点击，而且「简体中文 / English」并排摆着，用户扫一眼就知道该点哪个。
+class _LanguageChoices extends StatelessWidget {
+  const _LanguageChoices({required this.value, required this.onChanged});
+
+  final AppLanguage value;
+  final ValueChanged<AppLanguage> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          for (final language in AppLanguage.values) ...[
+            Expanded(
+              child: _LanguageCard(
+                language: language,
+                selected: language == value,
+                onTap: () => onChanged(language),
+              ),
+            ),
+            if (language != AppLanguage.values.last) const SizedBox(width: 12),
+          ],
+        ],
+      );
+}
+
+class _LanguageCard extends StatelessWidget {
+  const _LanguageCard({
+    required this.language,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final AppLanguage language;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final border = selected ? kMint : const Color(0xFF33455F);
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected ? kMint.withValues(alpha: 0.12) : Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+            decoration: BoxDecoration(
+              border: Border.all(color: border, width: selected ? 2 : 1),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 18,
+                  color: selected ? kMint : const Color(0xFF5C7089),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    language.nativeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: selected ? kMint : const Color(0xFFC3D0E0),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Pill extends StatelessWidget {
