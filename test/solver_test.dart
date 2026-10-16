@@ -502,6 +502,94 @@ void main() {
     test('没有 WCS 就无从投影，原样返回', () {
       expect(solver.decorateSolve(SolveResult.empty), same(SolveResult.empty));
     });
+
+    test('在线名单漏掉画面里最大的天体时，内置目录把它补回来', () {
+      // 这条测试必须用一个接了内置深空目录的解算器：`solver` 那个没接
+      // （`PlateSolver(catalog)`），而这件事整条都发生在目录那一侧。
+      final deep = PlateSolver(catalog, deepSky: loadTestDeepSky());
+      // M33（NGC 598）。这个天区的真实情况：用户拍的那张在线解算回来了，
+      // 名单里有一堆小星云，唯独没有 M33——SIMBAD 的返回顺序按主名排，和
+      //「哪个醒目」无关，30 条上限先塞满了小目标。而内置目录里明明有 M33，
+      // 还带着角尺寸和星等。
+      const m33Ra = 23.4621;
+      const m33Dec = 30.6602;
+      final wcs = Wcs.fromPixels(
+        width: 1200,
+        height: 900,
+        centerRa: m33Ra,
+        centerDec: m33Dec,
+        degreesPerPixel: 0.004,
+      );
+      // 只给一个紧挨 M33 的小星云，模拟「SIMBAD 名单里没有 M33」。
+      final online = SolveResult(
+        centerRa: wcs.imageCenter.$1,
+        centerDec: wcs.imageCenter.$2,
+        arcsecPerPixel: wcs.arcsecPerPixel,
+        namedStars: const [],
+        deepSkyObjects: [
+          const SkyObject(
+            'PN Gxxx',
+            m33Ra + 0.02,
+            m33Dec + 0.01,
+            '行星状星云',
+            x: 1200 * 0.7,
+            y: 900 * 0.6,
+          ),
+        ],
+        matchedStars: const [],
+        magnitudeZeroPoint: null,
+        magnitudeScatter: null,
+        catalogWarning: null,
+        fieldOfViewDegrees: wcs.fieldOfViewDegrees,
+        wcs: wcs,
+        source: SolveSource.online,
+      );
+
+      final decorated = deep.decorateSolve(online);
+      final names = [for (final object in decorated.deepSkyObjects) object.name];
+      expect(names, contains('M 33'),
+          reason: '内置目录里有 M33（NGC 598），它在视场正中，不该掉出名单');
+      // 补进来的那个要带着角尺寸，否则图上画不出大小、报告里只能写「尺寸未知」。
+      final m33 = decorated.deepSkyObjects.firstWhere((o) => o.name == 'M 33');
+      expect(m33.angularSizeArcmin, isNotNull);
+      expect(m33.magnitude, isNotNull);
+      // SIMBAD 独有的那个不能被顶掉：内置目录不收行星状星云。
+      expect(names, contains('PN Gxxx'));
+    });
+
+    test('两条路的深空名单一致，只是在线多出 SIMBAD 独有的条目', () {
+      final deep = PlateSolver(catalog, deepSky: loadTestDeepSky());
+      final analysis = synthesiseField(
+        catalog: catalog,
+        centerRa: _orionRa,
+        centerDec: _orionDec,
+        degreesPerPixel: 0.008,
+      );
+      final local = deep.solve(analysis);
+      expect(local, isNotNull);
+
+      // 同一个 WCS 走在线那条路（名单先由内置目录定）。
+      final online = SolveResult(
+        centerRa: local!.centerRa,
+        centerDec: local.centerDec,
+        arcsecPerPixel: local.arcsecPerPixel,
+        namedStars: const [],
+        deepSkyObjects: const [],
+        matchedStars: const [],
+        magnitudeZeroPoint: null,
+        magnitudeScatter: null,
+        catalogWarning: null,
+        fieldOfViewDegrees: local.fieldOfViewDegrees,
+        wcs: local.wcs,
+        source: SolveSource.online,
+      );
+
+      expect(
+        [for (final object in deep.decorateSolve(online).deepSkyObjects)
+          object.name],
+        [for (final object in local.deepSkyObjects) object.name],
+      );
+    });
   });
 }
 

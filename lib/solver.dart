@@ -1146,7 +1146,7 @@ class PlateSolver {
       centerDec: centreDec,
       arcsecPerPixel: wcs.arcsecPerPixel,
       namedStars: named,
-      deepSkyObjects: _deepSkyObjects(wcs, analysis, centreRa, centreDec, radius),
+      deepSkyObjects: _localDeepSky(wcs, centreRa, centreDec, radius),
       matchedStars: [
         for (final inlier in fit.inliers)
           GaiaMatch(
@@ -1183,9 +1183,17 @@ class PlateSolver {
   ///
   /// 为什么还留着「够大才算」这个条件：如果按圆圈算而不加门槛，广角照片里
   /// 会有几十个只有边缘擦过去的暗星系挤进来，把真正主体淹掉。
-  List<SkyObject> _deepSkyObjects(
+  /// 内置目录里落进画面的深空天体，大的排在前面。
+  ///
+  /// **本机和在线两条路都调它**，这是刻意的：一份「画面里有哪些深空天体」的名单
+  /// 不应该取决于这一次是哪种解算方式。放在线那条路原先不查内置目录，名单完全由
+  /// SIMBAD 给，于是同一个天区换一种解算方式会得到两份不同的名单——用户拍 M33 的
+  /// 那张，在线时名单里没有 M33，而旁边的小星云在，就是因为这个。
+  ///
+  /// 像素坐标用 [Wcs.width]/[Wcs.height] 判边界：这两个值就是建 WCS 时那份图像的
+  /// 尺寸（见 `_buildWcs`），所以本机路上在线解算拿回来的 WCS 用同一套判据都成立。
+  List<SkyObject> _localDeepSky(
     Wcs wcs,
-    SkyAnalysis analysis,
     double centreRa,
     double centreDec,
     double radius,
@@ -1200,14 +1208,15 @@ class PlateSolver {
         y: y,
         sizeArcmin: object.angularSizeArcmin,
         arcsecPerPixel: wcs.arcsecPerPixel,
-        width: analysis.width,
-        height: analysis.height,
+        width: wcs.width,
+        height: wcs.height,
       )) {
         continue;
       }
       objects.add(object.toSkyObject(x, y));
-      // 和在线路径同一个上限。广角照片里两三千条目录天体能有一两百个落进
-      // 画面，全标出来会把星点、星座线一起淹掉。
+      // 广角照片里两三千条目录天体能有一两百个落进画面，全标出来会把星点、
+      // 星座线一起淹掉。[catalog.near] 已经按角尺寸从大到小排好，所以先丢掉的
+      // 是小的那些——留下的是画面里最显眼的东西。
       if (objects.length >= _maxDeepSkyObjects) break;
     }
     return objects;
@@ -1528,11 +1537,30 @@ class PlateSolver {
   List<SkyObject> _sizedDeepSky(SolveResult result) {
     final catalog = deepSky;
     final wcs = result.wcs;
-    if (catalog == null || result.deepSkyObjects.isEmpty || wcs == null) {
-      return result.deepSkyObjects;
-    }
-    final kept = <SkyObject>[];
+    if (catalog == null || wcs == null) return result.deepSkyObjects;
+    final (centreRa, centreDec) = wcs.imageCenter;
+    final radius = math.max(wcs.fieldOfViewDegrees / 2 + 0.3, 0.05);
+
+    // 先摆内置目录里落进画面的那些，大的在前。
+    //
+    // 顺序是有意的，也是这次改动的要点。在线那条路的天体名单原先**完全**由
+    // SIMBAD 决定（内置目录只用来补角尺寸），而 SIMBAD 的返回顺序跟着主名走，
+    // 和「哪个醒目」没有半点关系——[_maxDeepSkyObjects] 条的上限先被一批小星云
+    // 占满时，画面里最大的那个天体就掉了。用户拍 M33 的那张就是这么丢的：旁边
+    // 的小星云进了名单，M33 没有，而内置目录里明明有它（`M 33`，带角尺寸和星等）。
+    // 内置目录对「这片天区有哪些 NGC/IC/Messier 天体」是完整的，所以名单先由它
+    // 来定；SIMBAD 独有的那些补在后面，不会因此消失。
+    final kept = _localDeepSky(wcs, centreRa, centreDec, radius);
+
+    // 再把 SIMBAD 有、内置目录没有的补上——行星状星云、暗星云这类内置目录不收的
+    // 目标，全丢会显得这份名单漏了东西。它们没有角尺寸（SIMBAD 不给），按位置去
+    // 内置目录找得到就补，找不到就空着：宁可写「尺寸未知」，也不编一个数出来。
     for (final object in result.deepSkyObjects) {
+      if (kept.length >= _maxDeepSkyObjects) break;
+      if (kept.any((known) => _isSameObject(
+          known.ra, known.dec, object.ra, object.dec))) {
+        continue;
+      }
       final size = object.angularSizeArcmin ??
           catalog.angularSizeNear(object.ra, object.dec);
       if (!_reachesFrame(
@@ -1553,6 +1581,19 @@ class PlateSolver {
     }
     return kept;
   }
+
+  /// 两条路说的是不是同一个天体。
+  ///
+  /// 按位置比，不按名字：同一个目标在 SIMBAD 里叫 `NGC  598`、在内置目录里叫
+  /// `M 33`，名字对不上，位置却精确到角秒。容差取 1 角分——比这更远的就是两个
+  /// 不同的天体了（那个距离上不会有第二个 NGC 目标）。
+  static bool _isSameObject(
+    double ra,
+    double dec,
+    double otherRa,
+    double otherDec,
+  ) =>
+      angularSeparationDegrees(ra, dec, otherRa, otherDec) <= 1.0 / 60.0;
 
   static SkyObject _withAngularSize(SkyObject object, double? size) =>
       SkyObject(

@@ -247,9 +247,15 @@ void main() {
       );
 
       final decorated = solver.decorateSolve(online);
-      expect(decorated.deepSkyObjects.first.angularSizeArcmin,
-          closeTo(8.0, 0.1));
-      expect(decorated.deepSkyObjects.last.angularSizeArcmin, isNull);
+      // 按名字取，不按次序取：名单里现在还包含内置目录里落进视场的其他天体
+      // （见 `_localDeepSky`），次序不再等于「SIMBAD 给的顺序」。
+      final byName = {
+        for (final object in decorated.deepSkyObjects) object.name: object,
+      };
+      // SIMBAD 给的那个在有内置目录的天区里查得到，角尺寸补上了。
+      expect(byName['M 78']!.angularSizeArcmin, closeTo(8.0, 0.1));
+      // 南天极那个查不到，原样留空——宁可写「尺寸未知」，也不编一个数出来。
+      expect(byName['某暗云']!.angularSizeArcmin, isNull);
     });
   });
 }
