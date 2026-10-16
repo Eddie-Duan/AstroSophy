@@ -161,7 +161,7 @@ p ≈ 图内星点数 × π × 3² / 像面面积        期望假解数 ≈ C(�
 2. 运行 `flutter doctor`，接受 Android SDK licenses，并准备 Android 模拟器或开启 USB 调试的实体设备。
 3. 在仓库根目录运行 `flutter pub get` 和 `flutter run`，或双击 `START.bat`。
 4. 运行 `flutter test` 和 `flutter analyze` 执行项目验证；仓库的 GitHub Actions 会在每次推送时跑这两步、构建 debug APK，并把 APK 作为产物上传，保留 30 天。
-5. 构建产物名由 `android/app/build.gradle.kts` 里的 Variant API 定：release 是 `AstroSophy.apk`，debug 是 `AstroSophy-debug.apk`，按 ABI 分包时带上 ABI 名（`AstroSophy-arm64-v8a.apk`）。两个脚本都会把产物落到这个名字上——名字写死在某个 workflow 里，改一次就得记得改全部地方。
+5. release APK 在构建之后由脚本改名成 `AstroSophy.apk`（`BUILD_APK.bat` 与 `release.yml` 各改一次），而不是去改 Gradle 的产物名。**这是量过成本之后的决定**：AGP 8 里能改产物名的入口要么已经废弃（`archivesBaseName`），要么根本不存在（`variant.artifacts.get(SingleArtifact.APK)` 返回的是只读的 `Provider<Directory>`），而改名这件事本身在脚本里就是一次 `move`。代价是多一个约定：`app-release.apk` 这个名字还可能从 `flutter build apk` 直接跑出来，脚本负责兜住。
 6. 仓库中的 release APK 使用本机 Android debug keystore 签名，仅供个人设备安装；若有合法许可并另作分发，须按 Flutter Android 文档配置正式签名凭据。不要把 keystore 或密钥提交到 Git。
 
 ## 数据来源与致谢

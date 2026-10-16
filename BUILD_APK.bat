@@ -19,10 +19,10 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-rem The output name comes from android\app\build.gradle.kts (AstroSophy.apk).
-rem This is a second net: if the Gradle plugin ever names it app-release.apk
-rem again, the script still hands over the agreed name instead of something
-rem that quietly changes between versions.
+rem The product is handed over as AstroSophy.apk. `flutter build apk` names it
+rem app-release.apk and there is no supported way to change that from Gradle
+rem (AGP 8 dropped archivesBaseName, and the variant API only exposes a
+rem read-only Provider<Directory> for the APK), so the rename happens here.
 set "APK=build\app\outputs\flutter-apk\AstroSophy.apk"
 if not exist "%APK%" if exist "build\app\outputs\flutter-apk\app-release.apk" (
     move /y "build\app\outputs\flutter-apk\app-release.apk" "%APK%" >nul
