@@ -24,13 +24,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze
-      # 顺手把条数留下：徽章那边要用，见下面的 badge job。
-      - name: Test
-        id: test
-        run: |
-          set -o pipefail
-          flutter test 2>&1 | tee flutter-test.log
-          echo "count=$(grep -oE '\+[0-9]+' flutter-test.log | tail -n1 | tr -d '+')" >> "$GITHUB_OUTPUT"
+      - run: flutter test
       - run: flutter build apk --debug
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -39,39 +33,3 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 30
-    outputs:
-      tests: ${{ steps.test.outputs.count }}
-
-  # README 里「tests 407 passed」那条不是静态图片，它读一份 JSON；这一步把每次
-  # 跑出来的条数写成 JSON、推到 badges 分支，徽章就有东西可读，不会停在某个
-  # 人去手改的数字上。
-  #
-  # 单独一个 job 是为了权限最小：构建那只读代码，只有这里需要 write。
-  # 徽章是装饰，推不上去也不该把整条流水线染红，所以失败只记一条警告。
-  badge:
-    needs: android
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Publish the test count
-        continue-on-error: true
-        env:
-          COUNT: ${{ needs.android.outputs.tests }}
-        run: |
-          set -euo pipefail
-          if [ -z "$COUNT" ]; then
-            echo "::warning::没从测试输出里读到条数，跳过徽章"
-            exit 0
-          fi
-          git checkout --orphan badges
-          git rm -r --cached . > /dev/null
-          printf '{"schemaVersion":1,"label":"tests","message":"%s passed","color":"brightgreen"}\n' \
-            "$COUNT" > tests.json
-          git add -f tests.json
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: tests badge ${COUNT} passed"
-          git push -f origin HEAD:badges

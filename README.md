@@ -7,8 +7,6 @@
 **把手机拍的星空照片交给它，本机算出你拍到了哪片天。**
 
 [![版本](https://img.shields.io/github/v/tag/Eddie-Duan/AstroSophy?label=version&style=flat-square&color=e8763a)](https://github.com/Eddie-Duan/AstroSophy/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/Eddie-Duan/AstroSophy/flutter-ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Eddie-Duan/AstroSophy/actions/workflows/flutter-ci.yml)
-[![测试条数](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FEddie-Duan%2FAstroSophy%2Fbadges%2Ftests.json&style=flat-square)](https://github.com/Eddie-Duan/AstroSophy/actions/workflows/flutter-ci.yml)
 ![平台](https://img.shields.io/badge/platform-Android-3ddc84?style=flat-square&logo=android&logoColor=white)
 [![许可](https://img.shields.io/badge/license-non--commercial%20learning%20%26%20research-blue?style=flat-square)](./LICENSE)
 
