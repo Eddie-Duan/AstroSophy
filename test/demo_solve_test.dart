@@ -132,5 +132,19 @@ void main() {
     // 三张演示图出自同一台相机，解出来的像素尺度也该一致——这条同时守住
     // 深层层参与解算时没把尺度算歪。
     expect(solve.arcsecPerPixel, closeTo(10.68, 0.3));
+    // 这片天区就是 NGC 584 星系群：用户实报过图上没标出这几颗小星系。
+    expect(
+      solve.deepSkyObjects.map((object) => object.name),
+      containsAll([
+        'NGC 577',
+        'NGC 580',
+        'NGC 558',
+        'NGC 557',
+        'IC 124',
+        'IC 119',
+        'IC 117',
+        'IC 1703',
+      ]),
+    );
   }, timeout: const Timeout(Duration(minutes: 5)));
 }

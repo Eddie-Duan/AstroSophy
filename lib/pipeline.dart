@@ -85,6 +85,7 @@ class PipelineOutcome {
     required this.explanation,
     required this.warnings,
     this.moonOnly = false,
+    this.solveDuration,
   });
 
   final SkyAnalysis analysis;
@@ -102,6 +103,11 @@ class PipelineOutcome {
   /// 这一次**没有**做解算，也没有上传照片。界面要据此把话说明白，而不是
   /// 让用户以为「解算失败了」。
   final bool moonOnly;
+
+  /// 解算这一步实际花了多久（本机 + 在线回退，不含星点分析和 AI 解读）。
+  ///
+  /// 只给结果页的参数表用；解算没跑（例如只报告月亮）时为 null。
+  final Duration? solveDuration;
 }
 
 /// 本地链路与在线回退的编排。
@@ -234,6 +240,7 @@ class SkyPipeline {
     }
 
     var index = 1;
+    final solveWatch = Stopwatch()..start();
     SolveResult? solve;
     String? onlineError;
     SolveTrace? localTrace;
@@ -317,6 +324,8 @@ class SkyPipeline {
       }
     }
 
+    solveWatch.stop();
+
     String? explanation;
     final settings = modelSettings;
     if (settings != null && settings.hasAnyModel) {
@@ -359,6 +368,7 @@ class SkyPipeline {
       explanation: explanation,
       warnings: warnings,
       moonOnly: moonOnly,
+      solveDuration: solve == null ? null : solveWatch.elapsed,
     );
   }
 

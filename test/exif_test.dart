@@ -84,6 +84,14 @@ Uint8List _tiff({
         final bytes = [...value.codeUnits, 0]; // EXIF 的 ASCII 含结尾 NUL。
         type = 2;
         count = bytes.length;
+        // 规范要求不超过 4 字节的值直接塞进条目里。短厂商名（`ZWO`）正好
+        // 走这条路——写成偏移的话，读回来的会是偏移量本身。
+        if (bytes.length <= 4) {
+          return raw16(tag) +
+              raw16(type) +
+              raw32(count) +
+              [...bytes, ...List.filled(4 - bytes.length, 0)];
+        }
         slot = store(bytes);
       case List<double>():
         final bytes = <int>[];
@@ -243,6 +251,53 @@ void main() {
       expect(moment.utc, DateTime.utc(2026, 10, 15, 13, 34, 7));
     });
 
+    test('相机型号、光圈、快门、ISO、焦距都读出来', () {
+      final moment = readCaptureMoment(
+        _jpeg(_tiff(
+          ifd0: {0x010F: 'ZWO', 0x0110: 'Seestar S30 Pro'},
+          exif: {
+            0x9003: original,
+            0x8827: 200,
+            0x829A: <double>[380],
+            0x829D: <double>[5],
+            0x920A: <double>[160],
+          },
+        )),
+      );
+      expect(moment, isNotNull);
+      expect(moment!.device, 'ZWO Seestar S30 Pro');
+      expect(moment.iso, '200');
+      expect(moment.exposure, '380s');
+      expect(moment.fNumber, 'f/5');
+      expect(moment.focalLength, '160.0mm');
+    });
+
+    test('型号已经带厂商时不再重复拼一次', () {
+      final moment = readCaptureMoment(
+        _jpeg(_tiff(ifd0: {
+          0x010F: 'Canon',
+          0x0110: 'Canon EOS R5',
+        }, exif: {0x9003: original})),
+      );
+      expect(moment!.device, 'Canon EOS R5');
+    });
+
+    test('亚秒快门写成 1/N', () {
+      final moment = readCaptureMoment(
+        _jpeg(_tiff(exif: {0x9003: original, 0x829A: <double>[0.004]})),
+      );
+      expect(moment!.exposure, '1/250s');
+    });
+
+    test('没有拍摄时间时仍然不返回一个只有相机的对象', () {
+      // 时间缺席时这条读取路径没有可用的「时刻」，相机信息也就没地方挂。
+      // 这是现有契约：报告那张表靠拍摄时间这张卡进入，不单独造一个假时刻。
+      expect(
+        readCaptureMoment(_jpeg(_tiff(ifd0: {0x0110: 'Seestar S30 Pro'}))),
+        isNull,
+      );
+    });
+
     test('TIFF 系容器（.tif / DNG / RAW）同样能读', () {
       // 这些格式本身就是 TIFF，没有 JPEG 那层壳。
       final moment = readCaptureMoment(_tiff(exif: {0x9003: original}));
@@ -276,13 +331,28 @@ void main() {
   group('CaptureMoment 与档案之间', () {
     test('存进去再读出来，时间、时区、来源都在', () {
       final moment = readCaptureMoment(
-        _jpeg(_tiff(exif: {0x9003: original, 0x9011: '+08:00'})),
+        _jpeg(_tiff(
+          ifd0: {0x0110: 'Seestar S30 Pro'},
+          exif: {
+            0x9003: original,
+            0x9011: '+08:00',
+            0x8827: 200,
+            0x829A: <double>[380],
+            0x829D: <double>[5],
+            0x920A: <double>[160],
+          },
+        )),
       )!;
       final restored = captureMomentFromMetadata(moment.toMetadata())!;
       expect(restored.local, moment.local);
       expect(restored.offset, moment.offset);
       expect(restored.source, moment.source);
       expect(restored.isManual, isFalse);
+      expect(restored.device, 'Seestar S30 Pro');
+      expect(restored.iso, '200');
+      expect(restored.exposure, '380s');
+      expect(restored.fNumber, 'f/5');
+      expect(restored.focalLength, '160.0mm');
     });
 
     test('时区未知就存成未知，不补一个默认值', () {

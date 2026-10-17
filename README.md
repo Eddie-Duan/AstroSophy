@@ -75,7 +75,7 @@ flutter run
 - **[Astrometry.net](https://astrometry.net/)** —— 可选的在线解算服务（`nova.astrometry.net`），仅在用户授权后使用。
 - **[ESA Gaia 归档](https://gea.esac.esa.int/archive/)** —— Gaia DR3 TAP 查询，提供解算视场内的恒星位置与 G 星等。
 - **[SIMBAD](https://simbad.cds.unistra.fr/)** —— 星名与深空天体目录查询。
-- **[NGC 2000.0](https://cdsarc.cds.unistra.fr/viz-bin/cat/VII/118)（Sky Catalogue 2000.0 的 NGC/IC 部分，VII/118）** —— 内置深空目录（Messier 110 加亮 NGC/IC 成员）的名称、类型、角尺寸与视星等。**深空天体的中文常用名**（蟹状星云、马头星云、东面纱星云…）是手写的一张短表（[`lib/deepsky_names.dart`](./lib/deepsky_names.dart)），只收最常被提到的那批目标，取中文天文普及读物里的通行译法；没收录的只显示编号，不硬译。**小行星、矮行星和彗星的中文名**同理，取通行的中文译名（灶神星、共工星、紫金山彗星…），彗星里没有通用译名的就用 MPC 的正式编号——每年新发现的几十颗都还没有译名，硬凑一个反而让人对不上号。
+- **[NGC 2000.0](https://cdsarc.cds.unistra.fr/viz-bin/cat/VII/118)（Sky Catalogue 2000.0 的 NGC/IC 部分，VII/118）** —— 内置深空目录，收全部**有类型**的 NGC/IC 条目（约一万条），提供名称、类型、角尺寸与视星等。**深空天体的中文常用名**（蟹状星云、马头星云、东面纱星云…）是手写的一张短表（[`lib/deepsky_names.dart`](./lib/deepsky_names.dart)），只收最常被提到的那批目标，取中文天文普及读物里的通行译法；没收录的只显示编号，不硬译。**小行星、矮行星和彗星的中文名**同理，取通行的中文译名（灶神星、共工星、紫金山彗星…），彗星里没有通用译名的就用 MPC 的正式编号——每年新发现的几十颗都还没有译名，硬凑一个反而让人对不上号。
 - **[Jean Meeus《Astronomical Algorithms》](https://www.willbell.com/math/mc1.htm)** —— 月相算式（第 47 章 47.2/47.3/47.4 三个基本角、第 48 章 48.4 的相位角与 48.1 的亮面占比），实现见 [`lib/moon.dart`](./lib/moon.dart)。不用它算别的：解算与行星位置走的是 JPL 的近似根数，见 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)。
 - **[JPL 小行星星历服务（SBDB API）](https://ssd-api.jpl.nasa.gov/doc/sbdb.html)** —— 16 颗亮小行星与 10 颗矮行星的轨道根数、历元、绝对星等 H、斜率 G 和直径。**拍不到的那几颗也收**。
 - **[JPL Horizons](https://ssd.jpl.nasa.gov/horizons/)** —— 开发期用来核对两体传播的精度（模型本身好于 1 角分，漂移全靠内置表变旧）。

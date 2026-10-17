@@ -59,23 +59,43 @@ void main() {
       expect(find('NGC 6960')!.magnitude, isNull);
     });
 
-    test('星云和星团这一类不看星等，其余照旧', () {
+    test('灶神星那片天区的 NGC 584 星系群成员都在', () {
+      // 用户实报：照片里明明有这些星系，图上和报告里一个都没有。原因是
+      // NGC 2000.0 里它们要么没有星等、要么长轴不到 1′，被筛选规则滤掉了。
+      // 交叉编号（NGC 580、IC 117、IC 1703）也各留一条，按哪个名字找都行。
+      for (final name in [
+        'NGC 577',
+        'NGC 580',
+        'NGC 558',
+        'NGC 557',
+        'IC 124',
+        'IC 119',
+        'IC 117',
+        'IC 1703',
+      ]) {
+        expect(find(name), isNotNull, reason: '$name 不在内置深空目录里');
+      }
+      expect(find('NGC 577')!.typeCode, 'Gx');
+      expect(find('NGC 577')!.angularSizeArcmin, closeTo(1.6, 0.1));
+      // IC 124 在 SIMBAD 里是一颗恒星；类型照实写「存疑」，不硬编成星系。
+      expect(find('IC 124')!.typeCode, '?');
+    });
+
+    test('有类型的条目全收，没类型的不收', () {
       var nebulae = 0;
+      var galaxies = 0;
       for (final row in rows) {
         final type = (row[3] as String?) ?? '';
         if (const {'Nb', 'Pl', 'C+N', 'Kt', 'SNR'}.contains(type)) nebulae++;
+        if (type == 'Gx') galaxies++;
+        // 目录里每一条都必须有可报的类型。空的、`-`、`*` 在生成时就被丢了。
+        expect(type, isNotEmpty, reason: '${row[0]} 没有类型');
+        expect(type, isNot('-'));
+        expect(type, isNot('*'));
       }
-      // 按星等筛的时候只剩 59 个。这条线定在 400 上：掉回去就是筛选规则被改回
-      // 去了，而那种改动不会让任何别的测试变红。
-      expect(nebulae, greaterThan(400), reason: '星云类又被星等筛掉了');
-
-      // 星系仍然按星等筛：全收进来是一万两千多条，会把画面糊满。
-      var galaxies = 0;
-      for (final row in rows) {
-        if (row[3] == 'Gx') galaxies++;
-      }
-      expect(galaxies, lessThan(2200));
-      expect(galaxies, greaterThan(1000));
+      expect(nebulae, greaterThan(400));
+      // 星系不再按星等/尺寸裁：NGC 2000.0 里能认出类型的星系几乎全在。
+      expect(galaxies, greaterThan(8000));
     });
 
     test('Messier 一个都没少', () {

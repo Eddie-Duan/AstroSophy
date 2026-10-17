@@ -24,22 +24,11 @@ void main() {
         expect(object.name, isNotEmpty);
         expect(object.ra, inInclusiveRange(0, 360));
         expect(object.dec, inInclusiveRange(-90, 90));
-        // 星等和角尺寸**可以不填**，但只有一类允许不填。
-        //
-        // 这条以前是「每条都必须有星等和角尺寸」，而那个假设本身就是面纱星云
-        // 被漏掉的原因：NGC 2000.0 有 41% 的条目没有星等，而「又大又弥漫」正是
-        // 最容易没有星等的那一类。星云和星团这几类现在不看星等收进来，所以它
-        // 们中间出现空值是**设计**，不是数据坏了——但它必须只发生在这些类型上，
-        // 否则就是筛选规则被改坏了。
-        const unmagnituded = {'Nb', 'Pl', 'C+N', 'Kt', 'SNR', 'OC', 'Gb', 'Ast'};
-        if (object.magnitude == null || object.angularSizeArcmin == null) {
-          expect(
-            unmagnituded.contains(object.typeCode),
-            isTrue,
-            reason: '${object.name}（${object.typeCode}）缺星等或角尺寸，'
-                '而这个类型不该缺',
-          );
-        }
+        // 星等和角尺寸**可以**不填：目录现在收全部有类型的条目，而
+        // NGC 2000.0 本来就有四成条目没有星等。类型本身不能空——那才是
+        // 收进目录的门槛（空的、`-`、`*` 都在生成时被丢掉了）。
+        expect(object.typeCode, isNotEmpty,
+            reason: '${object.name} 没有类型');
       }
       // 至少要有这么多真的是带齐了两样的，否则上面那条会因为「几乎全是空值」
       // 而变得没有约束力。

@@ -12,6 +12,11 @@ class CaptureMoment {
     required this.local,
     required this.offset,
     required this.source,
+    this.device,
+    this.iso,
+    this.exposure,
+    this.fNumber,
+    this.focalLength,
   });
 
   /// 相机写下的拍摄时间。**没有时区**：EXIF 的 `DateTimeOriginal` 按规范是
@@ -24,6 +29,21 @@ class CaptureMoment {
 
   /// 时间读自哪个标签，报告里要如实写清楚。
   final CaptureTimeSource source;
+
+  /// 相机厂商 + 型号，例如 `Seestar S30 Pro`。EXIF 里没有就留空。
+  final String? device;
+
+  /// ISO 感光度，原样保留字符串（相机可能写 `200` 也可能写 `Auto`）。
+  final String? iso;
+
+  /// 快门时间，已经格式化成 `380s` / `1/250s` 这种人读的写法。
+  final String? exposure;
+
+  /// 光圈，已经格式化成 `f/5`。
+  final String? fNumber;
+
+  /// 镜头焦距，已经格式化成 `160.0mm`。
+  final String? focalLength;
 
   /// 换算成 UTC。时区未知时返回 null——不猜。差几个小时对行星位置的影响是
   /// 角分量级，但对「是不是这个天体」的判断没有影响；不过报告里得说明白。
@@ -63,6 +83,11 @@ class CaptureMoment {
         timestamp: _iso(local),
         timestampOffsetMinutes: offset?.inMinutes,
         timestampSource: source.name,
+        iso: iso,
+        exposure: exposure,
+        fNumber: fNumber,
+        focalLength: focalLength,
+        device: device,
       );
 
   static String _iso(DateTime value) {
@@ -89,6 +114,11 @@ CaptureMoment? captureMomentFromMetadata(CaptureMetadata? metadata) {
         local.minute, local.second),
     offset: minutes == null ? null : Duration(minutes: minutes),
     source: source,
+    device: metadata.device,
+    iso: metadata.iso,
+    exposure: metadata.exposure,
+    fNumber: metadata.fNumber,
+    focalLength: metadata.focalLength,
   );
 }
 
@@ -145,6 +175,13 @@ CaptureMoment? readCaptureMoment(Uint8List bytes) {
   final original = parseExifTimestamp(exifIfd[0x9003]?.ascii(reader));
   final modified = parseExifTimestamp(ifd0[0x0132]?.ascii(reader));
   final gpsUtc = _gpsTime(reader, ifd0);
+  final device = _deviceName(reader, ifd0);
+  final iso = _intTag(reader, exifIfd[0x8827])?.toString();
+  final exposure =
+      _formatExposure(_rationalTag(reader, exifIfd[0x829A]));
+  final fNumber = _formatFNumber(_rationalTag(reader, exifIfd[0x829D]));
+  final focalLength =
+      _formatFocalLength(_rationalTag(reader, exifIfd[0x920A]));
 
   final local = original ?? modified;
   if (local != null) {
@@ -158,6 +195,11 @@ CaptureMoment? readCaptureMoment(Uint8List bytes) {
       source: original != null
           ? CaptureTimeSource.dateTimeOriginal
           : CaptureTimeSource.fileModified,
+      device: device,
+      iso: iso,
+      exposure: exposure,
+      fNumber: fNumber,
+      focalLength: focalLength,
     );
   }
   // 没有拍摄时间标签，但 GPS 时间是现成的——它按规范就是 UTC。
@@ -166,6 +208,11 @@ CaptureMoment? readCaptureMoment(Uint8List bytes) {
       local: gpsUtc,
       offset: Duration.zero,
       source: CaptureTimeSource.gps,
+      device: device,
+      iso: iso,
+      exposure: exposure,
+      fNumber: fNumber,
+      focalLength: focalLength,
     );
   }
   return null;
@@ -250,6 +297,65 @@ double? _rational(_Directory reader, int offset) {
   final denominator = reader.u32(offset + 4);
   if (denominator == 0) return null;
   return numerator / denominator;
+}
+
+/// 读一条 RATIONAL 条目；条目不存在或类型不对时返回 null。
+double? _rationalTag(_Directory reader, _Entry? entry) {
+  if (entry == null || entry.type != 5 || entry.count < 1) return null;
+  return _rational(reader, entry.valueOffset);
+}
+
+/// 读一条整数条目（SHORT / LONG 都认）；条目不存在时返回 null。
+int? _intTag(_Directory reader, _Entry? entry) {
+  if (entry == null || entry.count < 1) return null;
+  return switch (entry.type) {
+    3 => reader.u16(entry.valueOffset),
+    4 => reader.u32(entry.valueOffset),
+    _ => null,
+  };
+}
+
+/// 相机厂商 + 型号。
+///
+/// 不少相机把厂商也写进型号（`Canon EOS R5`），这时再拼一次就变成
+/// `Canon Canon EOS R5`。所以型号已经以厂商开头时只用型号。
+String? _deviceName(_Directory reader, Map<int, _Entry> ifd0) {
+  final make = ifd0[0x010F]?.ascii(reader)?.trim();
+  final model = ifd0[0x0110]?.ascii(reader)?.trim();
+  final hasMake = make != null && make.isNotEmpty;
+  final hasModel = model != null && model.isNotEmpty;
+  if (!hasMake && !hasModel) return null;
+  if (!hasMake) return model;
+  if (!hasModel) return make;
+  return model.toLowerCase().startsWith(make.toLowerCase())
+      ? model
+      : '$make $model';
+}
+
+/// `380` -> `380s`；`0.004` -> `1/250s`。
+String? _formatExposure(double? seconds) {
+  if (seconds == null || seconds <= 0 || !seconds.isFinite) return null;
+  if (seconds >= 1) return '${_trimDecimal(seconds)}s';
+  final denominator = (1 / seconds).round();
+  if (denominator <= 1) return '${_trimDecimal(seconds)}s';
+  return '1/${denominator}s';
+}
+
+/// `5` -> `f/5`；`2.8` -> `f/2.8`。
+String? _formatFNumber(double? value) {
+  if (value == null || value <= 0 || !value.isFinite) return null;
+  return 'f/${_trimDecimal(value)}';
+}
+
+/// `160` -> `160.0mm`。保留一位小数，和相机信息条上的写法一致。
+String? _formatFocalLength(double? value) {
+  if (value == null || value <= 0 || !value.isFinite) return null;
+  return '${value.toStringAsFixed(1)}mm';
+}
+
+String _trimDecimal(double value) {
+  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+  return value.toStringAsFixed(1);
 }
 
 /// 找出图片里的 EXIF 数据块（TIFF 结构那一整段）。

@@ -1126,3 +1126,25 @@ String _summary(
   }
   return buffer.toString();
 }
+
+/// Legacy Survey Sky Browser 的跳转链接。
+///
+/// Legacy Survey 的 zoom 每加 1 就放大一倍，zoom 0 时全天约 256 像素。
+/// 目标是把视场装进约 700 像素宽的窗口：1.40625° / 2^zoom = 视场 / 700，
+/// 解出 zoom。视场未知时用 9（约 3° 宽），够看一片星系群。
+String legacySurveyUrl({
+  required double ra,
+  required double dec,
+  required double fieldOfViewDegrees,
+}) {
+  final zoom = fieldOfViewDegrees > 0
+      ? (math.log(1.40625 * 700 / fieldOfViewDegrees) / math.ln2)
+          .round()
+          .clamp(2, 16)
+      : 9;
+  return 'https://www.legacysurvey.org/viewer'
+      '?ra=${ra.toStringAsFixed(5)}'
+      '&dec=${dec.toStringAsFixed(5)}'
+      '&zoom=$zoom'
+      '&layer=ls-dr10';
+}

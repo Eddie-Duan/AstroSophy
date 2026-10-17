@@ -9,6 +9,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'strings.dart';
 import 'agent_tools.dart';
@@ -216,6 +217,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 小行星的位置随日期变，没有时间就没法判断画面上多出来的那个亮点是什么，
   /// 所以这条信息是「运动天体」那一节的前提，缺了只能不做判断。
   CaptureMoment? _moment;
+
+  /// 上一次解算用掉的墙钟时间，和它完成的那一刻。
+  ///
+  /// 只用于结果页那张参数表；从观星记录里翻出来的条目没有这两个值，表里
+  /// 就不显示这两行——不编一个数出来。
+  Duration? _solveDuration;
+  DateTime? _solvedAt;
 
   /// 喂给星历的那个瞬间（UTC）。
   ///
@@ -618,6 +626,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       // 时间配着那张照片的星点」，和坐标配错一样难查。历史记录里带回来的
       // 时间由调用方传进来——存的是预览图，重新读 EXIF 是读不到的。
       _moment = moment ?? readCaptureMoment(bytes);
+      _solveDuration = null;
+      _solvedAt = null;
       _analysis = null;
       _solve = null;
       _explanation = null;
@@ -687,6 +697,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _error = null;
       _warnings = const [];
       _solve = null;
+      _solveDuration = null;
+      _solvedAt = null;
       _explanation = null;
       _moonOnly = false;
       // 重新解析出来的是新的一份结果，和之前存过的那条记录不再是一回事，
@@ -719,6 +731,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final isNewAnalysis = !identical(_analysis, outcome.analysis);
     _analysis = outcome.analysis;
     _solve = outcome.solve;
+    if (isNewAnalysis && outcome.solve != null) {
+      _solveDuration = outcome.solveDuration;
+      _solvedAt = DateTime.now();
+    }
     _explanation = outcome.explanation;
     _warnings = outcome.warnings;
     _moonOnly = outcome.moonOnly;
@@ -1528,6 +1544,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       _bytes = null;
       _filename = null;
       _moment = null;
+      _solveDuration = null;
+      _solvedAt = null;
       _analysis = null;
       _solve = null;
       _explanation = null;
@@ -1561,6 +1579,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _filename = entry.name;
         // 预览图是重新编码过的，里面没有 EXIF；拍摄时间跟着记录一起存了。
         _moment = captureMomentFromMetadata(entry.capture);
+        _solveDuration = null;
+        _solvedAt = null;
         _analysis = analysis;
         _solve = entry.solve;
         _explanation = entry.explanation;
@@ -1696,7 +1716,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final solve = _solve?.withoutRejected(analysis?.stars ?? const []);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AstroSophy'),
         actions: [
           _topBarAction(
             onPressed: _openNox,
@@ -1786,6 +1805,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   // 「拍到了什么」放在图片**上面**：那是打开这一屏的第一个
                   // 问题，而看图是接下来才做的事。先给答案，再给证据。
                   _observationCard(analysis, solve),
+                  const SizedBox(height: 14),
+                  _captureParametersCard(analysis, solve),
                   const SizedBox(height: 14),
                   // 上半屏看图、下半屏点星点，两块必须同时在视野里：点第 10
                   // 号亮点却看不到图上的 ⑩，这套编号就没有意义了。所以这块
@@ -1986,7 +2007,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    known ? _momentNote(moment) : t('是拍行星和小行星的前提'),
+                    known ? _captureNote(moment) : t('是拍行星和小行星的前提'),
                     style: const TextStyle(
                       color: Color(0xFF8192A8),
                       fontSize: 11,
@@ -2022,6 +2043,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     // 没读到时区就按本机时区算。手机照片基本就是设备本地时间拍的，这是能
     // 拿到的最接近的假设；报告里会写明这一条是假设，不是读出的事实。
     return t('{0}；按当前时区算', [source]);
+  }
+
+  /// 相机型号、光圈、快门、ISO、焦距，读到的才写。
+  static String _describeCamera(CaptureMoment moment) => [
+        if (moment.device != null) moment.device!,
+        if (moment.fNumber != null) moment.fNumber!,
+        if (moment.exposure != null) moment.exposure!,
+        if (moment.iso != null) 'ISO ${moment.iso}',
+        if (moment.focalLength != null) moment.focalLength!,
+      ].join(' · ');
+
+  static String _captureNote(CaptureMoment moment) {
+    final camera = _describeCamera(moment);
+    final note = _momentNote(moment);
+    return camera.isEmpty ? note : '$camera · $note';
   }
 
   /// 让用户修改或设置拍摄时间。
@@ -2064,6 +2100,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         // 情形走同一条路。
         offset: null,
         source: CaptureTimeSource.manual,
+        // 改的只是时间；相机型号、ISO 这些是从 EXIF 读出来的事实，不该跟着
+        // 一起丢。
+        device: _moment?.device,
+        iso: _moment?.iso,
+        exposure: _moment?.exposure,
+        fNumber: _moment?.fNumber,
+        focalLength: _moment?.focalLength,
       );
       // 解算结果里带着「那几个多出来的亮点是什么」的结论，而结论依赖时刻。
       // 时间一改，旧结论就不成立了——留着比清掉更糟，用户会拿一份按旧时间
@@ -3870,6 +3913,147 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       borderRadius: BorderRadius.circular(20),
       side: side,
     );
+  }
+
+  /// 拍摄与解算参数表。
+  ///
+  /// 这一块参考了天文通的结果页：用户上传一张照片之后，最想先确认的是
+  /// 「相机到底记下了什么」——型号、光圈、快门、ISO、焦距，以及解算出来的
+  /// 赤经赤纬、视场、比例尺。这些值本来散在各张卡里，收进一张两列表格
+  /// 才扫得动。
+  ///
+  /// 读不到的项写「未读到」，不猜一个数；解算那几行只在真解出来时出现。
+  Widget _captureParametersCard(SkyAnalysis analysis, SolveResult? solve) {
+    final moment = _moment;
+    if (moment == null && solve == null) return const SizedBox.shrink();
+    final rows = <Widget>[];
+    void add(String label, String value) {
+      rows.add(_parameterRow(label, value));
+    }
+
+    void section() {
+      if (rows.isNotEmpty) rows.add(const Divider(height: 20));
+    }
+
+    add(t('相机型号'), moment?.device ?? t('未读到'));
+    add(t('光圈'), moment?.fNumber ?? t('未读到'));
+    add(t('快门'), moment?.exposure ?? t('未读到'));
+    add('ISO', moment?.iso ?? t('未读到'));
+    add(t('焦距'), moment?.focalLength ?? t('未读到'));
+    if (moment != null) {
+      section();
+      add(t('拍摄时间'), _formatClock(moment.local));
+    }
+    if (_solvedAt != null) add(t('解算完成'), _formatClock(_solvedAt!));
+    if (_solveDuration != null) {
+      add(t('解算用时'), _formatSeconds(_solveDuration!));
+    }
+
+    if (solve != null) {
+      section();
+      final scale = solve.arcsecPerPixel;
+      final widthDeg = scale > 0 ? analysis.width * scale / 3600 : 0.0;
+      final heightDeg = scale > 0 ? analysis.height * scale / 3600 : 0.0;
+      final fov = solve.fieldOfViewDegrees;
+      add(t('赤经 (RA)'), '${solve.centerRa.toStringAsFixed(4)}°');
+      add(t('赤纬 (Dec)'), '${solve.centerDec.toStringAsFixed(4)}°');
+      add(t('视场半径'), fov > 0 ? '${(fov / 2).toStringAsFixed(2)}°' : t('未知'));
+      add(
+        t('视场尺寸'),
+        widthDeg > 0 && heightDeg > 0
+            ? '${widthDeg.toStringAsFixed(2)} × ${heightDeg.toStringAsFixed(2)}°'
+            : t('未知'),
+      );
+      add(t('像素比例尺'),
+          scale > 0 ? '${scale.toStringAsFixed(3)}″/px' : t('未知'));
+      add(t('旋转角度'), '${solve.rotationDegrees.toStringAsFixed(2)}°');
+      if (widthDeg > 0) {
+        // 等效焦距按 36mm 画幅的宽边折算。不知道传感器尺寸时，这是唯一能
+        // 从解算结果本身算出来的写法，表头里写明「FF」。
+        final focal =
+            36 / (2 * math.tan(widthDeg * math.pi / 360));
+        add(t('解算焦距'), '≈${focal.toStringAsFixed(1)}mm FF');
+      }
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                SectionTitle(t('拍摄参数'), Icons.camera_alt_outlined),
+                if (solve != null)
+                  TextButton.icon(
+                    onPressed: () => _openLegacySurvey(solve),
+                    icon: const Icon(Icons.public, size: 16),
+                    label: Text(t('浏览星空')),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ...rows,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _parameterRow(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF8192A8)),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Text(
+                value,
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  static String _formatClock(DateTime value) {
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${value.year}-${two(value.month)}-${two(value.day)} '
+        '${two(value.hour)}:${two(value.minute)}';
+  }
+
+  static String _formatSeconds(Duration duration) {
+    final seconds = duration.inMilliseconds / 1000;
+    return seconds >= 60
+        ? '${(seconds / 60).toStringAsFixed(1)} min'
+        : '${seconds.toStringAsFixed(1)} s';
+  }
+
+  Future<void> _openLegacySurvey(SolveResult solve) async {
+    final url = legacySurveyUrl(
+      ra: solve.centerRa,
+      dec: solve.centerDec,
+      fieldOfViewDegrees: solve.fieldOfViewDegrees,
+    );
+    final messenger = ScaffoldMessenger.of(context);
+    final opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(t('未能打开浏览器。链接：{0}', [url]))),
+      );
+    }
   }
 
   Widget _observationCard(SkyAnalysis analysis, SolveResult? solve) {

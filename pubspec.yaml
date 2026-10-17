@@ -23,6 +23,9 @@ dependencies:
   # 必须在 pubspec 里显式声明，否则换个依赖版本就可能解析不到。
   path: ^1.9.0
   path_provider: ^2.1.5
+  # 「浏览星空」要跳转到系统浏览器（Legacy Survey Sky Browser）。这是用户
+  # 明确要的「报告里点开就能看这片天」的入口。
+  url_launcher: ^6.3.2
   # 「导出带标注的图」走系统分享面板，用户自己选存到相册、存到文件、还是发出去。
   # 不用「写进某某目录然后告诉他路径」那种做法：那个目录在手机的文件管理器里
   # 一层层点进去才能找到，等于没下载。
@@ -58,7 +61,7 @@ flutter:
     - assets/catalog/gaia.bin
     # 星表的元信息（深度、各层星数、来源）。分层的界线从这里读，不写死在代码里。
     - assets/catalog/catalog_meta.json
-    # 内置深空目录（Messier 110 + 亮 NGC/IC），供本机解算标名字用。
+    # 内置深空目录（NGC 2000.0 里全部有类型的 NGC/IC 条目），供本机解算标名字用。
     - assets/catalog/deepsky.json
     # 太阳系小天体目录（亮小行星、矮行星、彗星），由 tools/build_smallbodies.py
     # 离线生成，供「疑似运动天体」按星历位置认人。

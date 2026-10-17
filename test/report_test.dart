@@ -310,4 +310,25 @@ void main() {
       expect(report['rejected_by_user'], 1);
     });
   });
+
+  group('浏览星空', () {
+    test('链接带着中心坐标、视场对应的缩放和 DR10 图层', () {
+      final url = legacySurveyUrl(
+        ra: 22.3733,
+        dec: -3.1683,
+        fieldOfViewDegrees: 4.12,
+      );
+      expect(url, startsWith('https://www.legacysurvey.org/viewer?'));
+      expect(url, contains('ra=22.37330'));
+      expect(url, contains('dec=-3.16830'));
+      expect(url, contains('layer=ls-dr10'));
+      // 4.12° 的视场装进约 700px 宽时缩放约 8 级。
+      expect(url, contains('zoom=8'));
+    });
+
+    test('视场未知时退回一个足够宽的默认缩放', () {
+      final url = legacySurveyUrl(ra: 10, dec: 20, fieldOfViewDegrees: 0);
+      expect(url, contains('zoom=9'));
+    });
+  });
 }

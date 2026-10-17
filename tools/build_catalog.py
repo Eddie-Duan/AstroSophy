@@ -556,6 +556,28 @@ MESSIER_EXTRA: dict[int, tuple[float, float, str, float, float]] = {
     45: (56.850, 24.117, "OC", 110.0, 1.6),
 }
 
+# 不进默认筛选规则、但仍然要收进目录的目标。
+#
+# 用户拍灶神星那片天区时实报：NGC 584 星系群周围的小星系一个都没标出来。
+# 它们都是真实存在的目标，只是要么没有星等、要么长轴不到 1′，被
+# `--deepsky-mag-limit` / `--deepsky-size-min` 两条规则滤掉了。这里的条目
+# 按名字追加，数据取自 SIMBAD（长轴角分、B 星等）；同一目标的历史交叉编号
+# （NGC 580 = NGC 577、IC 117 = NGC 558、IC 1703 = NGC 557）也各留一条，
+# 这样用户按哪个编号找都找得到。
+#
+# IC 124 在 SIMBAD 里是一个恒星（2MASS J01290911-0156132），NGC 2000.0 也把
+# 它记作 `*`；照实收进目录但类型写 `?`（类型存疑），不硬编成星系。
+DEEPSKY_EXTRA: dict[str, tuple[float, float, str, float | None, float | None]] = {
+    "NGC 557": (21.604689, -1.638644, "Gx", 1.5, 14.5),
+    "IC 1703": (21.604689, -1.638644, "Gx", 1.5, 14.5),
+    "NGC 558": (21.817380, -1.970922, "Gx", 0.7, 15.0),
+    "IC 117": (21.817380, -1.970922, "Gx", 0.7, 15.0),
+    "IC 119": (21.979176, -2.040448, "Gx", 2.3, 15.0),
+    "IC 124": (22.287972, -1.937022, "?", None, None),
+    "NGC 577": (22.669632, -1.994367, "Gx", 1.6, 14.3),
+    "NGC 580": (22.669632, -1.994367, "Gx", 1.6, 14.3),
+}
+
 # NGC 2000.0 的类型码。它自己的一套写法，和 SIMBAD 的 otype 不是一回事，
 # 所以不能和 `lib/astrometry.dart` 里那张表合并。中文翻译放在 Dart 侧——
 # 改措辞不该需要重新生成数据。
@@ -710,18 +732,16 @@ def parse_ngc_name(raw: str) -> str | None:
 
 
 def build_deepsky_payload(
-    rows: list[dict[str, str]], mag_limit: float, size_min: float
+    rows: list[dict[str, str]], mag_limit: float | None, size_min: float | None
 ) -> tuple[list[list[object]], list[int]]:
     """把 NGC 2000.0 裁成 APP 用的深空目录。
 
-    留下的有三类：
+    **收全部有类型的天体**：类型码认得出来（[DEEPSKY_TYPES]）就收，不管
+    星等和尺寸。NGC 2000.0 里两成条目没有类型（空、`-`）或其实是恒星
+    （`*`），这些不收——它们没有可报的类型，收进来只会在名单里制造噪声。
 
-    * 全部 110 个 Messier 目标（爱好者真正会去拍的那批）；
-    * [NO_MAGNITUDE_TYPES] 那几类——星云、行星状星云、疏散星团、球状星团——
-      **不看星等**，理由见那张表的注释：按星等筛会把面纱星云这种大名鼎鼎的
-      目标整片滤掉；
-    * 其余（绝大多数是星系）按「亮于 [mag_limit] 等且长轴大于 [size_min] 角分」
-      筛。这一万多条如果全收，画面会被十四等的暗星系糊满。
+    [mag_limit] / [size_min] 仍保留为可选的额外裁剪（默认 None，即不限）：
+    想生成一个更小的目录时还能用，但默认行为是「完整」。
 
     返回 (目录, 没找到的 Messier 编号)。后者正常应该是空的；非空说明映射表
     或数据源变了，构建日志里要能看见。
@@ -753,11 +773,17 @@ def build_deepsky_payload(
         object_type = row.get("Type", "").strip()
         if object_type not in DEEPSKY_TYPES:
             object_type = ""
-        if number is None and object_type not in NO_MAGNITUDE_TYPES:
-            if magnitude is None or magnitude > mag_limit:
+        if number is None:
+            # 没有可报的类型就不收。Messier 除外：那 110 个必须齐全。
+            if not object_type:
                 continue
-            if size is None or size < size_min:
-                continue
+            if object_type not in NO_MAGNITUDE_TYPES:
+                if mag_limit is not None and (
+                    magnitude is None or magnitude > mag_limit
+                ):
+                    continue
+                if size_min is not None and (size is None or size < size_min):
+                    continue
         payload.append(
             [
                 f"M {number}" if number else name,
@@ -775,6 +801,23 @@ def build_deepsky_payload(
              round(size, 1), round(magnitude, 1)]
         )
 
+    # 显式追加的目标覆盖同名条目；不在筛选结果里的直接补进来。
+    index_by_name = {str(row[0]): index for index, row in enumerate(payload)}
+    for name, (ra, dec, object_type, size, magnitude) in DEEPSKY_EXTRA.items():
+        row = [
+            name,
+            round(ra, 5),
+            round(dec, 5),
+            object_type,
+            round(size, 1) if size is not None else None,
+            round(magnitude, 1) if magnitude is not None else None,
+        ]
+        if name in index_by_name:
+            payload[index_by_name[name]] = row
+        else:
+            index_by_name[name] = len(payload)
+            payload.append(row)
+
     # 按赤经排序：文件本身就是给人翻的，按天区排比按星等排更好找。
     payload.sort(key=lambda item: float(item[1]))
     return payload, missing
@@ -789,10 +832,10 @@ def main() -> int:
     parser.add_argument("--max-line-stars", type=int, default=12,
                         help="每个星座参与连线的最大星数")
     parser.add_argument("--cache", default="tools/.cache", help="原始星表缓存目录")
-    parser.add_argument("--deepsky-mag-limit", type=float, default=13.0,
-                        help="深空目录保留的极限视星等（Messier 不受此限）")
-    parser.add_argument("--deepsky-size-min", type=float, default=1.0,
-                        help="深空目录保留的最小长轴角分（Messier 不受此限）")
+    parser.add_argument("--deepsky-mag-limit", type=float, default=None,
+                        help="可选的深空星等上限；不填表示不限（默认收全部有类型的天体）")
+    parser.add_argument("--deepsky-size-min", type=float, default=None,
+                        help="可选的最小长轴角分；不填表示不限")
     parser.add_argument("--skip-deepsky", action="store_true",
                         help="不生成 deepsky.json（只更新恒星目录时用）")
     parser.add_argument("--gaia-mag-limit", type=float, default=11.0,
