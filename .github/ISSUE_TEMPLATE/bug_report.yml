@@ -1,0 +1,81 @@
+name: Bug 报告
+description: 应用崩溃、解算失败、界面异常
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先搜索已有 issue。涉及照片时，请不要上传含个人信息（GPS、水印、人脸）的原片。
+
+        **English is fine — you can write this issue in English.**
+
+  - type: input
+    id: app-version
+    attributes:
+      label: 应用版本
+      description: 设置页或 release 标签上的版本号
+      placeholder: 0.3.4
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 设备与 Android 版本
+      placeholder: Pixel 7, Android 15
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scenario
+    attributes:
+      label: 出问题的环节
+      options:
+        - 安装 / 启动
+        - 选图 / 裁剪
+        - 本机星点检测
+        - 本机解算
+        - 在线解算
+        - 月面分析
+        - 报告 / 导出
+        - 历史记录
+        - Nox 助手
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开应用，选择 ...
+        2. 点击 ...
+        3. 看到 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果 vs 实际结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（可选）
+      description: 可以用 `adb logcat` 抓取崩溃前后几十行。
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 我搜索过已有 issue
+          required: true
+        - label: 我在最新 release 上复现过
+          required: false

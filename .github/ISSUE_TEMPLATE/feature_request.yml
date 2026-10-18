@@ -1,0 +1,58 @@
+name: 功能建议
+description: 想要的新能力、改进或体验问题
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先说明「你想解决什么问题」，再说「你希望它长什么样」。方案可以不成熟。
+
+        **English is fine — you can write this issue in English.**
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      placeholder: 我用 Seestar 拍完，想知道画面里除了目标以外还有哪些 NGC 天体，现在要逐个查。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望的方案
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你试过的替代方案
+      description: 其他应用、手动流程、在线服务都算。
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 涉及范围
+      options:
+        - 界面
+        - 本机解算 / 星表
+        - 测量与报告
+        - 月面
+        - 系内天体
+        - 导出 / 分享
+        - 多语言
+        - 其他
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 我搜索过已有 issue 和 Discussions
+          required: true
+        - label: 我愿意参与实现或测试
+          required: false

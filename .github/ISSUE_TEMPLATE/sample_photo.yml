@@ -1,0 +1,69 @@
+name: 样片征集
+description: 贡献一张可公开的星空原片，用于测试解算与回归
+title: "[Sample] "
+labels: ["sample-photo"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        样片是这个项目最有价值的贡献之一：解算失败的原片能直接暴露星表层或算法的问题。
+
+        请把文件直接拖进 issue。文件太大就给网盘链接，并说明有效期。
+
+        **English is fine — you can write this issue in English.**
+
+  - type: input
+    id: target
+    attributes:
+      label: 画面里的目标
+      placeholder: M33 / 猎户座 / 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: equipment
+    attributes:
+      label: 设备与镜头 / 望远镜
+      placeholder: Seestar S50 / Pixel 7 主摄 / 200mm f/4
+    validations:
+      required: true
+
+  - type: input
+    id: fov
+    attributes:
+      label: 视场（如果知道）
+      placeholder: 对角线约 1.3°
+
+  - type: input
+    id: time
+    attributes:
+      label: 拍摄时间与地点（可只给大致值）
+      placeholder: 2026-10-15 22:30，北京郊区
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: 本机解算结果
+      options:
+        - 本机成功
+        - 在线成功、本机失败
+        - 都失败
+        - 还没试
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 备注
+      description: 是否裁剪、是否叠过、是否用了滤镜、有没有水印。
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: 授权确认
+      options:
+        - label: 我允许项目在测试与文档中使用这张样片
+          required: true
+        - label: 我已去除 GPS 等个人信息，或确认可以公开
+          required: true

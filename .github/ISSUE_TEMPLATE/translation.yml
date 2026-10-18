@@ -1,0 +1,45 @@
+name: 翻译 / 新语言
+description: 修正现有翻译，或新增一门语言（Translation or new language）
+title: "[i18n] "
+labels: ["translation"]
+body:
+  - type: input
+    id: language
+    attributes:
+      label: 语言
+      description: 用 BCP 47 代码，例如 ja、de、es、zh-Hant
+      placeholder: ja
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 类型
+      options:
+        - 修正现有翻译
+        - 新增一门语言
+        - 愿意长期维护这门语言
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: 具体内容
+      description: |
+        新增语言请参考 CONTRIBUTING.md 的「加一门语言」：
+        复制 `lib/l10n/app_en.arb`，只翻译 value，然后运行 `python tools/build_strings.py`。
+        修正翻译请给出原文、现译与建议译法。
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 我读过 CONTRIBUTING.md 的「加一门语言」
+          required: false
+        - label: 我可以用这门语言长期维护
+          required: false
