@@ -330,5 +330,25 @@ void main() {
       final url = legacySurveyUrl(ra: 10, dec: 20, fieldOfViewDegrees: 0);
       expect(url, contains('zoom=9'));
     });
+    test('有 WCS 时用 poly 画出照片取景框', () {
+      final wcs = Wcs.fromPixels(
+        width: 1200,
+        height: 800,
+        centerRa: 150,
+        centerDec: 20,
+        degreesPerPixel: 0.002,
+      );
+      final url = legacySurveyUrl(
+        ra: 150,
+        dec: 20,
+        fieldOfViewDegrees: 2.4,
+        wcs: wcs,
+      );
+      expect(url, contains('&poly='));
+      // 四角 + 回到起点，共五组 ra,dec。
+      final polygon = Uri.parse(url).queryParameters['poly']!;
+      expect(polygon.split(','), hasLength(10));
+      expect(url, contains('&mark=150.00000,20.00000'));
+    });
   });
 }

@@ -193,6 +193,17 @@ class MissingImage extends StatelessWidget {
       );
 }
 
+/// 图上可点选的一块区域。
+///
+/// [id] 带前缀，`marker:` 表示圆圈/十字/取景框，`label:` 表示文字本身。
+/// 全屏橡皮擦按前缀分别擦除——用户点圆就只擦圆，点字就只擦字。
+class AnnotationHitRegion {
+  const AnnotationHitRegion({required this.id, required this.bounds});
+
+  final String id;
+  final Rect bounds;
+}
+
 class DetectedStarsPainter extends CustomPainter {
   const DetectedStarsPainter({
     required this.analysis,
@@ -206,6 +217,9 @@ class DetectedStarsPainter extends CustomPainter {
     this.selectedObjectName,
     this.numbers = true,
     this.arcsecPerPixel = 0,
+    this.uiScale = 1,
+    this.erased = const {},
+    this.onRegions,
   });
 
   final SkyAnalysis analysis;
@@ -248,6 +262,23 @@ class DetectedStarsPainter extends CustomPainter {
   /// 是否在圈旁边标编号。
   final bool numbers;
 
+  /// 标注本身（字号、线宽、圆圈半径、偏移）相对图像坐标的放大倍率。
+  ///
+  /// 屏幕上半屏那块图大约 390 逻辑像素宽，标注一直按这个尺度设计。导出时
+  /// 画布仍是「分析尺寸」那张图，但字号必须跟着放大到同样的相对大小，否则
+  /// 保存出来的 1200 像素图里 10 像素的字只占图宽的 0.8%，在相册里小得看不清。
+  final double uiScale;
+
+  /// 被临时擦掉的标注，形如 `marker:star:3`、`label:object:M 31`。
+  ///
+  /// 只影响这一次绘制：全屏页退出后这个集合就没了，原图和标注都不变。
+  final Set<String> erased;
+
+  /// 画完把可点选区域交回给界面。全屏橡皮擦拿它做命中测试。
+  final void Function(List<AnnotationHitRegion> regions)? onRegions;
+
+  bool _erased(String layer, String id) => erased.contains('$layer:$id');
+
   /// 图上最多标多少个编号。视场里动辄上百个点源，全标上就成了一片数字，
   /// 反而认不出哪颗是哪颗。
   static const _numberLimit = 40;
@@ -266,17 +297,29 @@ class DetectedStarsPainter extends CustomPainter {
     final scaleX = destination.width / analysis.width;
     final scaleY = destination.height / analysis.height;
     final scale = (scaleX + scaleY) / 2;
+    // 标注的「界面尺度」：屏幕上按 1 画，导出时按图宽放大（见 [uiScale]）。
+    final s = uiScale;
 
     Offset toCanvas(double x, double y) => Offset(
           destination.left + x * scaleX,
           destination.top + y * scaleY,
         );
 
-    final labelStyle = const TextStyle(
-      color: Color(0xFFFFDE77),
-      fontSize: 10,
+    final regions = <AnnotationHitRegion>[];
+    void mark(String id, Offset center, double radius) {
+      regions.add(
+        AnnotationHitRegion(
+          id: 'marker:$id',
+          bounds: Rect.fromCircle(center: center, radius: radius + 6 * s),
+        ),
+      );
+    }
+
+    final labelStyle = TextStyle(
+      color: const Color(0xFFFFDE77),
+      fontSize: 10 * s,
       fontWeight: FontWeight.w600,
-      shadows: [Shadow(color: Colors.black, blurRadius: 5)],
+      shadows: [Shadow(color: Colors.black, blurRadius: 5 * s)],
     );
 
     // 所有标注都排完位置再统一画。
@@ -292,6 +335,7 @@ class DetectedStarsPainter extends CustomPainter {
       Offset anchor, {
       required int priority,
       required Offset preferred,
+      required String eraseId,
       bool force = false,
     }) {
       pending.add(
@@ -300,6 +344,7 @@ class DetectedStarsPainter extends CustomPainter {
           anchor: anchor,
           priority: priority,
           preferred: preferred,
+          eraseId: eraseId,
           force: force,
         ),
       );
@@ -314,50 +359,58 @@ class DetectedStarsPainter extends CustomPainter {
     if (moon != null) {
       final center = toCanvas(moon.centerX, moon.centerY);
       final moonRadius = moon.radiusPixels * scale;
-      canvas.drawCircle(
-        center,
-        moonRadius,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6
-          ..color = kMint.withValues(alpha: 0.9),
-      );
-      final caption = TextPainter(
-        text: TextSpan(
-          text: t('月面 · 亮 {0}%', [(moon.illuminatedFraction * 100).toStringAsFixed(1)]),
-          style: const TextStyle(
-            color: kMint,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            shadows: [Shadow(color: Colors.black, blurRadius: 5)],
+      if (!_erased('marker', 'moon')) {
+        canvas.drawCircle(
+          center,
+          moonRadius,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.6 * s
+            ..color = kMint.withValues(alpha: 0.9),
+        );
+        mark('moon', center, moonRadius);
+      }
+      if (!_erased('label', 'moon')) {
+        final caption = TextPainter(
+          text: TextSpan(
+            text: t('月面 · 亮 {0}%', [(moon.illuminatedFraction * 100).toStringAsFixed(1)]),
+            style: TextStyle(
+              color: kMint,
+              fontSize: 11 * s,
+              fontWeight: FontWeight.w600,
+              shadows: [Shadow(color: Colors.black, blurRadius: 5 * s)],
+            ),
           ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      queue(
-        caption,
-        center,
-        priority: 1,
-        preferred: Offset(-caption.width / 2, moonRadius + 4),
-        // 月面照片上只有这一个标，没有别的东西和它抢位置。真排不下时宁可
-        // 压上去也要画出来——把唯一的结论藏掉，比叠一行字糟糕得多。
-        force: true,
-      );
+          textDirection: TextDirection.ltr,
+        )..layout();
+        queue(
+          caption,
+          center,
+          priority: 1,
+          preferred: Offset(-caption.width / 2, moonRadius + 4 * s),
+          eraseId: 'moon',
+          // 月面照片上只有这一个标，没有别的东西和它抢位置。真排不下时宁可
+          // 压上去也要画出来——把唯一的结论藏掉，比叠一行字糟糕得多。
+          force: true,
+        );
+      }
     }
 
     // 星座连线先画，压在最底下。它是背景参考，不能盖住用户真正要看的
     // 星点和编号——那两样才是这个面板要回答的问题。
     final figurePaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1
+      ..strokeWidth = 1.1 * s
       ..color = const Color(0x66FFDE77);
     final figureLabelStyle = TextStyle(
       color: const Color(0xFFFFDE77).withValues(alpha: 0.62),
-      fontSize: 11,
+      fontSize: 11 * s,
       fontWeight: FontWeight.w600,
-      shadows: const [Shadow(color: Colors.black, blurRadius: 5)],
+      shadows: [Shadow(color: Colors.black, blurRadius: 5 * s)],
     );
-    for (final figure in figures) {
+    for (var figureIndex = 0; figureIndex < figures.length; figureIndex++) {
+      final figure = figures[figureIndex];
+      final eraseId = 'figure:$figureIndex';
       for (final segment in figure.segments) {
         if (segment.length != 4) continue;
         canvas.drawLine(
@@ -366,6 +419,7 @@ class DetectedStarsPainter extends CustomPainter {
           figurePaint,
         );
       }
+      if (_erased('label', eraseId)) continue;
       final label = TextPainter(
         text: TextSpan(text: figure.name, style: figureLabelStyle),
         textDirection: TextDirection.ltr,
@@ -378,6 +432,7 @@ class DetectedStarsPainter extends CustomPainter {
         // 的问题。位置不够时该让路的是它。
         priority: 6,
         preferred: Offset(-label.width / 2, -label.height / 2),
+        eraseId: eraseId,
       );
     }
 
@@ -387,6 +442,7 @@ class DetectedStarsPainter extends CustomPainter {
       final star = targets[index];
       final point = toCanvas(star.x, star.y);
       final isSelected = index == selected;
+      final eraseId = 'star:$index';
 
       // 拉长候选画成椭圆，长轴按检出到的方向。圆点看不出「这是条线还是一
       // 颗星」，而这两种东西在图上的意义完全不同——一条线可能是飞机或
@@ -397,46 +453,53 @@ class DetectedStarsPainter extends CustomPainter {
       final rejected = star.isRejected;
       final paint = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = rejected ? 1.0 : (isSelected ? 2.0 : 1.2)
+        ..strokeWidth = (rejected ? 1.0 : (isSelected ? 2.0 : 1.2)) * s
         ..color = rejected
             ? const Color(0xFF8A5A66)
             : star.isElongated
                 ? const Color(0xFFFF7B8C)
                 : kMint;
 
-      if (star.isElongated) {
-        final semiMajor = math.max(star.fwhm * star.axisRatio, 8) / 2 * scale;
-        final semiMinor = math.max(star.fwhm, 4) / 2 * scale;
-        canvas.save();
-        canvas.translate(point.dx, point.dy);
-        // 图像坐标 y 轴向下，椭圆参数里的角度也是顺时针为正，两者一致，
-        // 所以这里可以直接用检出到的方向角。
-        canvas.rotate(star.orientation);
-        canvas.drawOval(
-          Rect.fromCenter(
-            center: Offset.zero,
-            width: semiMajor * 2,
-            height: semiMinor * 2,
-          ),
-          paint,
-        );
-        canvas.restore();
-      } else {
-        canvas.drawCircle(point, isSelected ? 8 : 3.5, paint);
+      var markerRadius = isSelected ? 8 * s : 3.5 * s;
+      if (!_erased('marker', eraseId)) {
+        if (star.isElongated) {
+          final semiMajor = math.max(star.fwhm * star.axisRatio, 8) / 2 * scale;
+          final semiMinor = math.max(star.fwhm, 4) / 2 * scale;
+          markerRadius = semiMajor;
+          canvas.save();
+          canvas.translate(point.dx, point.dy);
+          // 图像坐标 y 轴向下，椭圆参数里的角度也是顺时针为正，两者一致，
+          // 所以这里可以直接用检出到的方向角。
+          canvas.rotate(star.orientation);
+          canvas.drawOval(
+            Rect.fromCenter(
+              center: Offset.zero,
+              width: semiMajor * 2,
+              height: semiMinor * 2,
+            ),
+            paint,
+          );
+          canvas.restore();
+        } else {
+          canvas.drawCircle(point, markerRadius, paint);
+        }
+
+        if (isSelected) {
+          canvas.drawCircle(
+            point,
+            (star.isElongated ? 12 : 10) * s,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.4 * s
+              ..color = Colors.white.withValues(alpha: 0.9),
+          );
+        }
+        mark(eraseId, point, markerRadius);
       }
 
-      if (isSelected) {
-        canvas.drawCircle(
-          point,
-          star.isElongated ? 12 : 10,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4
-            ..color = Colors.white.withValues(alpha: 0.9),
-        );
-      }
-
-      if (numbers && index < _numberLimit) {
+      if (numbers &&
+          index < _numberLimit &&
+          !_erased('label', eraseId)) {
         final label = TextPainter(
           text: TextSpan(
             text: '${index + 1}',
@@ -448,11 +511,20 @@ class DetectedStarsPainter extends CustomPainter {
           ),
           textDirection: TextDirection.ltr,
         )..layout();
-        queue(label, point, priority: 5, preferred: const Offset(5, -12));
+        queue(
+          label,
+          point,
+          priority: 5,
+          preferred: Offset(5 * s, -12 * s),
+          eraseId: eraseId,
+        );
       }
     }
 
-    for (final named in namedStars) {
+    for (var index = 0; index < namedStars.length; index++) {
+      final named = namedStars[index];
+      final eraseId = 'name:$index';
+      if (_erased('label', eraseId)) continue;
       final point = toCanvas(named.x, named.y);
       final label = TextPainter(
         text: TextSpan(text: named.name, style: labelStyle),
@@ -460,7 +532,13 @@ class DetectedStarsPainter extends CustomPainter {
       )..layout(maxWidth: destination.width * 0.55);
       // 星名排在编号前面：编号只说「第 10 号」，星名说的是「这是参宿四」。
       // 位置不够时，宁可少一个编号——编号在下面的列表里查得到，名字不在。
-      queue(label, point, priority: 3, preferred: const Offset(6, 4));
+      queue(
+        label,
+        point,
+        priority: 3,
+        preferred: Offset(6 * s, 4 * s),
+        eraseId: eraseId,
+      );
     }
 
     // 深空天体和星点分开画：星点是个位置，深空天体是**一块面积**。所以这里的
@@ -469,24 +547,27 @@ class DetectedStarsPainter extends CustomPainter {
     final objectPaint = Paint()
       ..color = const Color(0xFFFF7B8C)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
+      ..strokeWidth = 1.5 * s;
     for (final object in objects) {
       final point = toCanvas(object.x, object.y);
       final size = object.angularSizeArcmin;
       final selected = object.name == selectedObjectName;
+      final eraseId = 'object:${object.name}';
       final paint = selected
           ? (Paint()
             ..color = const Color(0xFFFFDE77)
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.8)
+            ..strokeWidth = 2.8 * s)
           : objectPaint;
-      if (size == null || size <= 0 || arcsecPerPixel <= 0) {
-        canvas.drawCircle(point, 9, paint);
-      } else {
-        // 角尺寸换成图像像素要经过实际比例尺；画到画布上再乘一次缩放。
-        final radius = size * 60 / arcsecPerPixel / 2 * scale;
-        canvas.drawCircle(point, radius.clamp(6.0, 400.0), paint);
+      final markerRadius = size == null || size <= 0 || arcsecPerPixel <= 0
+          ? 9 * s
+          // 角尺寸换成图像像素要经过实际比例尺；画到画布上再乘一次缩放。
+          : (size * 60 / arcsecPerPixel / 2 * scale).clamp(6 * s, 400 * s);
+      if (!_erased('marker', eraseId)) {
+        canvas.drawCircle(point, markerRadius, paint);
+        mark(eraseId, point, markerRadius);
       }
+      if (_erased('label', eraseId)) continue;
       final label = TextPainter(
         text: TextSpan(
           text: deepSkyCaption(object.name, object.category),
@@ -494,7 +575,13 @@ class DetectedStarsPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: destination.width * 0.55);
-      queue(label, point, priority: 4, preferred: const Offset(10, -7));
+      queue(
+        label,
+        point,
+        priority: 4,
+        preferred: Offset(10 * s, -7 * s),
+        eraseId: eraseId,
+      );
     }
 
     // 疑似运动天体最后画，压在最上面：它是这张图上最稀有、也最该被先看到的
@@ -519,25 +606,25 @@ class DetectedStarsPainter extends CustomPainter {
     // 用虚线是有意的：图上的虚线记号一律表示「按表算，它在这儿」，不是「我看见了」。
     final bodyPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
+      ..strokeWidth = 1.6 * s
       ..color = const Color(0xFFFFAB40);
     final smallBodyPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
+      ..strokeWidth = 1.6 * s
       ..color = const Color(0xFF7FD8FF);
     final predictedPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
+      ..strokeWidth = 1.2 * s
       ..color = const Color(0xFFFFAB40).withValues(alpha: 0.75);
     final smallBodyPredictedPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
+      ..strokeWidth = 1.2 * s
       ..color = const Color(0xFF7FD8FF).withValues(alpha: 0.75);
-    final bodyLabelStyle = const TextStyle(
-      color: Color(0xFFFFAB40),
-      fontSize: 10,
+    final bodyLabelStyle = TextStyle(
+      color: const Color(0xFFFFAB40),
+      fontSize: 10 * s,
       fontWeight: FontWeight.w700,
-      shadows: [Shadow(color: Colors.black, blurRadius: 5)],
+      shadows: [Shadow(color: Colors.black, blurRadius: 5 * s)],
     );
     final smallBodyLabelStyle = bodyLabelStyle.copyWith(
       color: const Color(0xFF7FD8FF),
@@ -545,6 +632,7 @@ class DetectedStarsPainter extends CustomPainter {
     for (final body in bodies) {
       final found = toCanvas(body.x, body.y);
       final major = body.kind.isMajorPlanet;
+      final eraseId = 'body:${body.name}';
       // 「位置算得出来、这张图上没认出来」的那一类画**点线圆**。
       //
       // 这一类以前什么都不画，理由是「画了就等于宣称看见了」。点线比虚线再退
@@ -553,12 +641,16 @@ class DetectedStarsPainter extends CustomPainter {
       // 在这张照片的这个位置上」，回到图上却找不到任何痕迹，只会以为是自己
       // 看漏了——而这类条目的整个存在意义就是「不静默省略」。
       if (!body.detected) {
-        _dottedCircle(
-          canvas,
-          found,
-          11,
-          major ? predictedPaint : smallBodyPredictedPaint,
-        );
+        if (!_erased('marker', eraseId)) {
+          _dottedCircle(
+            canvas,
+            found,
+            11 * s,
+            major ? predictedPaint : smallBodyPredictedPaint,
+          );
+          mark(eraseId, found, 11 * s);
+        }
+        if (_erased('label', eraseId)) continue;
         final missed = TextPainter(
           text: TextSpan(
             text: t('{0} · 图上没有对上', [body.name]),
@@ -570,35 +662,41 @@ class DetectedStarsPainter extends CustomPainter {
           missed,
           found,
           priority: 0,
-          preferred: const Offset(14, -20),
+          preferred: Offset(14 * s, -20 * s),
+          eraseId: eraseId,
           force: true,
         );
         continue;
       }
       final paint = major ? bodyPaint : smallBodyPaint;
-      if (major) {
-        _dashedCircle(canvas, found, 11, paint);
-      } else {
-        _bracketFrame(canvas, found, 13, paint);
+      if (!_erased('marker', eraseId)) {
+        if (major) {
+          _dashedCircle(canvas, found, 11 * s, paint);
+        } else {
+          _bracketFrame(canvas, found, 13 * s, paint);
+        }
+
+        final predicted = _predictedPoint(body, toCanvas, destination, scale);
+        if (predicted != null) {
+          // 十字，臂长 5 像素。画成小号是有意的：它是「星历说的位置」，一个
+          // 参考点，不该和那个表示检出的圈抢注意力。
+          final crossPaint = major ? predictedPaint : smallBodyPredictedPaint;
+          final arm = 5 * s;
+          canvas.drawLine(
+            predicted - Offset(arm, 0),
+            predicted + Offset(arm, 0),
+            crossPaint,
+          );
+          canvas.drawLine(
+            predicted - Offset(0, arm),
+            predicted + Offset(0, arm),
+            crossPaint,
+          );
+        }
+        mark(eraseId, found, (major ? 11 : 13) * s);
       }
 
-      final predicted = _predictedPoint(body, toCanvas, destination, scale);
-      if (predicted != null) {
-        // 十字，臂长 5 像素。画成小号是有意的：它是「星历说的位置」，一个
-        // 参考点，不该和那个表示检出的圈抢注意力。
-        final crossPaint = major ? predictedPaint : smallBodyPredictedPaint;
-        canvas.drawLine(
-          predicted - const Offset(5, 0),
-          predicted + const Offset(5, 0),
-          crossPaint,
-        );
-        canvas.drawLine(
-          predicted - const Offset(0, 5),
-          predicted + const Offset(0, 5),
-          crossPaint,
-        );
-      }
-
+      if (_erased('label', eraseId)) continue;
       final separation = body.separationArcsec;
       final label = TextPainter(
         text: TextSpan(
@@ -614,7 +712,8 @@ class DetectedStarsPainter extends CustomPainter {
         label,
         found,
         priority: 0,
-        preferred: const Offset(14, -20),
+        preferred: Offset(14 * s, -20 * s),
+        eraseId: eraseId,
         force: true,
       );
     }
@@ -623,6 +722,9 @@ class DetectedStarsPainter extends CustomPainter {
     //
     // 顺序就是优先级：先排的占好位置，后来的绕开。同一段文字永远落在同一个
     // 位置（没有随机数），所以同一张图前后两次画出来的标注完全一样。
+    final leaderPaint = Paint()
+      ..strokeWidth = 0.9 * s
+      ..color = const Color(0x59A6B5C8);
     for (final label in pending..sort((a, b) => a.priority.compareTo(b.priority))) {
       final slot = placer.place(
         label.anchor,
@@ -639,11 +741,19 @@ class DetectedStarsPainter extends CustomPainter {
         canvas.drawLine(
           label.anchor,
           _edgePoint(slot.rect, label.anchor),
-          _leaderPaint,
+          leaderPaint,
         );
       }
       label.painter.paint(canvas, slot.rect.topLeft);
+      // 文字区域也参与点选：用户点「M 31」这几个字，擦掉的就该是这几个字。
+      regions.add(
+        AnnotationHitRegion(
+          id: 'label:${label.eraseId}',
+          bounds: slot.rect.inflate(4 * s),
+        ),
+      );
     }
+    onRegions?.call(List.unmodifiable(regions));
   }
 
   /// 从矩形边界上离 [target] 最近的那个点。引线画到边界为止，不穿过文字。
@@ -694,9 +804,9 @@ class DetectedStarsPainter extends CustomPainter {
     for (final metric in path.computeMetrics()) {
       var start = 0.0;
       while (start < metric.length) {
-        final end = math.min(start + 4, metric.length);
+        final end = math.min(start + 4 * uiScale, metric.length);
         canvas.drawPath(metric.extractPath(start, end), paint);
-        start = end + 3;
+        start = end + 3 * uiScale;
       }
     }
   }
@@ -714,9 +824,9 @@ class DetectedStarsPainter extends CustomPainter {
     for (final metric in path.computeMetrics()) {
       var start = 0.0;
       while (start < metric.length) {
-        final end = math.min(start + 1.4, metric.length);
+        final end = math.min(start + 1.4 * uiScale, metric.length);
         canvas.drawPath(metric.extractPath(start, end), paint);
-        start = end + 4.6;
+        start = end + 4.6 * uiScale;
       }
     }
   }
@@ -746,17 +856,39 @@ class DetectedStarsPainter extends CustomPainter {
       // 的 setEquals，是为了让这个文件只依赖 material 一层。
       hidden.length != oldDelegate.hidden.length ||
       !hidden.containsAll(oldDelegate.hidden) ||
+      erased.length != oldDelegate.erased.length ||
+      !erased.containsAll(oldDelegate.erased) ||
       oldDelegate.selected != selected ||
       oldDelegate.selectedObjectName != selectedObjectName ||
       oldDelegate.numbers != numbers ||
-      oldDelegate.arcsecPerPixel != arcsecPerPixel;
-}
+      oldDelegate.arcsecPerPixel != arcsecPerPixel ||
+      oldDelegate.uiScale != uiScale;
 
-/// 引线。压得很淡：它是「这段字指的是那颗星」的补充说明，不该比标注本身
-/// 显眼。
-final _leaderPaint = Paint()
-  ..strokeWidth = 0.9
-  ..color = const Color(0x59A6B5C8);
+  /// 换一套擦除状态，其余参数原样带过去。
+  ///
+  /// 全屏页每次点擦都要重画，但图、星点、解算结果都没变——只换 [erased]，
+  /// 不重新构造整份分析。
+  DetectedStarsPainter copyWith({
+    Set<String>? erased,
+    void Function(List<AnnotationHitRegion> regions)? onRegions,
+  }) =>
+      DetectedStarsPainter(
+        analysis: analysis,
+        namedStars: namedStars,
+        objects: objects,
+        figures: figures,
+        bodies: bodies,
+        wcs: wcs,
+        hidden: hidden,
+        selected: selected,
+        selectedObjectName: selectedObjectName,
+        numbers: numbers,
+        arcsecPerPixel: arcsecPerPixel,
+        uiScale: uiScale,
+        erased: erased ?? this.erased,
+        onRegions: onRegions ?? this.onRegions,
+      );
+}
 
 /// 一个等着排位置的标注。
 class _PendingLabel {
@@ -765,6 +897,7 @@ class _PendingLabel {
     required this.anchor,
     required this.priority,
     required this.preferred,
+    required this.eraseId,
     this.force = false,
   });
 
@@ -779,6 +912,9 @@ class _PendingLabel {
 
   /// 不和别人冲突时用的偏移（相对 [anchor]）——就是改版前的老位置。
   final Offset preferred;
+
+  /// 这段文字和它的标记共用的稳定身份；橡皮擦按 `label:` / `marker:` 前缀区分。
+  final String eraseId;
 
   /// 排不下时是否仍然要画出来。
   ///

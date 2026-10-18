@@ -73,6 +73,8 @@ void main() {
     bool numbers = true,
     List<SkyObject> objects = const [],
     String? selectedObjectName,
+    Set<String> erased = const {},
+    void Function(List<AnnotationHitRegion>)? onRegions,
   }) =>
       DetectedStarsPainter(
         analysis: analysis,
@@ -81,6 +83,8 @@ void main() {
         hidden: hidden,
         selectedObjectName: selectedObjectName,
         numbers: numbers,
+        erased: erased,
+        onRegions: onRegions,
       );
 
   group('圆圈的隐去', () {
@@ -119,6 +123,38 @@ void main() {
       // 错开一位——那正是这套编号最不能出的错。
       expect(identical(painter.analysis, analysis), isTrue);
       expect(painter.analysis.numberedTargets.length, 3);
+    });
+    test('擦除按 marker / label 分开：点圈只少圈，点字只少字', () async {
+      final analysis = analysisOf([starAt(100, 100), starAt(300, 200)]);
+      final base = await paintedPixels(painterOf(analysis), size);
+
+      final noMarker = await paintedPixels(
+        painterOf(analysis, erased: {'marker:star:0'}),
+        size,
+      );
+      final noLabel = await paintedPixels(
+        painterOf(analysis, erased: {'label:star:0'}),
+        size,
+      );
+
+      expect(noMarker, lessThan(base), reason: '擦掉圆圈应该少一块像素');
+      expect(noLabel, lessThan(base), reason: '擦掉编号应该少一块像素');
+      // 两者都只擦掉一项，剩下的另一项还在，所以都不会把整张图擦空。
+      expect(noMarker, greaterThan(0));
+      expect(noLabel, greaterThan(0));
+    });
+
+    test('绘制后交出可点选区域，圈和字各一条', () async {
+      final analysis = analysisOf([starAt(100, 100)]);
+      final regions = <AnnotationHitRegion>[];
+      await paintedPixels(
+        painterOf(analysis, onRegions: regions.addAll),
+        size,
+      );
+      expect(
+        regions.map((region) => region.id),
+        containsAll(['marker:star:0', 'label:star:0']),
+      );
     });
   });
 

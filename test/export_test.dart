@@ -13,7 +13,7 @@ import 'image_fixture.dart';
 /// 那块是不是同一套标注」——像素级的观感没法断言，但尺寸和内容差异可以。
 void main() {
   group('导出标注图', () {
-    test('尺寸跟着原图走，不跟屏幕走', () async {
+    test('尺寸按长边 2400 高清输出，保持原图比例', () async {
       final image = nightSky(width: 800, height: 600);
       scatterStars(image, count: 40);
       final bytes = encodePng(image);
@@ -28,10 +28,14 @@ void main() {
 
       final decoded = imglib.decodePng(png);
       expect(decoded, isNotNull, reason: '导出的应该是一张能解码的 PNG');
-      // 导出的是「分析尺寸」那张图：和用户手上这张原图一样大，而不是屏幕
-      // 上那一块的像素数。放大到 4 倍再导出，尺寸不该跟着变大。
-      expect(decoded!.width, analysis.width);
-      expect(decoded.height, analysis.height);
+      // 导出的不再是「分析尺寸」那张小图：长边拉到 2400，字号按屏幕上的
+      // 相对大小同步放大，保存到相册后不会又小又糊。
+      expect(decoded!.width, 2400);
+      expect(decoded.height, 1800);
+      expect(
+        decoded.width / decoded.height,
+        closeTo(analysis.width / analysis.height, 0.01),
+      );
     });
 
     test('画上标注之后像素确实变了', () async {

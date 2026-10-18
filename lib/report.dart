@@ -1132,19 +1132,40 @@ String _summary(
 /// Legacy Survey 的 zoom 每加 1 就放大一倍，zoom 0 时全天约 256 像素。
 /// 目标是把视场装进约 700 像素宽的窗口：1.40625° / 2^zoom = 视场 / 700，
 /// 解出 zoom。视场未知时用 9（约 3° 宽），够看一片星系群。
+///
+/// 传入 [wcs] 时还会把照片的四个角换算成赤经赤纬，用 viewer 的 `poly`
+/// 参数画出取景框——打开链接就能看到「我拍的这块天区 + 这张照片的相框」，
+/// 而不只是一个中心点。照片旋转过也照样对得上，因为四角是逐个投影的。
 String legacySurveyUrl({
   required double ra,
   required double dec,
   required double fieldOfViewDegrees,
+  Wcs? wcs,
 }) {
   final zoom = fieldOfViewDegrees > 0
       ? (math.log(1.40625 * 700 / fieldOfViewDegrees) / math.ln2)
           .round()
           .clamp(2, 16)
       : 9;
-  return 'https://www.legacysurvey.org/viewer'
+  final buffer = StringBuffer('https://www.legacysurvey.org/viewer'
       '?ra=${ra.toStringAsFixed(5)}'
       '&dec=${dec.toStringAsFixed(5)}'
       '&zoom=$zoom'
-      '&layer=ls-dr10';
+      '&layer=ls-dr10'
+      '&mark=${ra.toStringAsFixed(5)},${dec.toStringAsFixed(5)}');
+  if (wcs != null && wcs.width > 0 && wcs.height > 0) {
+    final corners = [
+      wcs.pixelToWorld(0, 0),
+      wcs.pixelToWorld(wcs.width - 1, 0),
+      wcs.pixelToWorld(wcs.width - 1, wcs.height - 1),
+      wcs.pixelToWorld(0, wcs.height - 1),
+      wcs.pixelToWorld(0, 0),
+    ];
+    final polygon = corners
+        .map((corner) =>
+            '${corner.$1.toStringAsFixed(4)},${corner.$2.toStringAsFixed(4)}')
+        .join(',');
+    buffer.write('&poly=$polygon');
+  }
+  return buffer.toString();
 }

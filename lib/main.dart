@@ -182,6 +182,15 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 把「会上传」和「其实是白等」两种后果分开讲，用户才能真的选。
   bool _astrometryKeyPresent = false;
 
+  /// 这次解析用哪种分析方式。默认「本机优先」，和旧版本行为一致。
+  SkyAnalysisMode _analysisMode = SkyAnalysisMode.localFirst;
+
+  /// 是否在解析结束后自动让 Agent 写一份解读。默认关闭。
+  bool _generateAgentReport = false;
+
+  /// 现在的设置能不能跑需要联网的分析方式。
+  bool get _onlineReady => _uploadAllowed && _astrometryKeyPresent;
+
   PipelineProgress? _progress;
 
   /// 正等着用户拍板的那一次月面提问。
@@ -295,6 +304,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         astrometryKey: key,
         allowUpload: _uploadAllowed,
         modelSettings: settings,
+        mode: job.mode,
+        generateAgentReport: job.generateAgentReport,
       ).run(
         job.bytes,
         question: job.question,
@@ -394,16 +405,49 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       final upload = await _storage.read(key: 'allowUpload');
       final astrometry = await _storage.read(key: 'astrometryKey') ?? '';
       final language = await _storage.read(key: 'language');
+      final mode = await _storage.read(key: 'analysisMode');
+      final agentReport = await _storage.read(key: 'agentReport');
       if (!mounted) return;
       // 语言那根线是全局的，赋值本身就够——`AstroSophyApp` 挂在它上面，一变
       // 整棵树就重建。没有存过就保持默认的中文。
       appLanguage.value = AppLanguage.fromCode(language);
+      final ready = upload == 'true' && astrometry.trim().isNotEmpty;
+      var selectedMode = SkyAnalysisMode.fromStorage(mode);
+      // 不能联网时不要把用户卡在一个「选了云端、但跑不了」的状态里；退回
+      // 本机优先，至少这张图还能算。
+      if (selectedMode.requiresOnline && !ready) {
+        selectedMode = SkyAnalysisMode.localFirst;
+      }
       setState(() {
         _uploadAllowed = upload == 'true';
         _astrometryKeyPresent = astrometry.trim().isNotEmpty;
+        _analysisMode = selectedMode;
+        _generateAgentReport = agentReport == 'true';
       });
     } on Exception catch (error) {
       _showError(t('无法读取设置：{0}', [error]));
+    }
+  }
+
+  /// 换分析方式。写进设置，下次打开还按这个来。
+  Future<void> _setAnalysisMode(SkyAnalysisMode mode) async {
+    if (mode == _analysisMode) return;
+    setState(() => _analysisMode = mode);
+    try {
+      await _storage.write(key: 'analysisMode', value: mode.storageKey);
+    } on Exception catch (error) {
+      _showError(t('无法保存设置：{0}', [error]));
+    }
+  }
+
+  /// 「生成 Agent 分析报告」开关。默认关闭，只影响解析完成后的自动解读。
+  Future<void> _setGenerateAgentReport(bool value) async {
+    if (value == _generateAgentReport) return;
+    setState(() => _generateAgentReport = value);
+    try {
+      await _storage.write(key: 'agentReport', value: value ? 'true' : 'false');
+    } on Exception catch (error) {
+      _showError(t('无法保存设置：{0}', [error]));
     }
   }
 
@@ -692,6 +736,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       filename: _filename ?? t('未命名'),
       moment: _moment,
       question: _questionController.text,
+      mode: _analysisMode,
+      generateAgentReport: _generateAgentReport,
     );
     setState(() {
       _error = null;
@@ -1778,6 +1824,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 if (_bytes != null) ...[
                   const SizedBox(height: 10),
                   _captureTimeCard(),
+                  const SizedBox(height: 10),
+                  _analysisModeCard(),
                 ],
                 const SizedBox(height: 14),
                 if (_bytes != null) _runButton(),
@@ -1973,6 +2021,86 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ],
           ),
         ],
+      );
+
+  /// 分析方式 + Agent 报告开关。
+  ///
+  /// 放在拍摄时间下面、一键解析上面：这是用户在按下按钮之前最后要做的两个
+  /// 决定，而且都只影响**这一次**解析。四种方式的差别写成一句话贴在选择下面，
+  /// 不塞进帮助弹窗——「照片会不会出设备」不该藏在问号后面。
+  Widget _analysisModeCard() => Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: SectionTitle(t('分析方式'), Icons.tune_rounded),
+                  ),
+                  _HelpButton(
+                    title: t('四种分析方式'),
+                    message: t('本机解析：照片只在本机分析，绝不上传。\n'
+                        '云端解析：先把分析预览图上传 Astrometry.net，用在线结果出报告。\n'
+                        '本机优先：先本机解算，解不出来才上传。\n'
+                        '云端优先：先上传拿坐标，再用本机星历补行星、彗星、矮行星和小行星。\n\n'
+                        '在线方式需要先在「API 设置」里填写 Astrometry.net Key 并授权上传。'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final mode in SkyAnalysisMode.values)
+                    ChoiceChip(
+                      label: Text(mode.label),
+                      selected: _analysisMode == mode,
+                      onSelected: mode.requiresOnline && !_onlineReady
+                          ? null
+                          : (_) => _setAnalysisMode(mode),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _analysisMode.description,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.5,
+                  color: Color(0xFFA6B5C8),
+                ),
+              ),
+              if (!_onlineReady) ...[
+                const SizedBox(height: 4),
+                Text(
+                  t('在线分析需要先在「API 设置」里填写 Astrometry.net Key 并授权上传。'),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.5,
+                    color: Color(0xFFFFDE77),
+                  ),
+                ),
+              ],
+              const Divider(height: 18),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                dense: true,
+                value: _generateAgentReport,
+                onChanged: (value) =>
+                    _setGenerateAgentReport(value ?? false),
+                title: Text(t('生成 Agent 分析报告')),
+                subtitle: Text(
+                  t('解析完成后自动让 Agent 写一份解读；默认关闭。'),
+                  style: const TextStyle(fontSize: 11.5),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
 
   /// 拍摄时间那一行。
@@ -3983,19 +4111,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 SectionTitle(t('拍摄参数'), Icons.camera_alt_outlined),
-                if (solve != null)
-                  TextButton.icon(
-                    onPressed: () => _openLegacySurvey(solve),
-                    icon: const Icon(Icons.public, size: 16),
-                    label: Text(t('浏览星空')),
-                  ),
               ],
             ),
             const SizedBox(height: 6),
             ...rows,
+            if (solve != null) ...[
+              const SizedBox(height: 10),
+              const Divider(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _openLegacySurvey(solve),
+                  icon: const Icon(Icons.travel_explore, size: 18),
+                  label: Text(t('在 Legacy Survey 中查看这片天区')),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                t('打开巡天影像，并叠加这张照片的取景框。'),
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  color: Color(0xFF8192A8),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -4043,6 +4184,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ra: solve.centerRa,
       dec: solve.centerDec,
       fieldOfViewDegrees: solve.fieldOfViewDegrees,
+      // 有 WCS 才能在巡天图上画出这张照片的取景框，而不只是钉一个中心点。
+      wcs: solve.wcs,
     );
     final messenger = ScaffoldMessenger.of(context);
     final opened = await launchUrl(
@@ -4606,6 +4749,15 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
   final _viewer = TransformationController();
   bool _exporting = false;
 
+  /// 橡皮擦是否打开。打开后点图上的圆圈或文字就把那一项临时藏起来。
+  bool _eraser = false;
+
+  /// 这一次全屏查看里擦掉的标注。只活在当前页，退出即恢复。
+  final _erased = <String>{};
+
+  /// 上一次绘制留下的可点选区域（画布坐标）。
+  List<AnnotationHitRegion> _regions = const [];
+
   @override
   void dispose() {
     _viewer.dispose();
@@ -4622,18 +4774,40 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
     }
   }
 
+  void _eraseAt(TapUpDetails details) {
+    // 后画的盖在前面，命中时也从后往前找：两段标注重叠时，擦掉用户看到的
+    // 最上面那一段。
+    for (final region in _regions.reversed) {
+      if (!region.bounds.contains(details.localPosition)) continue;
+      setState(() => _erased.add(region.id));
+      return;
+    }
+  }
+
+  void _resetEraser() => setState(_erased.clear);
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            InteractiveViewer(
-              transformationController: _viewer,
-              minScale: 1,
-              // 全屏这块比半屏大得多，能放到 12 倍：这里要看清的是单个像素
-              // 上的星点，而不是「大概在哪」。
-              maxScale: 12,
+  Widget build(BuildContext context) {
+    // 把当前擦除状态交给 painter。`erased` 每次都是新集合，但内容没变时
+    // shouldRepaint 会按元素比较，不会白重画。
+    final painter = widget.painter.copyWith(
+      erased: Set.unmodifiable(_erased),
+      onRegions: (regions) => _regions = regions,
+    );
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          InteractiveViewer(
+            transformationController: _viewer,
+            minScale: 1,
+            // 全屏这块比半屏大得多，能放到 12 倍：这里要看清的是单个像素
+            // 上的星点，而不是「大概在哪」。
+            maxScale: 12,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: _eraser ? _eraseAt : null,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -4646,40 +4820,91 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
                       gaplessPlayback: true,
                       errorBuilder: (_, __, ___) => const MissingImage(),
                     ),
-                  CustomPaint(painter: widget.painter),
+                  CustomPaint(painter: painter),
                 ],
               ),
             ),
-            Positioned(
-              left: 12,
-              top: 12,
-              child: SafeArea(child: _roundButton(
-                icon: Icons.close_fullscreen,
-                tooltip: t('退出全屏'),
-                onTap: () => Navigator.of(context).pop(),
-              )),
+          ),
+          Positioned(
+            left: 12,
+            top: 12,
+            child: SafeArea(child: _roundButton(
+              icon: Icons.close_fullscreen,
+              tooltip: t('退出全屏'),
+              onTap: () => Navigator.of(context).pop(),
+            )),
+          ),
+          Positioned(
+            right: 12,
+            top: 12,
+            child: SafeArea(
+              child: Column(
+                children: [
+                  _roundButton(
+                    icon: _exporting ? Icons.hourglass_top : Icons.ios_share,
+                    tooltip: t('导出带标注的图'),
+                    onTap: _exporting ? null : _export,
+                  ),
+                  const SizedBox(height: 10),
+                  _roundButton(
+                    icon: Icons.cleaning_services_outlined,
+                    tooltip: _eraser ? t('关闭橡皮擦') : t('橡皮擦'),
+                    active: _eraser,
+                    onTap: () => setState(() => _eraser = !_eraser),
+                  ),
+                  if (_erased.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    _roundButton(
+                      icon: Icons.restore,
+                      tooltip: t('恢复已擦除的标注'),
+                      onTap: _resetEraser,
+                    ),
+                  ],
+                ],
+              ),
             ),
+          ),
+          if (_eraser)
             Positioned(
-              right: 12,
-              top: 12,
-              child: SafeArea(child: _roundButton(
-                icon: _exporting ? Icons.hourglass_top : Icons.ios_share,
-                tooltip: t('导出带标注的图'),
-                onTap: _exporting ? null : _export,
-              )),
+              left: 16,
+              right: 16,
+              bottom: 20,
+              child: SafeArea(
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      t('点按圆圈或文字即可擦除；退出全屏后恢复原样。'),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12.5, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ],
-        ),
-      );
+        ],
+      ),
+    );
+  }
 
   Widget _roundButton({
     required IconData icon,
     required String tooltip,
     required VoidCallback? onTap,
+    bool active = false,
   }) =>
       Material(
-        color: Colors.black54,
-        shape: const CircleBorder(),
+        color: active ? kMint.withValues(alpha: 0.22) : Colors.black54,
+        shape: CircleBorder(
+          side: active
+              ? BorderSide(color: kMint.withValues(alpha: 0.8))
+              : BorderSide.none,
+        ),
         child: Tooltip(
           message: tooltip,
           child: InkWell(

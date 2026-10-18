@@ -13,7 +13,7 @@
 ![平台](https://img.shields.io/badge/platform-Android-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Flutter](https://img.shields.io/badge/Flutter-%E2%89%A53.24-02569b?style=flat-square&logo=flutter&logoColor=white)
 [![CI](https://github.com/Eddie-Duan/AstroSophy/actions/workflows/flutter-ci.yml/badge.svg)](https://github.com/Eddie-Duan/AstroSophy/actions/workflows/flutter-ci.yml)
-[![许可](https://img.shields.io/badge/license-non--commercial%20learning%20%26%20research-blue?style=flat-square)](./LICENSE)
+[![许可](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](./LICENSE)
 
 **Welcome PR. Welcome Issue.**
 
@@ -84,7 +84,7 @@ flutter test
 
 ## 许可
 
-非商业学习与研究许可，详见 [LICENSE](./LICENSE)。该许可证**不是 OSI 开源许可证**：不能上 F-Droid，也不允许分发修改版。是否迁移到 AGPL-3.0，权衡与步骤见 [docs/LICENSE-MIGRATION.md](./docs/LICENSE-MIGRATION.md)。
+GNU Affero General Public License v3.0（AGPL-3.0），详见 [LICENSE](./LICENSE)。可以自由使用、修改和分发；如果修改后通过网络向用户提供服务，需要按同一许可证公开对应源码。品牌名称与图标不在此许可范围内。
 
 ## 致谢
 

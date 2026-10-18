@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -25,6 +26,23 @@ import 'widgets.dart';
 ///
 /// 画的是**当前勾选**的那一套：用户把某一组圆圈隐去了，导出的图里就没有那
 /// 一组；深空天体、运动天体的标注同理。他看到的和拿到的是同一张图。
+/// 导出图的长边目标像素数。
+///
+/// 以前导出的是分析尺寸（最长边 1200）那张图，文字按 10–11 逻辑像素画，落到
+/// 文件里就是 10–11 个像素。用户把图存进相册、发给别人之后，字只占图宽的
+/// 不到 1%，看上去又小又糊——而在 APP 里看图时，同样一行字占了屏幕宽度的
+/// 约 2.5%，所以「APP 里好好的，保存出来就不行」。
+///
+/// 现在按长边 2400 渲染：字号同时按 [referenceDisplayWidth] 放大，保存出来
+/// 的字与 APP 里看到的大小一致，像素也够多，放大看仍然清楚。
+const _exportLongSide = 2400.0;
+
+/// APP 里看图那块的大致逻辑宽度。
+///
+/// 标注的字号（10–11）是按这个宽度设计的。用图宽除以它，就能把「屏幕上
+/// 的字」换算成「图里的字」——两者在最终画面上的相对大小因此保持一致。
+const _referenceDisplayWidth = 390.0;
+
 Future<Uint8List> renderAnnotatedPng({
   required SkyAnalysis analysis,
   required Uint8List baseImage,
@@ -46,8 +64,21 @@ Future<Uint8List> renderAnnotatedPng({
   // 相等不该是**假设**——万一对不上，标注会整体错位。
   final size = Size(analysis.width.toDouble(), analysis.height.toDouble());
 
+  // 像素倍率：让长边到 2400 左右；原本就很小的图最多放 3 倍，避免把
+  // 像素直接拉成色块。
+  final longSide = math.max(size.width, size.height);
+  final pixelRatio = (_exportLongSide / longSide).clamp(1.0, 3.0);
+  // 标注倍率：让字号回到「APP 里那块 390 逻辑像素宽的图」上的相对大小。
+  final uiScale = (size.width / _referenceDisplayWidth).clamp(1.0, 6.0);
+
+  final outputWidth = (size.width * pixelRatio).round();
+  final outputHeight = (size.height * pixelRatio).round();
+
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
+  // 先按逻辑尺寸画，再整体放大到输出像素。字号、线宽都随 [uiScale] 一起
+  // 变大，所以放大只增加清晰度，不改变构图和相对大小。
+  canvas.scale(pixelRatio);
   canvas.drawImageRect(
     image,
     Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
@@ -65,6 +96,7 @@ Future<Uint8List> renderAnnotatedPng({
     hidden: hidden,
     arcsecPerPixel: arcsecPerPixel,
     numbers: numbers,
+    uiScale: uiScale,
     // 不在导出图里画选中环：那是界面上的临时状态（「我正看着这一颗」），
     // 不是分析结论。导出的是最终成图。
     selected: null,
@@ -72,7 +104,7 @@ Future<Uint8List> renderAnnotatedPng({
   ).paint(canvas, size);
 
   final picture = recorder.endRecording();
-  final rendered = await picture.toImage(analysis.width, analysis.height);
+  final rendered = await picture.toImage(outputWidth, outputHeight);
   final data = await rendered.toByteData(format: ui.ImageByteFormat.png);
 
   image.dispose();

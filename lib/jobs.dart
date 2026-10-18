@@ -20,6 +20,8 @@ class SkyJob {
     required this.filename,
     this.moment,
     this.question = '',
+    this.mode = SkyAnalysisMode.localFirst,
+    this.generateAgentReport = false,
   });
 
   final String id;
@@ -32,6 +34,12 @@ class SkyJob {
 
   final CaptureMoment? moment;
   final String question;
+
+  /// 这一次选的分析方式。任务离开界面之后，管线仍要按用户选的那条路走。
+  final SkyAnalysisMode mode;
+
+  /// 是否在解析结束后自动生成 Agent 解读。
+  final bool generateAgentReport;
 
   PipelineProgress? progress;
   PipelineOutcome? outcome;
@@ -96,6 +104,8 @@ class JobCenter extends ChangeNotifier {
     required String filename,
     CaptureMoment? moment,
     String question = '',
+    SkyAnalysisMode mode = SkyAnalysisMode.localFirst,
+    bool generateAgentReport = false,
   }) {
     final job = SkyJob(
       id: 'job-${++_next}',
@@ -103,6 +113,8 @@ class JobCenter extends ChangeNotifier {
       filename: filename,
       moment: moment,
       question: question,
+      mode: mode,
+      generateAgentReport: generateAgentReport,
     );
     _jobs.add(job);
     notifyListeners();

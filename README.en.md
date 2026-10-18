@@ -13,7 +13,7 @@
 ![Platform](https://img.shields.io/badge/platform-Android-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Flutter](https://img.shields.io/badge/Flutter-%E2%89%A53.24-02569b?style=flat-square&logo=flutter&logoColor=white)
 [![CI](https://github.com/Eddie-Duan/AstroSophy/actions/workflows/flutter-ci.yml/badge.svg)](https://github.com/Eddie-Duan/AstroSophy/actions/workflows/flutter-ci.yml)
-[![License](https://img.shields.io/badge/license-non--commercial%20learning%20%26%20research-blue?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](./LICENSE)
 
 **Welcome PR. Welcome Issue.**
 
@@ -71,7 +71,7 @@ This is the author's first self-developed project, and the first time building a
 
 ## License
 
-Non-commercial learning and research license — see [LICENSE](./LICENSE). It is **not** an OSI-approved open-source license: F-Droid cannot host it, and modified copies cannot be redistributed. The trade-offs and migration steps are in [docs/LICENSE-MIGRATION.en.md](./docs/LICENSE-MIGRATION.en.md).
+GNU Affero General Public License v3.0 (AGPL-3.0) — see [LICENSE](./LICENSE). You may use, modify and redistribute the code; if you run a modified version as a network service, you must publish the corresponding source under the same license. The brand name and icons are not covered by this license.
 
 ## Credits
 

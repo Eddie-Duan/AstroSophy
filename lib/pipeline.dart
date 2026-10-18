@@ -16,6 +16,59 @@ import 'report.dart';
 import 'smallbodies.dart';
 import 'solver.dart';
 
+/// 一次解析用哪种分析方式。
+///
+/// 四种方式的差别只有两件事：**照片要不要出设备**，以及**解算结果从哪来**。
+/// 本机测量（星点检测、测光、画质）四种方式都会做——它不需要联网，也是
+/// 在线结果回来之后仍然要用的那部分数据。
+enum SkyAnalysisMode {
+  /// 只在本机分析、本机解算，绝不上传。
+  localOnly('local_only'),
+
+  /// 直接上传 Astrometry.net，用在线结果出报告，不再跑本机解算。
+  onlineOnly('online_only'),
+
+  /// 当前版本：先本机解算，失败且已授权才上传。
+  localFirst('local_first'),
+
+  /// 先上传拿坐标，再用本机星历补行星、彗星、矮行星和小行星。
+  onlineFirst('online_first');
+
+  const SkyAnalysisMode(this.storageKey);
+
+  /// 存进设置里的稳定标识，不跟着界面文案变。
+  final String storageKey;
+
+  static SkyAnalysisMode fromStorage(String? value) => values.firstWhere(
+        (mode) => mode.storageKey == value,
+        orElse: () => SkyAnalysisMode.localFirst,
+      );
+
+  bool get needsOnline => this != SkyAnalysisMode.localOnly;
+
+  /// 必须联网才能跑：没有 Key/授权时这两个选项在界面上是禁用的。
+  bool get requiresOnline =>
+      this == SkyAnalysisMode.onlineOnly || this == SkyAnalysisMode.onlineFirst;
+
+  String get label => switch (this) {
+        SkyAnalysisMode.localOnly => t('本机解析'),
+        SkyAnalysisMode.onlineOnly => t('云端解析'),
+        SkyAnalysisMode.localFirst => t('本机优先'),
+        SkyAnalysisMode.onlineFirst => t('云端优先'),
+      };
+
+  String get description => switch (this) {
+        SkyAnalysisMode.localOnly =>
+          t('全部在手机上完成，照片不出设备。'),
+        SkyAnalysisMode.onlineOnly =>
+          t('直接上传 Astrometry.net 解算，用在线结果生成报告。'),
+        SkyAnalysisMode.localFirst =>
+          t('先在本机解算，解不出来再上传在线服务。'),
+        SkyAnalysisMode.onlineFirst =>
+          t('先上传 Astrometry.net，再用本机算法补行星、彗星、矮行星和小行星。'),
+      };
+}
+
 /// 一键解析的进度快照。
 class PipelineProgress {
   const PipelineProgress(
@@ -120,6 +173,8 @@ class SkyPipeline {
     this.astrometryKey = '',
     this.allowUpload = false,
     this.modelSettings,
+    this.mode = SkyAnalysisMode.localFirst,
+    this.generateAgentReport = false,
   });
 
   final SkyWorker worker;
@@ -130,21 +185,50 @@ class SkyPipeline {
 
   final ModelSettings? modelSettings;
 
+  /// 用户这次选的分析方式。默认「本机优先」，和旧版本行为一致。
+  final SkyAnalysisMode mode;
+
+  /// 解析完成后是否自动让 Agent 写一份解读。默认关闭，对应界面上那个勾选。
+  final bool generateAgentReport;
+
   bool get _canUpload => allowUpload && astrometryKey.trim().isNotEmpty;
 
-  bool get _canExplain => modelSettings?.hasAnyModel ?? false;
+  /// 没有 Key/授权时，需要联网的方式退回「本机优先」，不让整次解析直接空转。
+  SkyAnalysisMode get _effectiveMode =>
+      mode.needsOnline && !_canUpload ? SkyAnalysisMode.localFirst : mode;
+
+  bool get _canExplain =>
+      generateAgentReport && (modelSettings?.hasAnyModel ?? false);
 
   /// 进度条怎么分段。
   ///
   /// 权重按「这一步通常要等多久」给，不是按步骤数平分：在线解算要排队，
   /// 动辄一两分钟，而本地分析只要一秒。平分的话进度条前半程几乎不动，
   /// 用户反而更慌。
-  List<_Stage> get _stages => [
-        _Stage(t('正在分析星图'), 20),
-        _Stage(t('正在本机解算天区'), 26),
-        if (_canUpload) _Stage(t('正在在线解算天区'), 34, online: true),
-        if (_canExplain) _Stage(t('正在生成解读'), 16),
-      ];
+  List<_Stage> get _stages => switch (_effectiveMode) {
+        SkyAnalysisMode.localOnly => [
+            _Stage(t('正在分析星图'), 30),
+            _Stage(t('正在本机解算天区'), 54),
+            if (_canExplain) _Stage(t('正在生成解读'), 16),
+          ],
+        SkyAnalysisMode.localFirst => [
+            _Stage(t('正在分析星图'), 20),
+            _Stage(t('正在本机解算天区'), 26),
+            if (_canUpload) _Stage(t('正在在线解算天区'), 34, online: true),
+            if (_canExplain) _Stage(t('正在生成解读'), 16),
+          ],
+        SkyAnalysisMode.onlineOnly => [
+            _Stage(t('正在分析星图'), 25),
+            _Stage(t('正在在线解算天区'), 55, online: true),
+            if (_canExplain) _Stage(t('正在生成解读'), 20),
+          ],
+        SkyAnalysisMode.onlineFirst => [
+            _Stage(t('正在分析星图'), 20),
+            _Stage(t('正在在线解算天区'), 42, online: true),
+            _Stage(t('正在用本机算法补全天体'), 14),
+            if (_canExplain) _Stage(t('正在生成解读'), 16),
+          ],
+      };
 
   /// 跑完整条链路。
   ///
@@ -239,88 +323,159 @@ class SkyPipeline {
       }
     }
 
-    var index = 1;
+    final effectiveMode = _effectiveMode;
+    if (mode.needsOnline && !_canUpload) {
+      warnings.add(
+        t('这次选的是「{0}」，但还没有可用的 Astrometry.net Key 或上传授权，已退回本机解算。',
+            [mode.label]),
+      );
+    }
+
+    // 进度条上的位置。四种方式的前两段顺序不同，但名字固定的那几段可以
+    // 直接按下标取：分析永远是 0，在线优先时在线是 1，本机补全是 2。
+    const localIndex = 1;
+    final onlineIndex =
+        effectiveMode == SkyAnalysisMode.localFirst ? 2 : 1;
+    const enhanceIndex = 2;
+
     final solveWatch = Stopwatch()..start();
     SolveResult? solve;
     String? onlineError;
     SolveTrace? localTrace;
-    if (moonOnly) {
-      // 用户选了只要月亮：跳过解算和上传，直接走到解读那一步。
-      index = 0;
-    } else {
-      report(index, 0, t('正在本机解算天区'));
+
+    Future<SolveResult?> runLocalSolve(
+      int progressIndex, {
+      bool fallback = false,
+    }) async {
+      report(progressIndex, 0, t('正在本机解算天区'));
       try {
         final (result, trace) = await worker.solveLocal(
           analysis,
           onProgress: (progress) =>
-              report(index, progress.fraction, progress.stage, progress.deep),
+              report(progressIndex, progress.fraction, progress.stage, progress.deep),
         );
-        solve = result;
         localTrace = trace;
+        if (result != null) {
+          // 成了。从这里开始「照片没出过手机」就是既成事实，不是承诺了。
+          solvedLocally = true;
+          report(
+            progressIndex,
+            1,
+            fallback ? t('在线没成功，已改用本机解算') : t('本机解算成功'),
+          );
+        }
+        return result;
       } catch (error) {
         warnings.add(t('本机解算未能完成：{0}', [error]));
+        return null;
       }
-      if (solve != null) {
-        // 成了。从这里开始「照片没出过手机」就是既成事实，不是承诺了。
-        solvedLocally = true;
-        report(index, 1, t('本机解算成功'));
-      }
+    }
 
-      if (solve == null && _canUpload) {
-        index++;
-        try {
-          solve = await AstrometryService.solve(
-            analysis: analysis,
-            apiKey: astrometryKey,
-            onProgress: (local, stage) => report(index, local, stage),
-          );
-        } catch (error) {
-          onlineError = '$error';
-          warnings.add(t('在线解算未能完成：{0}', [error]));
-        }
+    Future<SolveResult?> runOnlineSolve(int progressIndex) async {
+      try {
+        final result = await AstrometryService.solve(
+          analysis: analysis,
+          apiKey: astrometryKey,
+          onProgress: (local, stage) => report(progressIndex, local, stage),
+        );
         // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
         // 失败了只记一条提示，不把已经拿到手的解算结果丢掉。
+        try {
+          return await worker.decorate(result);
+        } catch (error) {
+          warnings.add(t('星座标注未能完成：{0}', [error]));
+          return result;
+        }
+      } catch (error) {
+        onlineError = '$error';
+        warnings.add(t('在线解算未能完成：{0}', [error]));
+        return null;
+      }
+    }
+
+    /// 解算结果汇合之后的「本机补充」：深空主天体选择、行星/彗星/小行星。
+    Future<SolveResult> enhance(
+      SolveResult result, {
+      required bool movingBodies,
+    }) async {
+      if (generateAgentReport) {
+        // 这一步只重排顺序，不改任何测量。做它的理由是实况逼出来的：拍昴星团
+        // 那张图里 IC 353（目录里 180′）比 M45（110′）大，按尺寸排出来的
+        // 「主体」成了 IC 353。本机只能靠手写的常用名表去近似，而「M45 还是
+        // IC 353」这种比较，正是模型知道而本机不知道的事。
+        //
+        // 它跟着「生成 Agent 报告」开关走：关掉时一次模型请求都不发。
+        result = await _pickPrimary(result, modelSettings) ?? result;
+      }
+      if (movingBodies && moment != null) {
+        // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
+        // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
+        try {
+          result = await worker.annotateMovingBodies(analysis, result, moment);
+        } catch (error) {
+          warnings.add(t('运动天体判定未能完成：{0}', [error]));
+        }
+      }
+      return result;
+    }
+
+    void addSolveFailureAdvice({required bool uploadAllowed}) {
+      // 「星点不足」这种话用户看完还是不知道该干什么，所以这里给的是能照着
+      // 做的动作：换焦段、改曝光、去设置里开在线解算。判断依据全部来自已经
+      // 量出来的结果，不猜。
+      warnings.addAll(
+        buildSolveFailureAdvice(
+          analysis,
+          uploadAllowed: uploadAllowed,
+          hasApiKey: astrometryKey.trim().isNotEmpty,
+          onlineError: onlineError,
+          attempt: localTrace,
+        ),
+      );
+      if (effectiveMode == SkyAnalysisMode.localOnly) {
+        warnings.add(
+          t('本次选择「本机解析」，照片没有上传。需要在线解算时，可以改用「本机优先」或「云端优先」。'),
+        );
+      }
+    }
+
+    if (moonOnly) {
+      // 用户选了只要月亮：跳过解算和上传，直接走到解读那一步。
+    } else if (effectiveMode == SkyAnalysisMode.onlineFirst ||
+        effectiveMode == SkyAnalysisMode.onlineOnly) {
+      final onlineFirst = effectiveMode == SkyAnalysisMode.onlineFirst;
+      solve = await runOnlineSolve(onlineIndex);
+      if (solve != null) {
+        if (onlineFirst) report(enhanceIndex, 0, t('正在用本机算法补全天体'));
+        solve = await enhance(
+          solve,
+          movingBodies: onlineFirst,
+        );
+        if (onlineFirst) report(enhanceIndex, 1, t('本机补充完成'));
+      } else if (onlineFirst) {
+        // 「在线为主」也得有下限：在线排队失败时至少把本机能算的算出来，
+        // 否则用户等了几分钟只拿到一张白纸。
+        warnings.add(t('在线解算没有成功，已改用本机解算。'));
+        solve = await runLocalSolve(enhanceIndex, fallback: true);
         if (solve != null) {
-          try {
-            solve = await worker.decorate(solve);
-          } catch (error) {
-            warnings.add(t('星座标注未能完成：{0}', [error]));
-          }
+          solve = await enhance(solve, movingBodies: true);
+          report(enhanceIndex, 1, t('本机补充完成'));
         }
       }
       if (solve == null) {
-        // 「星点不足」这种话用户看完还是不知道该干什么，所以这里给的是能照着
-        // 做的动作：换焦段、改曝光、去设置里开在线解算。判断依据全部来自已经
-        // 量出来的结果，不猜。
-        warnings.addAll(
-          buildSolveFailureAdvice(
-            analysis,
-            uploadAllowed: allowUpload,
-            hasApiKey: astrometryKey.trim().isNotEmpty,
-            onlineError: onlineError,
-            attempt: localTrace,
-          ),
-        );
+        addSolveFailureAdvice(uploadAllowed: _canUpload);
+      }
+    } else {
+      solve = await runLocalSolve(localIndex);
+      if (solve == null &&
+          effectiveMode == SkyAnalysisMode.localFirst &&
+          _canUpload) {
+        solve = await runOnlineSolve(onlineIndex);
+      }
+      if (solve == null) {
+        addSolveFailureAdvice(uploadAllowed: _canUpload);
       } else {
-        // 解开天区之后，再问模型一句「这张照片拍的是哪个深空天体」。
-        //
-        // 这一步只重排顺序，不改任何测量。做它的理由是实况逼出来的：拍昴星团
-        // 那张图里 IC 353（目录里 180′）比 M45（110′）大，按尺寸排出来的
-        // 「主体」成了 IC 353——一个没星等、没常用名、没人听说过的暗星云。
-        // 本机只能靠手写的常用名表去近似，而「M45 还是 IC 353」这种比较，正是
-        // 模型知道而本机不知道的事。
-        //
-        // 不占进度条：它是几次几十毫秒的请求，而且失败了什么都不影响。
-        solve = await _pickPrimary(solve, modelSettings) ?? solve;
-        if (moment != null) {
-          // 坐标有了才能判断行星在哪——不管这份坐标是本机算的还是在线拿的，
-          // 所以这一步放在两条解算路径汇合之后，而不是塞进本机解算里。
-          try {
-            solve = await worker.annotateMovingBodies(analysis, solve, moment);
-          } catch (error) {
-            warnings.add(t('运动天体判定未能完成：{0}', [error]));
-          }
-        }
+        solve = await enhance(solve, movingBodies: true);
       }
     }
 
@@ -328,7 +483,7 @@ class SkyPipeline {
 
     String? explanation;
     final settings = modelSettings;
-    if (settings != null && settings.hasAnyModel) {
+    if (_canExplain && settings != null) {
       // 解读永远排在最后一段。解算那几段有没有跑过都不影响这件事的位置。
       report(_stages.length - 1, 0, t('正在生成解读'));
       try {

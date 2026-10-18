@@ -77,9 +77,9 @@ For a fuller design description see [docs/TECHNICAL.md](./docs/TECHNICAL.md) (Ch
 
 ## License and contribution grant
 
-The project currently uses a [non-commercial learning and research license](./LICENSE). **By submitting a PR you agree that:** your contribution is distributed under the project's current license, and the maintainer may relicense the project as a whole in the future (for example to AGPL-3.0), with your attribution preserved.
+The project uses [AGPL-3.0](./LICENSE). **By submitting a PR you agree that:** your contribution is distributed under the same license, with your attribution preserved.
 
-If you cannot accept this, you are still welcome to file issues or submit sample photos. The relicensing discussion is in [docs/LICENSE-MIGRATION.en.md](./docs/LICENSE-MIGRATION.en.md).
+If you cannot accept this, you are still welcome to file issues or submit sample photos.
 
 ---
 
