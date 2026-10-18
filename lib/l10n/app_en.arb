@@ -42,6 +42,7 @@
   "{0} 标注.png": "{0} annotated.png",
   "{0} 角分": "{0} arcmin",
   "{0} 颗": "{0}",
+  "{0} 颗 · 点开查看星表": "{0} stars · tap to open the catalogue",
   "{0}{1}{2}，{3}": "{0}{1}{2}, {3}",
   "{0}″ / 像素": "{0}″ / pixel",
   "{0}只依据本机测量和工具结果回答，明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，也不得把仪器星等说成校准视星等。除只读查询外，保存、改名、删除、联网解算和发送图片都属于有副作用的操作；只有用户明确要求时才可申请，应用仍会在执行前单独确认。简洁使用中文，不要为了调用工具而调用工具。": "{0}Answer only from on-device measurements and tool results, and clearly separate catalogue-confirmed facts from estimates and unknowns. Never describe the visual background as SQM or a Bortle class, and never call an instrumental magnitude a calibrated visual magnitude. Apart from read-only lookups, saving, renaming, deleting, online solving and sending images all have side effects; only request them when the user explicitly asks, and the app will still confirm separately before acting. Reply concisely in English, and do not call tools just for the sake of calling them.",

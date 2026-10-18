@@ -4426,105 +4426,108 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 用 DataTable 而不是 ListTile：列表适合「挑一条点进去」，表格适合
   /// 「横着比较」。这里要做的事情是后者——哪颗最亮、哪颗离中心最近、
   /// 哪几颗是同一星座的，都需要一眼扫过整列。
+  ///
+  /// 和「亮星与测光」一样默认折叠：星表是深究时才看的，第一眼要的是
+  /// 「拍到了什么」，不是二十行赤经赤纬。
   Widget _starTableCard(SkyAnalysis analysis, SolveResult solve) {
     final rows = buildStarTable(analysis, solve);
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                SectionTitle(t('视场内的恒星'), Icons.table_chart_outlined),
-                _HelpButton(
-                  title: t('星名和星等从哪来'),
-                  message: t('星名按已匹配的目录星和解算位置标注；星等是这张照片量出来的仪器星等，减去星等零点之后才是标定值。'),
-                ),
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        leading: const Icon(Icons.table_chart_outlined, color: kMint),
+        title: Text(
+          t('视场内的恒星'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          t('{0} 颗 · 点开查看星表', [rows.length]),
+          style: const TextStyle(fontSize: 11),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columnSpacing: 18,
+              horizontalMargin: 0,
+              headingTextStyle: const TextStyle(
+                color: kMint,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+              dataTextStyle: const TextStyle(fontSize: 12),
+              columns: [
+                DataColumn(label: Text(t('星名'))),
+                DataColumn(label: Text(t('类型'))),
+                DataColumn(label: Text(t('星等'))),
+                DataColumn(label: Text(t('赤经'))),
+                DataColumn(label: Text(t('赤纬'))),
+                DataColumn(label: Text(t('图上置信度'))),
               ],
-            ),
-            const SizedBox(height: 10),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columnSpacing: 18,
-                horizontalMargin: 0,
-                headingTextStyle: const TextStyle(
-                  color: kMint,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-                dataTextStyle: const TextStyle(fontSize: 12),
-                columns: [
-                  DataColumn(label: Text(t('星名'))),
-                  DataColumn(label: Text(t('类型'))),
-                  DataColumn(label: Text(t('星等'))),
-                  DataColumn(label: Text(t('赤经'))),
-                  DataColumn(label: Text(t('赤纬'))),
-                  DataColumn(label: Text(t('图上置信度'))),
-                ],
-                rows: [
-                  for (final row in rows.take(20))
-                    DataRow(
-                      cells: [
-                        DataCell(Text(row.name)),
-                        DataCell(Text(row.category)),
-                        DataCell(Text(row.magnitude)),
-                        DataCell(Text(formatRa(row.ra))),
-                        DataCell(Text(formatDec(row.dec))),
-                        DataCell(
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                row.confidence == null
-                                    ? Icons.remove
-                                    : row.confidence! >= 0.7
-                                        ? Icons.check_circle_outline
-                                        : Icons.help_outline,
-                                size: 14,
+              rows: [
+                for (final row in rows.take(20))
+                  DataRow(
+                    cells: [
+                      DataCell(Text(row.name)),
+                      DataCell(Text(row.category)),
+                      DataCell(Text(row.magnitude)),
+                      DataCell(Text(formatRa(row.ra))),
+                      DataCell(Text(formatDec(row.dec))),
+                      DataCell(
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              row.confidence == null
+                                  ? Icons.remove
+                                  : row.confidence! >= 0.7
+                                      ? Icons.check_circle_outline
+                                      : Icons.help_outline,
+                              size: 14,
+                              color: row.confidence == null
+                                  ? const Color(0xFF8192A8)
+                                  : _confidenceColor(row.confidence!),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              row.confidence == null
+                                  ? t('未检出')
+                                  : '${(row.confidence! * 100).toStringAsFixed(0)}%',
+                              style: TextStyle(
                                 color: row.confidence == null
                                     ? const Color(0xFF8192A8)
                                     : _confidenceColor(row.confidence!),
                               ),
-                              const SizedBox(width: 4),
-                              Text(
-                                row.confidence == null
-                                    ? t('未检出')
-                                    : '${(row.confidence! * 100).toStringAsFixed(0)}%',
-                                style: TextStyle(
-                                  color: row.confidence == null
-                                      ? const Color(0xFF8192A8)
-                                      : _confidenceColor(row.confidence!),
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                ],
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+          if (rows.length > 20)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                t('共 {0} 颗，此处显示最亮的 20 颗。', [rows.length]),
+                style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
               ),
             ),
-            if (rows.length > 20)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  t('共 {0} 颗，此处显示最亮的 20 颗。', [rows.length]),
-                  style: const TextStyle(color: Color(0xFF8192A8), fontSize: 11),
-                ),
+          if (solve.catalogWarning != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                t('名称目录暂不可用：{0}', [solve.catalogWarning]),
+                style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
               ),
-            if (solve.catalogWarning != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  t('名称目录暂不可用：{0}', [solve.catalogWarning]),
-                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
-                ),
-              ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
