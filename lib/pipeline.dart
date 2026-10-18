@@ -175,6 +175,7 @@ class SkyPipeline {
     this.modelSettings,
     this.mode = SkyAnalysisMode.localFirst,
     this.generateAgentReport = false,
+    this.hint = const SolveHint(),
   });
 
   final SkyWorker worker;
@@ -190,6 +191,9 @@ class SkyPipeline {
 
   /// 解析完成后是否自动让 Agent 写一份解读。默认关闭，对应界面上那个勾选。
   final bool generateAgentReport;
+
+  /// 用户选的拍摄场景对应的视场先验。默认不限制。
+  final SolveHint hint;
 
   bool get _canUpload => allowUpload && astrometryKey.trim().isNotEmpty;
 
@@ -351,6 +355,7 @@ class SkyPipeline {
       try {
         final (result, trace) = await worker.solveLocal(
           analysis,
+          hint: hint,
           onProgress: (progress) =>
               report(progressIndex, progress.fraction, progress.stage, progress.deep),
         );
@@ -751,8 +756,9 @@ class SkyWorker {
   Future<(SolveResult?, SolveTrace)> solveLocal(
     SkyAnalysis analysis, {
     void Function(SolveProgress)? onProgress,
+    SolveHint hint = const SolveHint(),
   }) async =>
-      await _request('solve', analysis, onProgress)
+      await _request('solve', _SolveRequest(analysis, hint), onProgress)
           as (SolveResult?, SolveTrace);
 
   /// 给在线解算拿回来的结果补上星座名与连线。
@@ -807,6 +813,14 @@ class _AnalyzeRequest {
   final List<ImageExclusion> exclusions;
 }
 
+/// 一次本机解算请求：分析结果 + 用户给的视场先验。
+class _SolveRequest {
+  const _SolveRequest(this.analysis, this.hint);
+
+  final SkyAnalysis analysis;
+  final SolveHint hint;
+}
+
 /// 后台 isolate 的入口。`Isolate.spawn` 要一个顶层函数。
 Future<void> _skyWorkerMain(_WorkerBoot boot) async {
   final inbox = ReceivePort();
@@ -847,8 +861,10 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
             ),
           );
         case 'solve':
+          final request = message.payload! as _SolveRequest;
           final result = solver.solve(
-            message.payload! as SkyAnalysis,
+            request.analysis,
+            hint: request.hint,
             onProgress: (progress) => boot.reply.send(
               _WorkerReply(
                 message.id,

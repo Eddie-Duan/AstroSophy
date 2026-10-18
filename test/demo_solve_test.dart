@@ -74,6 +74,8 @@ void main() {
 
     // ignore: avoid_print
     print('M31 本机解算：首次 $coldMs ms（含深层索引懒建），预热后 $warmMs ms');
+    // ignore: avoid_print
+    print('M31 分层：${solver.lastTrace!.layers.map((layer) => '${layer.label} ${layer.elapsedMilliseconds}ms ${layer.rungMilliseconds}').join(' | ')}');
 
     expect(cold, isNotNull, reason: '冷启动那次也必须解得出来');
     expect(solve, isNotNull, reason: '稀疏天区必须靠小档星数解出来');
@@ -88,6 +90,23 @@ void main() {
       solve.deepSkyObjects.map((object) => object.name),
       contains('M 31'),
     );
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('深空场景先验收窄视场后仍然解得出 M31', () {
+    final analysis = SkyAnalysis.analyze(
+      File('assets/demo/demo_m31.jpg').readAsBytesSync(),
+    );
+    final started = DateTime.now();
+    final solve = solver.solve(
+      analysis,
+      hint: ShootingScene.deepSky.hint,
+    );
+    final elapsed = DateTime.now().difference(started).inMilliseconds;
+    // ignore: avoid_print
+    print('M31 深空先验：$elapsed ms');
+    expect(solve, isNotNull);
+    expect(solve!.centerRa, closeTo(10.6847, 1.0));
+    expect(solve.centerDec, closeTo(41.2691, 1.0));
   }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('demo_saturn 本机解算并认出画面里的土星', () {

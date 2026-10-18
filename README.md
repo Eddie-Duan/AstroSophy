@@ -84,7 +84,7 @@ flutter test
 
 ## 许可
 
-GNU Affero General Public License v3.0（AGPL-3.0），详见 [LICENSE](./LICENSE)。可以自由使用、修改和分发；如果修改后通过网络向用户提供服务，需要按同一许可证公开对应源码。品牌名称与图标不在此许可范围内。
+GNU Affero General Public License v3.0（AGPL-3.0），详见 [LICENSE](./LICENSE)。可以自由使用、修改和分发；如果修改后通过网络向用户提供服务，需要按同一许可证公开对应源码。品牌名称与图标不在此许可范围内。商业合作与双许可的结构见 [docs/LICENSING.md](./docs/LICENSING.md)。
 
 ## 致谢
 

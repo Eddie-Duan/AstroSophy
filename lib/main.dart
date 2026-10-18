@@ -32,6 +32,7 @@ import 'onboarding.dart';
 import 'pipeline.dart';
 import 'report.dart';
 import 'smallbodies.dart';
+import 'solver.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -185,6 +186,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 这次解析用哪种分析方式。默认「本机优先」，和旧版本行为一致。
   SkyAnalysisMode _analysisMode = SkyAnalysisMode.localFirst;
 
+  /// 拍摄场景，用来收窄解算的视场范围。默认不限制。
+  ShootingScene _shootingScene = ShootingScene.auto;
+
   /// 是否在解析结束后自动让 Agent 写一份解读。默认关闭。
   bool _generateAgentReport = false;
 
@@ -306,6 +310,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         modelSettings: settings,
         mode: job.mode,
         generateAgentReport: job.generateAgentReport,
+        hint: job.scene.hint,
       ).run(
         job.bytes,
         question: job.question,
@@ -407,6 +412,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       final language = await _storage.read(key: 'language');
       final mode = await _storage.read(key: 'analysisMode');
       final agentReport = await _storage.read(key: 'agentReport');
+      final scene = await _storage.read(key: 'shootingScene');
       if (!mounted) return;
       // 语言那根线是全局的，赋值本身就够——`AstroSophyApp` 挂在它上面，一变
       // 整棵树就重建。没有存过就保持默认的中文。
@@ -423,6 +429,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _astrometryKeyPresent = astrometry.trim().isNotEmpty;
         _analysisMode = selectedMode;
         _generateAgentReport = agentReport == 'true';
+        _shootingScene = ShootingScene.fromStorage(scene);
       });
     } on Exception catch (error) {
       _showError(t('无法读取设置：{0}', [error]));
@@ -446,6 +453,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     setState(() => _generateAgentReport = value);
     try {
       await _storage.write(key: 'agentReport', value: value ? 'true' : 'false');
+    } on Exception catch (error) {
+      _showError(t('无法保存设置：{0}', [error]));
+    }
+  }
+
+  /// 换拍摄场景。写进设置，下次打开还按这个来。
+  Future<void> _setShootingScene(ShootingScene scene) async {
+    if (scene == _shootingScene) return;
+    setState(() => _shootingScene = scene);
+    try {
+      await _storage.write(key: 'shootingScene', value: scene.storageKey);
     } on Exception catch (error) {
       _showError(t('无法保存设置：{0}', [error]));
     }
@@ -738,6 +756,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       question: _questionController.text,
       mode: _analysisMode,
       generateAgentReport: _generateAgentReport,
+      scene: _shootingScene,
     );
     setState(() {
       _error = null;
@@ -2084,6 +2103,48 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ),
               ],
+              const Divider(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      t('拍摄场景（可选，用来缩小搜索范围）'),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFA6B5C8),
+                      ),
+                    ),
+                  ),
+                  _HelpButton(
+                    title: t('拍摄场景怎么选'),
+                    message: t('解算默认在全天、1°–120° 的范围里找。选一个场景会把视场范围收窄到这类照片常见的大小，'
+                        '假候选少了，解算也就快了。选错只会让搜索范围不对，不会改坏照片；不确定就选「自动」。'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final scene in ShootingScene.values)
+                    ChoiceChip(
+                      label: Text(scene.label),
+                      selected: _shootingScene == scene,
+                      onSelected: (_) => _setShootingScene(scene),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _shootingScene.description,
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  height: 1.5,
+                  color: Color(0xFF8192A8),
+                ),
+              ),
               const Divider(height: 18),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,

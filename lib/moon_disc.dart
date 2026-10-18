@@ -64,7 +64,7 @@ double _asDouble(Object? value) => value is num ? value.toDouble() : 0;
 /// 量得出月面的最低门槛：亮面至少占画面这么多。
 ///
 /// 低于它的多半是路灯、窗玻璃、被照亮的墙面——一个亮团，但不是月亮。
-const double _minimumLitFraction = 0.005;
+const double _minimumLitFraction = 0.0015;
 
 /// 月面外缘至少要在最小外接圆的圆周上盖住这么多角度。
 ///
@@ -76,7 +76,7 @@ const double _minimumLitFraction = 0.005;
 /// 不用「凸包面积 / 圆的面积」来判圆整：月牙的两个尖角比一个像素还细，栅格化
 /// 之后那一截就没了，凸包因此比理论的半圆小一截（实测 k≈0.15 时是 0.42 而不是
 /// 0.5）——那是个测量伪影，不该拿来当判据。
-const double _minimumArcCoverage = 0.35;
+const double _minimumArcCoverage = 0.25;
 
 /// 外缘在圆周上盖住了多少比例的角度（0–1）。
 double _arcCoverage(List<(double, double)> boundary, _Circle disc) {
@@ -142,6 +142,17 @@ MoonDisc? measureMoonDisc({
   final level = _litLevel(gray, width, height, disc);
   if (level <= 0) return null;
   final lit = _litPixelsInside(gray, width, height, disc, level);
+
+  // 小亮斑的额外一道门：小月亮和小路灯的面积可以一样大，但**小月亮几乎不可能
+  // 是满圆**——满圆的小亮斑更可能是路灯、窗反光或失焦的光点。大亮斑不走这条，
+  // 因为满月占画面够大时本来就是满圆。
+  final litFraction = lit / frameArea;
+  final discArea = math.pi * disc.radius * disc.radius;
+  if (litFraction < _minimumLitFraction * 3 &&
+      discArea > 0 &&
+      lit / discArea > 0.92) {
+    return null;
+  }
 
   return MoonDisc(
     centerX: disc.x,

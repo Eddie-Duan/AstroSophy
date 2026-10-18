@@ -71,7 +71,7 @@ This is the author's first self-developed project, and the first time building a
 
 ## License
 
-GNU Affero General Public License v3.0 (AGPL-3.0) — see [LICENSE](./LICENSE). You may use, modify and redistribute the code; if you run a modified version as a network service, you must publish the corresponding source under the same license. The brand name and icons are not covered by this license.
+GNU Affero General Public License v3.0 (AGPL-3.0) — see [LICENSE](./LICENSE). You may use, modify and redistribute the code; if you run a modified version as a network service, you must publish the corresponding source under the same license. The brand name and icons are not covered by this license. See [docs/LICENSING.md](./docs/LICENSING.md) (Chinese) for the commercial dual-licensing structure.
 
 ## Credits
 

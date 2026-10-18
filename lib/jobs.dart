@@ -6,6 +6,7 @@ import 'strings.dart';
 import 'analysis.dart';
 import 'exif.dart';
 import 'pipeline.dart';
+import 'solver.dart';
 
 /// 一次解析任务。
 ///
@@ -22,6 +23,7 @@ class SkyJob {
     this.question = '',
     this.mode = SkyAnalysisMode.localFirst,
     this.generateAgentReport = false,
+    this.scene = ShootingScene.auto,
   });
 
   final String id;
@@ -40,6 +42,9 @@ class SkyJob {
 
   /// 是否在解析结束后自动生成 Agent 解读。
   final bool generateAgentReport;
+
+  /// 拍摄场景，用来给解算一个视场先验。
+  final ShootingScene scene;
 
   PipelineProgress? progress;
   PipelineOutcome? outcome;
@@ -106,6 +111,7 @@ class JobCenter extends ChangeNotifier {
     String question = '',
     SkyAnalysisMode mode = SkyAnalysisMode.localFirst,
     bool generateAgentReport = false,
+    ShootingScene scene = ShootingScene.auto,
   }) {
     final job = SkyJob(
       id: 'job-${++_next}',
@@ -115,6 +121,7 @@ class JobCenter extends ChangeNotifier {
       question: question,
       mode: mode,
       generateAgentReport: generateAgentReport,
+      scene: scene,
     );
     _jobs.add(job);
     notifyListeners();

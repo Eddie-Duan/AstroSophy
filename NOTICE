@@ -1,0 +1,30 @@
+AstroSophy
+==========
+
+Copyright (C) 2026 段柏旸 and contributors.
+
+Source code
+-----------
+The source code in this repository is licensed under the GNU Affero General
+Public License, version 3.0 (AGPL-3.0). The full text is in LICENSE.
+
+Brand
+-----
+The names "AstroSophy", the application icon and the
+brand visuals are trademarks of the project owner. The AGPL-3.0 does not grant
+any right to use them. You may not publish a modified version under these names
+or icons without written permission.
+
+Third-party data and services
+-----------------------------
+- Hipparcos and Gaia DR3 catalogue data: ESA missions; used with attribution.
+- Deep-sky, star-name, comet and asteroid tables: see docs/TECHNICAL.md for the
+  build sources and dates.
+- Online services (Astrometry.net, Gaia TAP, SIMBAD, model APIs): governed by
+  their own terms.
+
+Commercial licensing
+--------------------
+Closed-source commercial integration is available under a separate commercial
+license. See docs/LICENSING.md (Chinese) for the recommended structure. This is
+not legal advice.

@@ -102,6 +102,32 @@ void main() {
       // π·80² / 220² = 0.415
       expect(disc.discAreaFraction, closeTo(0.415, 0.02));
     });
+    test('小月面：只占画面 0.6% 也要认出来', () {
+      // 用户实报：月亮在 1200×900 的画面里只有 46 像素半径，亮面约 0.3%。
+      // 原来亮面门槛 0.5% 直接把它当成路灯漏掉了。门槛放宽到 0.15% 之后，
+      // 靠外缘圆弧仍然能把这块小圆盘和路灯区分开。
+      const width = 1200;
+      const height = 900;
+      const radius = 46.0;
+      const cx = 810.0;
+      const cy = 560.0;
+      final gray = Uint8List(width * height)..fillRange(0, width * height, 8);
+      for (var y = 0; y < height; y++) {
+        for (var x = 0; x < width; x++) {
+          final dx = (x - cx) / radius;
+          final dy = (y - cy) / radius;
+          if (dx * dx + dy * dy > 1) continue;
+          // k = 0.5：右半边亮。
+          if (dx >= 0) gray[y * width + x] = 245;
+        }
+      }
+      final disc = measureMoonDisc(gray: gray, width: width, height: height);
+      expect(disc, isNotNull);
+      expect(disc!.radiusPixels, closeTo(radius, 2));
+      expect(disc.centerX, closeTo(cx, 2));
+      expect(disc.centerY, closeTo(cy, 2));
+      expect(disc.illuminatedFraction, closeTo(0.5, 0.04));
+    });
   });
 
   group('不是月亮的不认', () {
