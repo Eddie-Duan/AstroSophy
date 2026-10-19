@@ -21,6 +21,7 @@ class LiveOrientationFix {
     required this.rollDegrees,
     required this.matches,
     required this.rotation,
+    required this.residual,
   });
 
   final double yawDegrees;
@@ -30,6 +31,9 @@ class LiveOrientationFix {
 
   /// 传感器帧到预览画面的旋转档位（0–3 个 90°）。
   final int rotation;
+
+  /// 匹配点的平均残差（归一化画面宽度）。越小越可信。
+  final double residual;
 }
 
 /// 实时星图的视觉辅助：在相机帧里找亮点，和当前姿态投影下来的星表比。
@@ -166,6 +170,7 @@ class LiveStarTracker {
     var bestRotation = 0;
     var bestScore = -1.0;
     var bestMatched = 0;
+    var bestResidual = 1.0;
     for (var rotation = 0; rotation < 4; rotation++) {
       final matched = _match(
         detections,
@@ -177,6 +182,7 @@ class LiveStarTracker {
         bestScore = matched.score;
         bestRotation = rotation;
         bestMatched = matched.count;
+        bestResidual = matched.residual;
       }
     }
     if (bestMatched < minimumMatches) return null;
@@ -219,6 +225,7 @@ class LiveStarTracker {
           if (matched.score > score) {
             score = matched.score;
             bestMatched = matched.count;
+            bestResidual = matched.residual;
             yaw = candidateYaw;
             pitch = candidatePitch;
             roll = candidateRoll;
@@ -233,10 +240,11 @@ class LiveStarTracker {
       rollDegrees: roll,
       matches: bestMatched,
       rotation: bestRotation,
+      residual: bestResidual,
     );
   }
 
-  static ({int count, double score}) _match(
+  static ({int count, double score, double residual}) _match(
     List<LiveStarDetection> detections,
     List<(Offset, LiveObject)> projected,
     double previewAspect,
@@ -281,6 +289,6 @@ class LiveStarTracker {
       }
     }
     final mean = count == 0 ? 1.0 : residual / count;
-    return (count: count, score: count - mean * 8);
+    return (count: count, score: count - mean * 8, residual: mean);
   }
 }

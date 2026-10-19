@@ -381,7 +381,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     setState(() {
       _orientationFix = fix;
       _matchedStars = fix.matches;
-      if (fix.matches >= 8) {
+      if (fix.matches >= 8 && fix.residual < 0.03) {
         _locked = true;
       }
     });
@@ -885,6 +885,7 @@ class LiveSkyPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    _paintHorizon(canvas, size);
     if (showConstellations) _paintConstellations(canvas, size);
     if (showStars) _paintStars(canvas, size);
     if (showDeepSky) _paintDeepSky(canvas, size);
@@ -894,8 +895,50 @@ class LiveSkyPainter extends CustomPainter {
     }
   }
 
+  /// 地平线和东南西北。实时模式里用户经常把手机举到地平线附近，
+  /// 没有这条线就分不清「星在地上还是天上」。
+  void _paintHorizon(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9
+      ..color = Colors.white.withValues(alpha: 0.16);
+    Offset? previous;
+    for (var azimuth = 0; azimuth <= 360; azimuth += 4) {
+      final radians = azimuth * math.pi / 180;
+      final point = basis.project(
+        LiveVec3(math.sin(radians), math.cos(radians), 0),
+        horizontalFovDegrees: fov,
+        viewport: size,
+        margin: 0,
+      );
+      if (point != null && previous != null) {
+        canvas.drawLine(previous, point, paint);
+      }
+      previous = point;
+    }
+    for (final (azimuth, label) in const [
+      (0.0, 'N'),
+      (90.0, 'E'),
+      (180.0, 'S'),
+      (270.0, 'W'),
+    ]) {
+      final radians = azimuth * math.pi / 180;
+      final point = basis.project(
+        LiveVec3(math.sin(radians), math.cos(radians), 0),
+        horizontalFovDegrees: fov,
+        viewport: size,
+        margin: 0,
+      );
+      if (point != null) {
+        _label(canvas, point + const Offset(4, -16), label,
+            Colors.white.withValues(alpha: 0.42));
+      }
+    }
+  }
+
   void _paintStars(Canvas canvas, Size size) {
     for (final item in stars) {
+      if (item.enu.z < 0) continue;
       final point = basis.project(
         item.enu,
         horizontalFovDegrees: fov,
@@ -935,6 +978,7 @@ class LiveSkyPainter extends CustomPainter {
         final a = starEnu[segment.a.hip];
         final b = starEnu[segment.b.hip];
         if (a == null || b == null) continue;
+        if (a.z < 0 || b.z < 0) continue;
         final pa = basis.project(a, horizontalFovDegrees: fov, viewport: size);
         final pb = basis.project(b, horizontalFovDegrees: fov, viewport: size);
         if (pa == null || pb == null) continue;
@@ -950,6 +994,7 @@ class LiveSkyPainter extends CustomPainter {
 
   void _paintDeepSky(Canvas canvas, Size size) {
     for (final item in deepSky) {
+      if (item.enu.z < 0) continue;
       final point = basis.project(
         item.enu,
         horizontalFovDegrees: fov,
@@ -979,6 +1024,7 @@ class LiveSkyPainter extends CustomPainter {
     Color color,
   ) {
     for (final item in bodies) {
+      if (item.enu.z < 0) continue;
       final point = basis.project(
         item.enu,
         horizontalFovDegrees: fov,
