@@ -32,7 +32,6 @@
 
 ### 变更
 
-- 许可证与商业合作文档补齐：[docs/LICENSING.md](./docs/LICENSING.md)（AGPL + 商业双许可、商标、合同清单）和 [NOTICE](./NOTICE)。
 
 ## [0.3.5] - 2026-10-18
 
