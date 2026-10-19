@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import 'live_sky.dart';
+import 'live_star_tracker.dart';
 import 'strings.dart';
 import 'theme.dart';
 
@@ -39,6 +41,16 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   CameraController? _camera;
   String? _cameraError;
   bool _cameraStarting = false;
+
+  /// 视觉修正后的姿态偏置。锁定时保持不变；重新锁定时清零。
+  LiveOrientationFix? _orientationFix;
+  bool _locked = false;
+  int _matchedStars = 0;
+  DateTime _lastTrackerRun = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _streaming = false;
+  double _zoom = 1;
+  double _zoomStart = 1;
+  double _maxZoom = 1;
 
   StreamSubscription<AccelerometerEvent>? _accelSub;
   StreamSubscription<MagnetometerEvent>? _magSub;
@@ -98,6 +110,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     _solarTimer?.cancel();
     _accelSub?.cancel();
     _magSub?.cancel();
+    if (_streaming) {
+      unawaited(_camera?.stopImageStream().catchError((_) {}));
+    }
     _camera?.dispose();
     super.dispose();
   }
@@ -154,8 +169,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       );
       final controller = CameraController(
         selected,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
       );
       await controller.initialize();
       if (!mounted) {
@@ -166,6 +182,14 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         _camera = controller;
         _cameraError = null;
       });
+      try {
+        final maxZoom = await controller.getMaxZoomLevel();
+        if (mounted) setState(() => _maxZoom = math.max(1.0, maxZoom));
+      } on CameraException {
+        // 变焦能力读不到就保持 1×。
+      }
+      await controller.startImageStream(_onCameraFrame);
+      _streaming = true;
     } on CameraException catch (error) {
       if (!mounted) return;
       setState(() => _cameraError = error.description ?? error.code);
@@ -289,6 +313,18 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   }
 
   LiveCameraBasis? _basis() {
+    final calibrated = _calibratedBasis();
+    if (calibrated == null) return null;
+    final fix = _orientationFix;
+    if (fix == null) return calibrated;
+    return calibrated.corrected(
+      yawDegrees: fix.yawDegrees,
+      pitchDegrees: fix.pitchDegrees,
+      rollDegrees: fix.rollDegrees,
+    );
+  }
+
+  LiveCameraBasis? _calibratedBasis() {
     final raw = LiveCameraBasis.fromSensors(
       accelerometer: _accelerometer,
       magnetometer: _magnetometer,
@@ -297,6 +333,101 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     return _headingOffset == 0
         ? raw
         : raw.rotatedAroundUp(_headingOffset);
+  }
+
+  double get _effectiveFov => (_fov / _zoom).clamp(10.0, 140.0);
+
+  double get _previewAspect {
+    final aspect = _camera?.value.aspectRatio ?? 4 / 3;
+    final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
+    final value = portrait ? 1 / aspect : aspect;
+    return value.isFinite && value > 0 ? value : 4 / 3;
+  }
+
+  Future<void> _onCameraFrame(CameraImage image) async {
+    if (!mounted || _locked || _catalog == null || image.planes.isEmpty) return;
+    final now = DateTime.now();
+    if (now.difference(_lastTrackerRun) <
+        const Duration(milliseconds: 300)) {
+      return;
+    }
+    _lastTrackerRun = now;
+    if (image.format.group != ImageFormatGroup.yuv420) return;
+    final plane = image.planes.first;
+    final detections = LiveStarTracker.detect(
+      plane.bytes,
+      image.width,
+      image.height,
+      plane.bytesPerRow,
+    );
+    if (detections.length < 4) return;
+    final base = _calibratedBasis();
+    if (base == null) return;
+    final fix = LiveStarTracker.solve(
+      detections: detections,
+      stars: _stars,
+      basis: base,
+      fieldOfViewDegrees: _effectiveFov,
+      previewAspect: _previewAspect,
+    );
+    if (fix == null || !mounted) return;
+    setState(() {
+      _orientationFix = fix;
+      _matchedStars = fix.matches;
+      if (fix.matches >= 8) {
+        _locked = true;
+      }
+    });
+    if (_locked) unawaited(_stopStreaming());
+  }
+
+  Future<void> _stopStreaming() async {
+    if (!_streaming) return;
+    _streaming = false;
+    try {
+      await _camera?.stopImageStream();
+    } on CameraException {
+      // 已经停了就算了。
+    }
+  }
+
+  Future<void> _restartTracking() async {
+    setState(() {
+      _locked = false;
+      _orientationFix = null;
+      _matchedStars = 0;
+    });
+    final controller = _camera;
+    if (controller != null && !_streaming) {
+      try {
+        await controller.startImageStream(_onCameraFrame);
+        _streaming = true;
+      } on CameraException catch (error) {
+        if (!mounted) return;
+        setState(() => _cameraError = error.description ?? error.code);
+      }
+    }
+  }
+
+  Future<void> _toggleLock() async {
+    if (_locked) {
+      await _restartTracking();
+      return;
+    }
+    setState(() => _locked = true);
+    await _stopStreaming();
+  }
+
+  Future<void> _applyZoom(double value, double maxZoom) async {
+    final controller = _camera;
+    if (controller == null) return;
+    final next = value.clamp(1.0, math.max(1.0, maxZoom)).toDouble();
+    setState(() => _zoom = next);
+    try {
+      await controller.setZoomLevel(next);
+    } on CameraException {
+      // 某些机型不支持连续变焦，叠层仍然按光学视场显示。
+    }
   }
 
   Future<void> _editLocation() async {
@@ -358,8 +489,12 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       _longitude = parsedLon;
       _hasLocation = true;
       _locationNote = null;
+      _orientationFix = null;
+      _locked = false;
+      _matchedStars = 0;
       _refreshSkyIfNeeded(force: true);
     });
+    unawaited(_restartTracking());
     await _store.write(key: 'liveLatitude', value: '$parsedLat');
     await _store.write(key: 'liveLongitude', value: '$parsedLon');
   }
@@ -426,7 +561,11 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     setState(() {
       _fov = fov;
       _headingOffset = offset;
+      _orientationFix = null;
+      _locked = false;
+      _matchedStars = 0;
     });
+    unawaited(_restartTracking());
     await _store.write(key: 'liveFov', value: '$_fov');
     await _store.write(key: 'liveHeadingOffset', value: '$_headingOffset');
   }
@@ -440,29 +579,65 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_camera != null)
-            _cameraPreview(_camera!)
-          else
-            const ColoredBox(color: Color(0xFF02040A)),
-          if (basis != null)
-            CustomPaint(
-              painter: LiveSkyPainter(
-                stars: _stars,
-                deepSky: _deepSky,
-                planets: _planets,
-                smallBodies: _smallBodies,
-                constellations: _catalog?.constellations ?? const [],
-                starEnu: _starEnu,
-                basis: basis,
-                fov: _fov,
-                showStars: layers.contains(_LiveLayer.stars),
-                showConstellations: layers.contains(_LiveLayer.constellations),
-                showDeepSky: layers.contains(_LiveLayer.deepSky),
-                showPlanets: layers.contains(_LiveLayer.planets),
-                showSmallBodies: layers.contains(_LiveLayer.smallBodies),
-                showLabels: layers.contains(_LiveLayer.labels),
+          Center(
+            child: AspectRatio(
+              aspectRatio: _previewAspect,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onScaleStart: (_) => _zoomStart = _zoom,
+                onScaleUpdate: (details) {
+                  if (details.scale == 1) return;
+                  _applyZoom(_zoomStart * details.scale, _maxZoom);
+                },
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (_camera != null)
+                      CameraPreview(_camera!)
+                    else
+                      const ColoredBox(color: Color(0xFF02040A)),
+                    if (basis != null)
+                      CustomPaint(
+                        painter: LiveSkyPainter(
+                          stars: _stars,
+                          deepSky: _deepSky,
+                          planets: _planets,
+                          smallBodies: _smallBodies,
+                          constellations: _catalog?.constellations ?? const [],
+                          starEnu: _starEnu,
+                          basis: basis,
+                          fov: _effectiveFov,
+                          showStars: layers.contains(_LiveLayer.stars),
+                          showConstellations:
+                              layers.contains(_LiveLayer.constellations),
+                          showDeepSky: layers.contains(_LiveLayer.deepSky),
+                          showPlanets: layers.contains(_LiveLayer.planets),
+                          showSmallBodies:
+                              layers.contains(_LiveLayer.smallBodies),
+                          showLabels: layers.contains(_LiveLayer.labels),
+                        ),
+                      ),
+                    if (_zoom > 1.01)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 8,
+                        child: Center(
+                          child: Text(
+                            '${_zoom.toStringAsFixed(1)}×',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.72),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
+          ),
           // 中心准星：告诉用户手机正指着哪儿。
           IgnorePointer(
             child: Center(
@@ -519,9 +694,34 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                             color: Color(0xFFA6B5C8),
                           ),
                         ),
+                        Text(
+                          _locked
+                              ? t('已锁定 {0} 颗星', [_matchedStars])
+                              : t('校准中 · 已匹配 {0} 颗', [_matchedStars]),
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: _locked
+                                ? kMint.withValues(alpha: 0.9)
+                                : const Color(0xFF8192A8),
+                          ),
+                        ),
                       ],
                     ),
                   ),
+                  _roundButton(
+                    icon: _locked ? Icons.lock : Icons.lock_open,
+                    tooltip: _locked ? t('重新锁定') : t('锁定当前姿态'),
+                    onTap: _toggleLock,
+                  ),
+                  if (_zoom > 1.01) ...[
+                    const SizedBox(width: 8),
+                    _roundButton(
+                      icon: Icons.zoom_out_map,
+                      tooltip: t('回到 1×'),
+                      onTap: () => _applyZoom(1, _maxZoom),
+                    ),
+                  ],
+                  const SizedBox(width: 8),
                   _roundButton(
                     icon: Icons.my_location,
                     tooltip: t('设置观测位置'),
@@ -601,16 +801,6 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _cameraPreview(CameraController controller) {
-    final size = MediaQuery.sizeOf(context);
-    var scale = size.aspectRatio * controller.value.aspectRatio;
-    if (scale < 1) scale = 1 / scale;
-    return Transform.scale(
-      scale: scale,
-      child: Center(child: CameraPreview(controller)),
     );
   }
 

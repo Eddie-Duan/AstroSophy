@@ -1,6 +1,8 @@
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:astrosophy/live_sky.dart';
+import 'package:astrosophy/live_star_tracker.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -11,6 +13,88 @@ void main() {
     expect(catalog.stars.length, greaterThan(1000));
     expect(catalog.constellations, isNotEmpty);
     expect(catalog.stars.first.magnitude, lessThanOrEqualTo(6.4));
+  });
+
+  test('从 Y 平面里能找到合成的亮点', () {
+    const width = 320;
+    const height = 240;
+    final y = Uint8List(width * height)..fillRange(0, width * height, 20);
+    final points = [
+      (40, 40),
+      (90, 70),
+      (150, 55),
+      (210, 90),
+      (260, 130),
+      (70, 160),
+      (130, 190),
+      (200, 170),
+      (280, 200),
+    ];
+    for (final point in points) {
+      for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
+          final value = 230 - (dx.abs() + dy.abs()) * 35;
+          y[(point.$2 + dy) * width + point.$1 + dx] = value.clamp(0, 255);
+        }
+      }
+    }
+    final detections = LiveStarTracker.detect(y, width, height, width);
+    expect(detections.length, greaterThanOrEqualTo(points.length - 1));
+  });
+
+  test('用已知星表投影生成检测，能解出零修正', () {
+    final basis = LiveCameraBasis.fromSensors(
+      accelerometer: const LiveVec3(0, 9.8, 0),
+      magnetometer: const LiveVec3(0, 0, -30),
+    )!;
+    const aspect = 0.75;
+    const fov = 60.0;
+    final viewport = const Size(1, aspect);
+    final stars = <LiveEnuObject>[];
+    for (var i = 0; i < 10; i++) {
+      final enu = LiveVec3(
+        -0.18 + i * 0.04,
+        1,
+        -0.10 + (i % 3) * 0.05,
+      ).normalized();
+      stars.add(
+        LiveEnuObject(
+          LiveObject(
+            name: 'S$i',
+            raDegrees: 0,
+            decDegrees: 0,
+            magnitude: 2.0,
+            kind: LiveObjectKind.star,
+          ),
+          enu,
+        ),
+      );
+    }
+    final detections = <LiveStarDetection>[];
+    for (final star in stars) {
+      final point = basis.project(
+        star.enu,
+        horizontalFovDegrees: fov,
+        viewport: viewport,
+        margin: 0,
+      );
+      if (point == null) continue;
+      detections.add(
+        LiveStarDetection(point.dx, point.dy / aspect, 1),
+      );
+    }
+    final fix = LiveStarTracker.solve(
+      detections: detections,
+      stars: stars,
+      basis: basis,
+      fieldOfViewDegrees: fov,
+      previewAspect: aspect,
+    );
+    expect(fix, isNotNull);
+    expect(fix!.matches, greaterThanOrEqualTo(6));
+    expect(fix.yawDegrees.abs(), lessThan(3));
+    expect(fix.pitchDegrees.abs(), lessThan(3));
+    expect(fix.rollDegrees.abs(), lessThan(3));
   });
 
   group('实时星图的坐标', () {

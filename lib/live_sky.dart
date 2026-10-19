@@ -108,21 +108,43 @@ class LiveCameraBasis {
   }
 
   /// 绕世界「上」方向转 [degrees] 度。用来做用户方位校准。
-  LiveCameraBasis rotatedAroundUp(double degrees) {
+  ///
+  /// 方位角增大是顺时针（北→东），所以绕 +up 的数学正方向要取负号。
+  LiveCameraBasis rotatedAroundUp(double degrees) =>
+      _rotatedAround(LiveVec3.up, -degrees);
+
+  /// 绕画面「右」方向转，用来修正俯仰。
+  LiveCameraBasis rotatedAroundRight(double degrees) =>
+      _rotatedAround(right, degrees);
+
+  /// 绕相机光轴转，用来修正画面滚转。
+  LiveCameraBasis rotatedAroundForward(double degrees) =>
+      _rotatedAround(forward, degrees);
+
+  LiveCameraBasis _rotatedAround(LiveVec3 axis, double degrees) {
     final radians = degrees * math.pi / 180;
     final cosA = math.cos(radians);
     final sinA = math.sin(radians);
-    LiveVec3 rotate(LiveVec3 value) => LiveVec3(
-          value.x * cosA + value.y * sinA,
-          -value.x * sinA + value.y * cosA,
-          value.z,
-        );
+    LiveVec3 rotate(LiveVec3 value) =>
+        value * cosA +
+        axis.cross(value) * sinA +
+        axis * (axis.dot(value) * (1 - cosA));
     return LiveCameraBasis(
       forward: rotate(forward).normalized(),
       up: rotate(up).normalized(),
       right: rotate(right).normalized(),
     );
   }
+
+  /// 连续应用三个小角度修正：方位、俯仰、滚转。
+  LiveCameraBasis corrected({
+    required double yawDegrees,
+    required double pitchDegrees,
+    required double rollDegrees,
+  }) =>
+      rotatedAroundUp(yawDegrees)
+          .rotatedAroundRight(pitchDegrees)
+          .rotatedAroundForward(rollDegrees);
 
   /// 把天球 ENU 方向投影到屏幕。返回 null 表示在相机背后或画面外。
   Offset? project(
