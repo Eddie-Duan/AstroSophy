@@ -73,6 +73,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   String _lastSolarMinute = '';
 
   List<LiveEnuObject> _stars = const [];
+  List<LiveEnuObject> _trackerStars = const [];
   List<LiveEnuObject> _deepSky = const [];
   List<LiveEnuObject> _planets = const [];
   List<LiveEnuObject> _smallBodies = const [];
@@ -277,6 +278,12 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       for (final item in _stars)
         if (item.object.hip != null) item.object.hip!: item.enu,
     };
+    // 视觉修正只用最亮的几百颗：再暗的星在相机帧里也不一定检得出来，
+    // 每帧都投影九千颗只会拖慢主 isolate。
+    _trackerStars = [
+      for (final item in _stars)
+        if (item.object.magnitude <= 5.0) item,
+    ];
     _deepSky = enuObjects(
       objects: catalog.deepSky,
       latitudeDegrees: _latitude,
@@ -365,7 +372,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     if (base == null) return;
     final fix = LiveStarTracker.solve(
       detections: detections,
-      stars: _stars,
+      stars: _trackerStars,
       basis: base,
       fieldOfViewDegrees: _effectiveFov,
       previewAspect: _previewAspect,
