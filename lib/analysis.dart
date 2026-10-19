@@ -207,6 +207,43 @@ class SkyAnalysis {
     ];
   }
 
+  /// 取一块子图，坐标平移到子图局部原点。
+  ///
+  /// 只用于分块解算：星点表、FWHM、背景这些测量值原样带过去，`width/height`
+  /// 换成子图尺寸。预览图不重编码，解算那边本来也不看它。
+  SkyAnalysis subRegion(int left, int top, int regionWidth, int regionHeight) {
+    final right = left + regionWidth;
+    final bottom = top + regionHeight;
+    bool inside(DetectedStar star) =>
+        star.x >= left && star.x < right && star.y >= top && star.y < bottom;
+    return SkyAnalysis(
+      width: regionWidth,
+      height: regionHeight,
+      stars: [
+        for (final star in stars)
+          if (inside(star)) star.translated(left.toDouble(), top.toDouble()),
+      ],
+      quality: quality,
+      background: background,
+      noise: noise,
+      backgroundIndex: backgroundIndex,
+      saturatedFraction: saturatedFraction,
+      diagnostics: diagnostics,
+      preview: preview,
+      processedPreview: processedPreview,
+      fwhm: fwhm,
+      nonStarFraction: nonStarFraction,
+      maskRegions: const [],
+      isLikelyStarfield: isLikelyStarfield,
+      starfieldConfidence: starfieldConfidence,
+      brightFlatFraction: brightFlatFraction,
+      solverExtras: [
+        for (final star in solverExtras)
+          if (inside(star)) star.translated(left.toDouble(), top.toDouble()),
+      ],
+    );
+  }
+
   /// 标记/取消标记某个拉长候选，返回新结果（列表本身不可变）。
   SkyAnalysis withRejection(DetectedStar target, bool rejected) => copyWith(
         stars: stars

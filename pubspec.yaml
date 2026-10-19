@@ -1,7 +1,7 @@
 name: astrosophy
 description: A local-first astronomy companion for amateur astrophotography.
 publish_to: none
-version: 0.3.6+9
+version: 0.3.7+10
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -30,6 +30,9 @@ dependencies:
   # 不用「写进某某目录然后告诉他路径」那种做法：那个目录在手机的文件管理器里
   # 一层层点进去才能找到，等于没下载。
   share_plus: ^10.1.4
+  camera: 0.11.0
+  geolocator: 13.0.2
+  sensors_plus: 6.1.0
 
 dev_dependencies:
   flutter_test:

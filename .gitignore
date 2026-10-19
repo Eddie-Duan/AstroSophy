@@ -60,5 +60,8 @@ coverage/
 # 星表构建脚本下载的原始星表，体积大且可重新获取
 tools/.cache/
 
+# 本地工作笔记，不进仓库
+EXPOSURE-REPORT.md
+
 # Flutter 工具链自动生成的 Android 源文件
 android/app/src/main/java/io/flutter/plugins/

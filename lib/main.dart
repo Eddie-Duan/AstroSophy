@@ -23,6 +23,7 @@ import 'export.dart';
 import 'history.dart';
 import 'history_screen.dart';
 import 'jobs.dart';
+import 'live_sky_screen.dart';
 import 'markdown.dart';
 import 'model.dart';
 import 'models.dart';
@@ -1666,6 +1667,16 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     }
   }
 
+  /// 打开实时星图。
+  ///
+  /// 它和「选图解析」是两条独立的入口：实时模式不读相册、不保存照片，也不
+  /// 上传任何东西；相机只是取景器，星表和解算都在本机。
+  Future<void> _openLiveSky() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const LiveSkyScreen()),
+    );
+  }
+
   /// 打开 Nox。
   ///
   /// Nox 和结果页那张「Agent 解读」卡不是一回事，两者都要留着：那张卡问的是
@@ -2038,6 +2049,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 message: t('整份 RAW 不解码，只读相机嵌在里面的那张 JPEG 预览——它足够检出星点。读不到就请在相机应用里导出 JPG/PNG。'),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _openLiveSky,
+              icon: const Icon(Icons.explore_outlined, size: 18),
+              label: Text(t('实时星图 · 举起手机认星座')),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
+            ),
           ),
         ],
       );

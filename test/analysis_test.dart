@@ -145,6 +145,37 @@ void main() {
         throwsA(isA<FormatException>()),
       );
     });
+
+    test('subRegion 把星点坐标平移到子图局部原点', () {
+      final analysis = SkyAnalysis(
+        width: 400,
+        height: 300,
+        stars: const [
+          DetectedStar(100, 80, 1000, 8, 0.9, 1.1),
+          DetectedStar(300, 250, 800, 9, 0.8, 1.2),
+        ],
+        quality: '良好',
+        background: 0.1,
+        noise: 0.02,
+        backgroundIndex: 10,
+        saturatedFraction: 0,
+        diagnostics: const [],
+        preview: Uint8List(0),
+        processedPreview: Uint8List(0),
+        fwhm: 3,
+        nonStarFraction: 0,
+        maskRegions: const [],
+        isLikelyStarfield: true,
+        starfieldConfidence: 0.8,
+        brightFlatFraction: 0,
+      );
+      final sub = analysis.subRegion(50, 40, 200, 180);
+      expect(sub.width, 200);
+      expect(sub.height, 180);
+      expect(sub.stars, hasLength(1));
+      expect(sub.stars.single.x, 50);
+      expect(sub.stars.single.y, 40);
+    });
   });
 
   test('formats right ascension as sexagesimal hours', () {

@@ -52,7 +52,9 @@ android {
 
     defaultConfig {
         applicationId = "com.astrosophy.app"
-        minSdk = flutter.minSdkVersion
+        // camera_android_camerax 要求 23；实时星图用了它。原来跟随 Flutter
+        // 默认值（21）会在清单合并时直接失败。
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

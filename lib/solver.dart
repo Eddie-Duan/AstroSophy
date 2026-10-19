@@ -107,6 +107,7 @@ class SolveHint {
     this.maxFieldDegrees = 120.0,
     this.allowDeep = true,
     this.budgetMilliseconds = 0,
+    this.patchSolve = false,
   });
 
   /// 视场对角线下限（度）。
@@ -125,6 +126,27 @@ class SolveHint {
   /// 星点上千的银河/地景照片会检出几千个候选，同一层里每个星数档都要把
   /// 验证预算跑满才能认输；选了拍摄场景之后给一个上限，避免卡几分钟。
   final int budgetMilliseconds;
+
+  /// 整幅解不出来时，是否再按 2×2 分块试一次。
+  ///
+  /// 超广角/拼接片的畸变会让整幅的三角形比例对不上；切成小块之后每块都
+  /// 更接近局部相似变换，地景也只影响其中一两块。
+  final bool patchSolve;
+
+  SolveHint copyWith({
+    double? minFieldDegrees,
+    double? maxFieldDegrees,
+    bool? allowDeep,
+    int? budgetMilliseconds,
+    bool? patchSolve,
+  }) =>
+      SolveHint(
+        minFieldDegrees: minFieldDegrees ?? this.minFieldDegrees,
+        maxFieldDegrees: maxFieldDegrees ?? this.maxFieldDegrees,
+        allowDeep: allowDeep ?? this.allowDeep,
+        budgetMilliseconds: budgetMilliseconds ?? this.budgetMilliseconds,
+        patchSolve: patchSolve ?? this.patchSolve,
+      );
 }
 
 /// 拍摄场景。只是把用户看得懂的说法翻译成 [SolveHint]，不参与任何测量。
@@ -167,6 +189,7 @@ enum ShootingScene {
             maxFieldDegrees: 120,
             allowDeep: false,
             budgetMilliseconds: 15000,
+            patchSolve: true,
           ),
         ShootingScene.deepSky => const SolveHint(
             minFieldDegrees: 2,
@@ -177,6 +200,7 @@ enum ShootingScene {
             minFieldDegrees: 0.5,
             maxFieldDegrees: 4,
             budgetMilliseconds: 20000,
+            patchSolve: true,
           ),
       };
 }
@@ -408,7 +432,12 @@ class PlateSolver {
       if (solved != null) return solved;
     }
 
-    if (!_hasDeepLayer || !hint.allowDeep) return null;
+    if (!_hasDeepLayer || !hint.allowDeep) {
+      if (hint.patchSolve) {
+        return _solvePatches(analysis, hint, onProgress);
+      }
+      return null;
+    }
     // 到了这里说明前两层都不够密。这一层的索引是本工程里最贵的一件东西，
     // 文案要让用户知道「还在跑、而且这次跑得久」，界面还会据此换一套配色
     // （见 [SolveProgress.deep]）。
@@ -427,8 +456,13 @@ class PlateSolver {
       ),
       analysis,
     );
-    if (deep == null) return null;
-    return _matchWithRungs(
+    if (deep == null) {
+      if (hint.patchSolve) {
+        return _solvePatches(analysis, hint, onProgress);
+      }
+      return null;
+    }
+    final deepResult = _matchWithRungs(
       analysis,
       deep,
       detections,
@@ -443,6 +477,107 @@ class PlateSolver {
       deep: true,
       layer: trace.startLayer(t('最深层'), catalog.stars.length),
     );
+    if (deepResult != null) return deepResult;
+    if (hint.patchSolve) {
+      return _solvePatches(analysis, hint, onProgress);
+    }
+    return null;
+  }
+
+  /// 分块解算：整幅失败后，按 2×2 带重叠的小块再试一遍。
+  ///
+  /// 只用于超广角/拼接片/地景占角的照片。每块都以自己的对角线缩放场景视场，
+  /// 解出来之后把 WCS 的 CRPIX 加回块偏移、把坐标从块局部搬回整幅。
+  SolveResult? _solvePatches(
+    SkyAnalysis analysis,
+    SolveHint hint,
+    void Function(SolveProgress progress)? onProgress,
+  ) {
+    final fullDiagonal = math.sqrt(
+      analysis.width * analysis.width + analysis.height * analysis.height,
+    );
+    final tileWidth = (analysis.width * 0.62).round().clamp(16, analysis.width);
+    final tileHeight =
+        (analysis.height * 0.62).round().clamp(16, analysis.height);
+    final xs = <int>{0, analysis.width - tileWidth}.toList();
+    final ys = <int>{0, analysis.height - tileHeight}.toList();
+    final total = xs.length * ys.length;
+    var attempted = 0;
+    for (final y in ys) {
+      for (final x in xs) {
+        attempted++;
+        onProgress?.call(
+          SolveProgress(
+            0.82,
+            t('正在分块解算 {0}/{1}', [attempted, total]),
+          ),
+        );
+        final sub = analysis.subRegion(x, y, tileWidth, tileHeight);
+        final subDiagonal = math.sqrt(
+          tileWidth * tileWidth + tileHeight * tileHeight,
+        );
+        final ratio = fullDiagonal <= 0 ? 1.0 : subDiagonal / fullDiagonal;
+        final patchHint = hint.copyWith(
+          minFieldDegrees: math.max(0.05, hint.minFieldDegrees * ratio),
+          maxFieldDegrees: math.max(0.1, hint.maxFieldDegrees * ratio),
+          budgetMilliseconds: hint.budgetMilliseconds == 0
+              ? 0
+              : math.min(hint.budgetMilliseconds, 6000),
+          patchSolve: false,
+        );
+        final patch = solve(sub, hint: patchHint);
+        final patchWcs = patch?.wcs;
+        if (patch == null || patchWcs == null) continue;
+        final fullWcs = Wcs(
+          width: analysis.width,
+          height: analysis.height,
+          crval1: patchWcs.crval1,
+          crval2: patchWcs.crval2,
+          crpix1: patchWcs.crpix1 + x,
+          crpix2: patchWcs.crpix2 + y,
+          cd11: patchWcs.cd11,
+          cd12: patchWcs.cd12,
+          cd21: patchWcs.cd21,
+          cd22: patchWcs.cd22,
+        );
+        final (centreRa, centreDec) = fullWcs.imageCenter;
+        final lifted = SolveResult(
+          centerRa: centreRa,
+          centerDec: centreDec,
+          arcsecPerPixel: fullWcs.arcsecPerPixel,
+          namedStars: [
+            for (final object in patch.namedStars)
+              object.at(object.x + x, object.y + y),
+          ],
+          deepSkyObjects: [
+            for (final object in patch.deepSkyObjects)
+              object.at(object.x + x, object.y + y),
+          ],
+          matchedStars: [
+            for (final match in patch.matchedStars)
+              GaiaMatch(
+                sourceId: match.sourceId,
+                ra: match.ra,
+                dec: match.dec,
+                x: match.x + x,
+                y: match.y + y,
+                gMagnitude: match.gMagnitude,
+              ),
+          ],
+          magnitudeZeroPoint: patch.magnitudeZeroPoint,
+          magnitudeScatter: patch.magnitudeScatter,
+          catalogWarning: patch.catalogWarning,
+          source: SolveSource.local,
+          fieldOfViewDegrees: fullWcs.fieldOfViewDegrees,
+          wcs: fullWcs,
+          rotationDegrees: _rotationDegrees(fullWcs),
+          matchedCount: patch.matchedCount,
+        );
+        // 用整幅 WCS 重新补星座、深空天体和角尺寸；块内那份名单只是一部分。
+        return decorateSolve(lifted);
+      }
+    }
+    return null;
   }
 
   /// 建索引时并不知道像面尺寸，解算前每帧都要补上——[_collectInliers] 靠它
@@ -602,6 +737,22 @@ class PlateSolver {
       onRungDone?.call(rungWatch.elapsedMilliseconds);
     }
     final imageTriangles = _imageTriangles(stars, neighbours);
+    final diagonalPixels = math.sqrt(
+      index.frameWidth * index.frameWidth +
+          index.frameHeight * index.frameHeight,
+    );
+    // 三角形最长边一般比整幅对角线短，所以这里把场景给的视场范围放宽
+    // 0.5–2 倍：只砍明显不在这个尺度上的候选，不负责精确判定。
+    final minScale = diagonalPixels > 0
+        ? (_activeHint?.minFieldDegrees ?? _minimumFieldDegrees) /
+            diagonalPixels *
+            0.5
+        : null;
+    final maxScale = diagonalPixels > 0
+        ? (_activeHint?.maxFieldDegrees ?? _maximumFieldDegrees) /
+            diagonalPixels *
+            2.0
+        : null;
     var verifications = 0;
     _Fit? best;
     outer:
@@ -619,6 +770,9 @@ class PlateSolver {
           stars[triangle.vertices.$2].instrumentalMagnitude,
           stars[triangle.vertices.$3].instrumentalMagnitude,
         ],
+        imageLongestSidePixels: triangle.longestSidePixels,
+        minScaleDegreesPerPixel: minScale,
+        maxScaleDegreesPerPixel: maxScale,
       )) {
         if (verifications >= verificationBudget) break;
         if ((verifications & 63) == 0 &&
@@ -979,6 +1133,7 @@ class PlateSolver {
                 r2: sides[1].$1 / shortest,
                 r3: r3,
                 ratioTolerance: _ratioTolerance(shortest),
+                longestSidePixels: sides[2].$1,
               ),
             );
           }
@@ -1794,6 +1949,7 @@ class _TriangleIndex {
     required this.catalog,
     required this.vertices,
     required this.r3Quantized,
+    required this.longestSideMicroDegrees,
     required this.keys,
     required this.order,
     required this.bucketStart,
@@ -1808,6 +1964,10 @@ class _TriangleIndex {
 
   /// 最长边/最短边，放大一百万倍存成整数，省内存也便于比较。
   final Int32List r3Quantized;
+
+  /// 最长边的角距（微度）。和 [r3Quantized] 一起构成「形状 + 尺度」指纹：
+  /// 形状负责找候选，尺度负责在候选进入拟合之前就把明显不对的扔掉。
+  final Int32List longestSideMicroDegrees;
 
   /// 排序键：`r2 桶号 * r3Steps + r3 桶号`。r2 桶号可以整除出来，
   /// r3 桶号是键对 r3Steps 取余，所以一个数组同时给出两级坐标。
@@ -1869,6 +2029,7 @@ class _TriangleIndex {
         catalog: catalog,
         vertices: Int32List(0),
         r3Quantized: Int32List(0),
+        longestSideMicroDegrees: Int32List(0),
         keys: Int32List(0),
         order: Int32List(0),
         bucketStart: Int32List(bucketCount + 1),
@@ -1906,6 +2067,7 @@ class _TriangleIndex {
     final tripleKeys = Int32List(capacity);
     final tripleR3 = Int32List(capacity);
     final tripleR3Bucket = Int32List(capacity);
+    final tripleLongest = Int32List(capacity);
     var count = 0;
 
     // 建索引是纯 CPU 的同步活儿，最深那层要几十秒。进度条在这段时间里一动
@@ -1992,6 +2154,7 @@ class _TriangleIndex {
             tripleKeys[count] = _bucketOf(middle / shortest);
             tripleR3[count] = (r3 * 1000000).round();
             tripleR3Bucket[count] = _r3BucketOf(r3);
+            tripleLongest[count] = (longest * 1000000).round();
             count++;
           }
         }
@@ -2028,6 +2191,7 @@ class _TriangleIndex {
       // 这两个数组是按下界开好的，比实际用的长——`triangleCount` 才是准数。
       vertices: tripleVertices,
       r3Quantized: tripleR3,
+      longestSideMicroDegrees: tripleLongest,
       keys: keys,
       order: order,
       bucketStart: bucketStart,
@@ -2084,7 +2248,24 @@ class _TriangleIndex {
     required double ratioTolerance,
     required int limit,
     List<double>? vertexMagnitudes,
+    double? imageLongestSidePixels,
+    double? minScaleDegreesPerPixel,
+    double? maxScaleDegreesPerPixel,
   }) sync* {
+    final hasScale =
+        imageLongestSidePixels != null &&
+        imageLongestSidePixels > 0 &&
+        minScaleDegreesPerPixel != null &&
+        maxScaleDegreesPerPixel != null;
+    final imageSide = imageLongestSidePixels;
+    final minScale = minScaleDegreesPerPixel;
+    final maxScale = maxScaleDegreesPerPixel;
+    bool scaleFits(int triangle) {
+      if (!hasScale) return true;
+      final scale =
+          longestSideMicroDegrees[triangle] / 1000000 / imageSide!;
+      return scale >= minScale! && scale <= maxScale!;
+    }
     final middle = _bucketOf(r2);
     final lowest = _bucketOf(r2 - ratioTolerance);
     final highest = _bucketOf(r2 + ratioTolerance);
@@ -2126,10 +2307,12 @@ class _TriangleIndex {
             if (i < lowIndex || i >= highIndex) continue;
             final triangle = order[i];
             if ((r3Quantized[triangle] - r3Scaled).abs() > tolerance) continue;
+            if (!scaleFits(triangle)) continue;
             if (preferred == null) {
               final at = triangle * 3;
               yield _CatalogTriangle(
                 (vertices[at], vertices[at + 1], vertices[at + 2]),
+                longestSideMicroDegrees[triangle] / 1000000,
               );
               if (++produced >= limit) return;
               continue;
@@ -2148,9 +2331,11 @@ class _TriangleIndex {
 
     for (final list in [preferred, fallback!]) {
       for (final triangle in list) {
+        if (!scaleFits(triangle)) continue;
         final at = triangle * 3;
         yield _CatalogTriangle(
           (vertices[at], vertices[at + 1], vertices[at + 2]),
+          longestSideMicroDegrees[triangle] / 1000000,
         );
         if (++produced >= limit) return;
       }
@@ -2384,18 +2569,24 @@ class _ImageTriangle {
     required this.r2,
     required this.r3,
     required this.ratioTolerance,
+    required this.longestSidePixels,
   });
 
   final (int, int, int) vertices;
   final double r2;
   final double r3;
   final double ratioTolerance;
+
+  /// 最长边在图像上的像素长度；配合目录端最长边的角距，就是这一对三角形的
+  /// 像素比例尺。用它可以在做 12 次拟合之前就把尺度明显不对的候选扔掉。
+  final double longestSidePixels;
 }
 
 class _CatalogTriangle {
-  const _CatalogTriangle(this.vertices);
+  const _CatalogTriangle(this.vertices, this.longestSideDegrees);
 
   final (int, int, int) vertices;
+  final double longestSideDegrees;
 }
 
 /// 极简复数。用复平面表示相似变换能让公式短一大截。

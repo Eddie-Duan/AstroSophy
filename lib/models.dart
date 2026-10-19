@@ -67,6 +67,21 @@ class DetectedStar {
         isRejected: isRejected ?? this.isRejected,
       );
 
+  /// 平移到子图的局部坐标。分块解算要把一整块像素区域当成一张独立小图，
+  /// 星点坐标必须跟着原点一起挪，否则解出来的 WCS 会整体偏一个块偏移。
+  DetectedStar translated(double dx, double dy) => DetectedStar(
+        x - dx,
+        y - dy,
+        flux,
+        instrumentalMagnitude,
+        confidence,
+        axisRatio,
+        fwhm: fwhm,
+        fluxError: fluxError,
+        orientation: orientation,
+        isRejected: isRejected,
+      );
+
   Map<String, Object?> toJson() => {
         'x': x,
         'y': y,
