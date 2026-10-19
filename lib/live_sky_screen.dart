@@ -453,7 +453,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 decimal: true,
                 signed: true,
               ),
-              decoration: const InputDecoration(labelText: 'Latitude'),
+              decoration: InputDecoration(labelText: t('纬度')),
             ),
             TextField(
               controller: lon,
@@ -461,7 +461,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 decimal: true,
                 signed: true,
               ),
-              decoration: const InputDecoration(labelText: 'Longitude'),
+              decoration: InputDecoration(labelText: t('经度')),
             ),
             const SizedBox(height: 8),
             Text(
@@ -471,6 +471,14 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
           ],
         ),
         actions: [
+          TextButton.icon(
+            onPressed: () {
+              Navigator.pop(context, false);
+              _initLocation();
+            },
+            icon: const Icon(Icons.my_location, size: 16),
+            label: Text(t('读取当前位置')),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: Text(t('取消')),

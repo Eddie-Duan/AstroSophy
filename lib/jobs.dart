@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'strings.dart';
 import 'analysis.dart';
 import 'exif.dart';
+import 'models.dart';
 import 'pipeline.dart';
 import 'solver.dart';
 
@@ -166,7 +167,14 @@ class JobCenter extends ChangeNotifier {
         (analysis) async => await job.askMoon?.call(analysis) ?? false,
       );
       job.outcome = outcome;
-      job.progress = PipelineProgress(1, t('解析完成'));
+      job.progress = PipelineProgress(
+        1,
+        t('解析完成'),
+        solvedLocally: outcome.solve?.source == SolveSource.local,
+        online: outcome.solve?.source == SolveSource.online,
+        moon: outcome.analysis.isMoonShot,
+        moonOnly: outcome.moonOnly,
+      );
       // 没人在看的时候替用户存下来。
       //
       // 「保存并退出」的承诺就是「结果不会丢」——不存的话，用户回来只看到

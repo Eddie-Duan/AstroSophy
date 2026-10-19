@@ -169,7 +169,7 @@ enum ShootingScene {
         ShootingScene.auto => t('自动'),
         ShootingScene.wide => t('广域'),
         ShootingScene.deepSky => t('深空'),
-        ShootingScene.narrow => t('窄视场'),
+        ShootingScene.narrow => t('长焦'),
       };
 
   String get description => switch (this) {
@@ -177,9 +177,9 @@ enum ShootingScene {
         ShootingScene.wide =>
           t('银河、星座、手机广角：约 8°–120°，跳过最深层，通常最快。'),
         ShootingScene.deepSky =>
-          t('星云、星系等中长焦目标：约 2°–15°，大幅减少假候选。'),
+          t('星云、星系等深空目标：约 2°–15°，大幅减少假候选。'),
         ShootingScene.narrow =>
-          t('望远镜或智能望远镜：约 0.5°–4°，必要时仍会用最深层。'),
+          t('小目标、望远镜或智能望远镜：约 0.5°–8°，必要时仍会用最深层。'),
       };
 
   SolveHint get hint => switch (this) {
@@ -198,7 +198,7 @@ enum ShootingScene {
           ),
         ShootingScene.narrow => const SolveHint(
             minFieldDegrees: 0.5,
-            maxFieldDegrees: 4,
+            maxFieldDegrees: 8,
             budgetMilliseconds: 20000,
             patchSolve: true,
           ),

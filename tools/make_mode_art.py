@@ -1,0 +1,134 @@
+"""生成解析方式/拍摄场景的四宫格背景图（开发期一次性素材）。
+
+用法：python tools/make_mode_art.py
+令牌从 .env.recraft 读取，不写进仓库。生成 512×512 的 JPEG，压缩到适合
+二百来逻辑像素的卡片。
+"""
+
+import io
+import json
+import os
+import urllib.error
+import urllib.request
+
+from PIL import Image
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "assets", "ui")
+API = "https://external.api.recraft.ai/v1/images/generations"
+SIZE = 1024
+
+PALETTE = (
+    "deep navy #0B1626 background filling the canvas, mint green #64D9BD, "
+    "pale aqua #A7E8DA, warm amber #F0B96B, soft white #E8F1F5"
+)
+NO_TEXT = (
+    "absolutely no text, no letters, no numbers, no words, no UI labels, "
+    "no watermark, no logo, no border"
+)
+NEGATIVE = (
+    "text, letters, numbers, words, typography, labels, watermark, signature, "
+    "logo, border, frame, photograph, realistic photo, white background, "
+    "bright background"
+)
+
+ART = {
+    "analysis_local": (
+        "flat vector illustration, a smartphone with a plain glowing screen "
+        "showing only a few dots and constellation lines, a small shield icon "
+        "beside it, a few four-pointed stars, offline and private, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "analysis_online": (
+        "flat vector illustration, a smartphone sending a thin light beam up to a "
+        "small cloud with a satellite dish, stars in the background, plain screen, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "analysis_local_first": (
+        "flat vector illustration, a smartphone in front with a small cloud behind it, "
+        "a short arrow from phone to cloud, stars, plain screen, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "analysis_online_first": (
+        "flat vector illustration, a small cloud with a satellite dish in front, a "
+        "smartphone behind it, a short arrow from cloud to phone, stars, plain screen, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "scene_auto": (
+        "flat vector illustration, a compass rose merged with a small constellation, "
+        "a phone tilted at the sky, neutral and automatic, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "scene_wide": (
+        "flat vector illustration, a wide Milky Way arch over a low horizon, a tiny "
+        "phone silhouette pointing up, wide angle feeling, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "scene_medium": (
+        "flat vector illustration, a colorful nebula and a spiral galaxy inside a "
+        "telescope view circle, medium field, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "scene_long": (
+        "flat vector illustration, a small distant galaxy and a ringed planet inside a "
+        "long telescope view circle, narrow field, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+}
+
+
+def token():
+    path = os.path.join(ROOT, ".env.recraft")
+    with io.open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("RECRAFT_API_TOKEN="):
+                value = line.split("=", 1)[1].strip()
+                if value:
+                    return value
+    raise SystemExit("没有在 .env.recraft 里找到 RECRAFT_API_TOKEN")
+
+
+def generate(name, prompt, key):
+    payload = {
+        "prompt": prompt,
+        "style": "digital_illustration",
+        "model": "recraftv3",
+        "size": f"{SIZE}x{SIZE}",
+        "n": 1,
+        "response_format": "url",
+        "negative_prompt": NEGATIVE,
+    }
+    request = urllib.request.Request(
+        API,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")
+        raise SystemExit("Recraft HTTP %d for %s: %s" % (error.code, name, detail[:500]))
+    url = data["data"][0]["url"]
+    with urllib.request.urlopen(url, timeout=180) as response:
+        raw = response.read()
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    image = image.resize((SIZE, SIZE), Image.LANCZOS)
+    path = os.path.join(OUT, name + ".jpg")
+    image.save(path, "JPEG", quality=86, optimize=True)
+    print("%-24s %8d bytes" % (name, os.path.getsize(path)))
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    key = token()
+    for name, prompt in ART.items():
+        generate(name, prompt, key)
+
+
+if __name__ == "__main__":
+    main()

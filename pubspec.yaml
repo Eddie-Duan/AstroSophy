@@ -1,7 +1,7 @@
 name: astrosophy
 description: A local-first astronomy companion for amateur astrophotography.
 publish_to: none
-version: 0.4.0+11
+version: 0.4.1+12
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -54,6 +54,8 @@ flutter:
     - assets/brand/astrosophy_onboarding_result.png
     - assets/brand/astrosophy_onboarding_keep.png
     - assets/brand/astrosophy_onboarding_language.png
+    # 解析方式/拍摄场景四宫格的背景图（tools/make_mode_art.py 生成）。
+    - assets/ui/
     # 内置亮星目录，由 tools/build_catalog.py 离线生成，供本机解算使用。
     - assets/catalog/stars.json
     - assets/catalog/names.json

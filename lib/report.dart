@@ -1141,17 +1141,19 @@ String legacySurveyUrl({
   required double dec,
   required double fieldOfViewDegrees,
   Wcs? wcs,
+  String layer = 'ls-dr10',
+  int minZoom = 4,
 }) {
   final zoom = fieldOfViewDegrees > 0
       ? (math.log(1.40625 * 700 / fieldOfViewDegrees) / math.ln2)
           .round()
-          .clamp(2, 16)
+          .clamp(minZoom, 16)
       : 9;
   final buffer = StringBuffer('https://www.legacysurvey.org/viewer'
       '?ra=${ra.toStringAsFixed(5)}'
       '&dec=${dec.toStringAsFixed(5)}'
       '&zoom=$zoom'
-      '&layer=ls-dr10'
+      '&layer=$layer'
       '&mark=${ra.toStringAsFixed(5)},${dec.toStringAsFixed(5)}');
   if (wcs != null && wcs.width > 0 && wcs.height > 0) {
     final corners = [

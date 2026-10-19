@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:astrosophy/analysis.dart';
 import 'package:astrosophy/exif.dart';
 import 'package:astrosophy/jobs.dart';
+import 'package:astrosophy/models.dart';
 import 'package:astrosophy/pipeline.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -71,6 +72,40 @@ void main() {
       expect(job.outcome, isNotNull);
       expect(job.fraction, 1);
       expect(job.stage, '解析完成');
+    });
+
+    test('本机解算成功后最终进度仍带红色标记', () async {
+      // 任务收尾时会覆盖成「解析完成」；以前这一步把 solvedLocally 丢了，
+      // 进度条最后又变回薄荷绿。这里钉住收尾也要带着来源。
+      final center = JobCenter(
+        runPipeline: (job, onProgress, onMoon) async => PipelineOutcome(
+          analysis: analysisOf(),
+          solve: const SolveResult(
+            centerRa: 10,
+            centerDec: 20,
+            arcsecPerPixel: 2,
+            namedStars: [],
+            deepSkyObjects: [],
+            matchedStars: [],
+            magnitudeZeroPoint: null,
+            magnitudeScatter: null,
+            catalogWarning: null,
+            source: SolveSource.local,
+          ),
+          explanation: null,
+          warnings: const [],
+        ),
+        archive: (job, outcome) async => null,
+      );
+
+      final job = center.start(bytes: Uint8List(0), filename: 'IMG_local.jpg');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(job.progress, isNotNull);
+      expect(job.progress!.solvedLocally, isTrue);
+      expect(job.progress!.online, isFalse);
     });
 
     test('界面还看着的时候不自动存——用户手上握着保存按钮', () async {

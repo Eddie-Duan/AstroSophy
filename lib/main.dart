@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as imglib;
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1363,18 +1365,31 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ),
       );
     }
+    final hasResult = _analysis != null;
     return Column(
       children: [
         SizedBox(
           width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: _run,
-            icon: const Icon(Icons.auto_awesome),
-            label: Text(_analysis == null ? t('一键解析') : t('重新解析')),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-          ),
+          child: hasResult
+              ? OutlinedButton.icon(
+                  onPressed: _run,
+                  icon: const Icon(Icons.refresh, size: 17),
+                  label: Text(
+                    t('重新解析'),
+                    style: const TextStyle(fontSize: 13.5),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                )
+              : FilledButton.icon(
+                  onPressed: _run,
+                  icon: const Icon(Icons.auto_awesome),
+                  label: Text(t('一键解析')),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                ),
         ),
         const SizedBox(height: 8),
         _actionRow(analysis: _analysis),
@@ -2065,24 +2080,53 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         ],
       );
 
-  /// 分析方式 + Agent 报告开关。
+  /// 解析方式 + 拍摄场景 + Agent 报告开关。
   ///
-  /// 放在拍摄时间下面、一键解析上面：这是用户在按下按钮之前最后要做的两个
-  /// 决定，而且都只影响**这一次**解析。四种方式的差别写成一句话贴在选择下面，
-  /// 不塞进帮助弹窗——「照片会不会出设备」不该藏在问号后面。
-  Widget _analysisModeCard() => Card(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  /// 两段都默认折叠，标题行直接写「已选什么」；展开后是 2×2 的图卡。
+  /// 这样结果页上它只占两行，不会把「重新解析」挤成主角。
+  Widget _analysisModeCard() {
+    final compact = _analysis != null;
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          ExpansionTile(
+            key: ValueKey('mode-section-${compact ? 'result' : 'pick'}'),
+            initiallyExpanded: !compact,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+            childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            leading: const Icon(Icons.tune_rounded, color: kMint),
+            title: Text(
+              '${t('解析方式')} · ${_analysisMode.label}',
+              style: TextStyle(
+                fontSize: compact ? 14 : 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Text(
+              _analysisMode.description,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11),
+            ),
             children: [
               Row(
                 children: [
                   Expanded(
-                    child: SectionTitle(t('分析方式'), Icons.tune_rounded),
+                    child: Text(
+                      t('照片是否出设备、用不用在线服务，都由这一项决定。'),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF8192A8),
+                        height: 1.4,
+                      ),
+                    ),
                   ),
                   _HelpButton(
-                    title: t('四种分析方式'),
+                    title: t('四种解析方式'),
                     message: t('本机解析：照片只在本机分析，绝不上传。\n'
                         '云端解析：先把分析预览图上传 Astrometry.net，用在线结果出报告。\n'
                         '本机优先：先本机解算，解不出来才上传。\n'
@@ -2092,33 +2136,27 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final mode in SkyAnalysisMode.values)
-                    ChoiceChip(
-                      label: Text(mode.label),
-                      selected: _analysisMode == mode,
-                      onSelected: mode.requiresOnline && !_onlineReady
-                          ? null
-                          : (_) => _setAnalysisMode(mode),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _analysisMode.description,
-                style: const TextStyle(
-                  fontSize: 12,
-                  height: 1.5,
-                  color: Color(0xFFA6B5C8),
-                ),
-              ),
+              _optionGrid([
+                for (final mode in SkyAnalysisMode.values)
+                  _optionTile(
+                    label: mode.label,
+                    asset: switch (mode) {
+                      SkyAnalysisMode.localOnly => 'assets/ui/analysis_local.jpg',
+                      SkyAnalysisMode.onlineOnly => 'assets/ui/analysis_online.jpg',
+                      SkyAnalysisMode.localFirst =>
+                        'assets/ui/analysis_local_first.jpg',
+                      SkyAnalysisMode.onlineFirst =>
+                        'assets/ui/analysis_online_first.jpg',
+                    },
+                    selected: _analysisMode == mode,
+                    enabled: !(mode.requiresOnline && !_onlineReady),
+                    onTap: () => _setAnalysisMode(mode),
+                  ),
+              ]),
               if (!_onlineReady) ...[
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Text(
-                  t('在线分析需要先在「API 设置」里填写 Astrometry.net Key 并授权上传。'),
+                  t('在线解析需要先在「API 设置」里填写 Astrometry.net Key 并授权上传。'),
                   style: const TextStyle(
                     fontSize: 11.5,
                     height: 1.5,
@@ -2126,16 +2164,40 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ),
               ],
-              const Divider(height: 18),
+            ],
+          ),
+          const Divider(height: 1),
+          ExpansionTile(
+            key: ValueKey('scene-section-${compact ? 'result' : 'pick'}'),
+            initiallyExpanded: false,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+            childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            leading: const Icon(Icons.photo_size_select_small, color: kMint),
+            title: Text(
+              '${t('拍摄场景')} · ${_shootingScene.label}',
+              style: TextStyle(
+                fontSize: compact ? 14 : 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Text(
+              _shootingScene.description,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11),
+            ),
+            children: [
               Row(
                 children: [
                   Expanded(
                     child: Text(
-                      t('拍摄场景（可选，用来缩小搜索范围）'),
+                      t('用来收窄解算的视场范围；不确定就选「自动」。'),
                       style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFFA6B5C8),
+                        fontSize: 11,
+                        color: Color(0xFF8192A8),
+                        height: 1.4,
                       ),
                     ),
                   ),
@@ -2146,43 +2208,137 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
+              const SizedBox(height: 8),
+              _optionGrid([
+                for (final scene in ShootingScene.values)
+                  _optionTile(
+                    label: scene.label,
+                    asset: switch (scene) {
+                      ShootingScene.auto => 'assets/ui/scene_auto.jpg',
+                      ShootingScene.wide => 'assets/ui/scene_wide.jpg',
+                      ShootingScene.deepSky => 'assets/ui/scene_medium.jpg',
+                      ShootingScene.narrow => 'assets/ui/scene_long.jpg',
+                    },
+                    selected: _shootingScene == scene,
+                    onTap: () => _setShootingScene(scene),
+                  ),
+              ]),
+            ],
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 8, 0),
+            child: CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              dense: true,
+              value: _generateAgentReport,
+              onChanged: (value) => _setGenerateAgentReport(value ?? false),
+              title: Text(
+                t('生成 Agent 分析报告'),
+                style: TextStyle(fontSize: compact ? 13 : 14),
+              ),
+              subtitle: Text(
+                t('解析完成后自动让 Agent 写一份解读。'),
+                style: const TextStyle(fontSize: 11.5),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 2×2 的选项网格。四项正好两行，不会因为宽度变化挤成一行。
+  Widget _optionGrid(List<Widget> tiles) {
+    final rows = <Widget>[];
+    for (var i = 0; i < tiles.length; i += 2) {
+      if (i > 0) rows.add(const SizedBox(height: 8));
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: tiles[i]),
+            const SizedBox(width: 8),
+            Expanded(
+              child: i + 1 < tiles.length ? tiles[i + 1] : const SizedBox(),
+            ),
+          ],
+        ),
+      );
+    }
+    return Column(children: rows);
+  }
+
+  Widget _optionTile({
+    required String label,
+    required String asset,
+    required bool selected,
+    required VoidCallback onTap,
+    bool enabled = true,
+  }) =>
+      Opacity(
+        opacity: enabled ? 1 : 0.45,
+        child: AspectRatio(
+          aspectRatio: 1.55,
+          child: Material(
+            color: const Color(0xFF101C2E),
+            borderRadius: BorderRadius.circular(14),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: enabled ? onTap : null,
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  for (final scene in ShootingScene.values)
-                    ChoiceChip(
-                      label: Text(scene.label),
-                      selected: _shootingScene == scene,
-                      onSelected: (_) => _setShootingScene(scene),
+                  Image.asset(
+                    asset,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        const ColoredBox(color: Color(0xFF16263D)),
+                  ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x22000000), Color(0xDD050A12)],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 9,
+                    right: 9,
+                    bottom: 8,
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+                      ),
+                    ),
+                  ),
+                  if (selected)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: const BoxDecoration(
+                          color: kMint,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.check,
+                          size: 14,
+                          color: Color(0xFF061018),
+                        ),
+                      ),
                     ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                _shootingScene.description,
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  height: 1.5,
-                  color: Color(0xFF8192A8),
-                ),
-              ),
-              const Divider(height: 18),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                dense: true,
-                value: _generateAgentReport,
-                onChanged: (value) =>
-                    _setGenerateAgentReport(value ?? false),
-                title: Text(t('生成 Agent 分析报告')),
-                subtitle: Text(
-                  t('解析完成后自动让 Agent 写一份解读；默认关闭。'),
-                  style: const TextStyle(fontSize: 11.5),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       );
@@ -4264,14 +4420,40 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   }
 
   Future<void> _openLegacySurvey(SolveResult solve) async {
+    // Legacy Survey 没有覆盖全天。M31 这类天区在 DR10 里就是一片黑，直接
+    // 打开只会看到「奇怪的背景」。先取一张 128 像素小图看有没有真的像素，
+    // 没有就退到 SDSS，再没有就退到全天覆盖的 unWISE 红外。
+    var layer = 'ls-dr10';
+    var fallbackNote = false;
+    for (final candidate in const ['ls-dr10', 'sdss', 'unwise-neo7']) {
+      if (await _legacyLayerHasPixels(solve.centerRa, solve.centerDec, candidate)) {
+        layer = candidate;
+        fallbackNote = candidate != 'ls-dr10';
+        break;
+      }
+    }
     final url = legacySurveyUrl(
       ra: solve.centerRa,
       dec: solve.centerDec,
       fieldOfViewDegrees: solve.fieldOfViewDegrees,
       // 有 WCS 才能在巡天图上画出这张照片的取景框，而不只是钉一个中心点。
       wcs: solve.wcs,
+      layer: layer,
+      minZoom: 5,
     );
+    if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
+    if (fallbackNote) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            layer == 'sdss'
+                ? t('Legacy Survey 在这片天区没有光学覆盖，已改用 SDSS。')
+                : t('Legacy Survey / SDSS 在这片天区没有覆盖，已改用全天覆盖的 unWISE 红外图。'),
+          ),
+        ),
+      );
+    }
     final opened = await launchUrl(
       Uri.parse(url),
       mode: LaunchMode.externalApplication,
@@ -4280,6 +4462,41 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       messenger.showSnackBar(
         SnackBar(content: Text(t('未能打开浏览器。链接：{0}', [url]))),
       );
+    }
+  }
+
+  /// 用 128 像素 cutout 判断某个巡天图层在天区里到底有没有像素。
+  ///
+  /// Legacy Survey 的 viewer 对没有覆盖的天区仍然返回一张纯黑 JPEG，所以不能
+  /// 只看 HTTP 200；必须解出图来量一下最亮值。
+  Future<bool> _legacyLayerHasPixels(
+    double ra,
+    double dec,
+    String layer,
+  ) async {
+    try {
+      final uri = Uri.parse(
+        'https://www.legacysurvey.org/viewer/jpeg-cutout'
+        '?ra=${ra.toStringAsFixed(5)}&dec=${dec.toStringAsFixed(5)}'
+        '&layer=$layer&size=128',
+      );
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 4));
+      if (response.statusCode != 200) return false;
+      final image = imglib.decodeImage(response.bodyBytes);
+      if (image == null) return false;
+      var maxLuma = 0.0;
+      for (var y = 0; y < image.height; y += 4) {
+        for (var x = 0; x < image.width; x += 4) {
+          final pixel = image.getPixel(x, y);
+          final luma =
+              0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b;
+          if (luma > maxLuma) maxLuma = luma;
+        }
+      }
+      return maxLuma > 12;
+    } on Exception {
+      return false;
     }
   }
 
@@ -5478,7 +5695,7 @@ class _SettingsFormState extends State<SettingsForm> {
                 onChanged: (value) => setState(() => _allowUpload = value ?? false),
                 title: Text(t('允许在必要时把图片上传至 Astrometry.net')),
                 subtitle: Text(
-                  t('默认关闭，本机解算失败才会用到；\n请登录Astrometry.net获取APIKey。'),
+                  t('请登录Astrometry.net获取APIKey。'),
                   style: const TextStyle(fontSize: 12, color: Color(0xFFA6B5C8)),
                 ),
               ),
