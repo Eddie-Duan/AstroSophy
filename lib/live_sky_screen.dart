@@ -40,6 +40,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   };
   bool _solveMode = true;
   bool _chartMode = true;
+  LiveCameraBasis? _freeBasis;
+  double _panYaw = 0;
+  double _panPitch = 0;
   LiveSkyVisibility _visibility = LiveSkyVisibility.auto;
   double _starLimit = 5.0;
   double _deepSkyLimit = 8.0;
@@ -379,6 +382,16 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   }
 
   LiveCameraBasis? _basis() {
+    if (!_solveMode) {
+      // 巡天模式：冻结进入时的那套姿态，不再读 IMU；手指拖动只改 yaw/pitch。
+      final frozen = _freeBasis;
+      if (frozen == null) return _calibratedBasis();
+      return frozen.corrected(
+        yawDegrees: _panYaw,
+        pitchDegrees: _panPitch,
+        rollDegrees: 0,
+      );
+    }
     final calibrated = _calibratedBasis();
     if (calibrated == null) return null;
     final fix = _orientationFix;
@@ -525,8 +538,12 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
 
   Future<void> _setSolveMode(bool value) async {
     if (value == _solveMode) return;
+    final frozen = value ? null : _basis();
     setState(() {
       _solveMode = value;
+      _freeBasis = frozen;
+      _panYaw = 0;
+      _panPitch = 0;
       if (!value) {
         _locked = false;
         _orientationFix = null;
@@ -1047,6 +1064,20 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 behavior: HitTestBehavior.opaque,
                 onScaleStart: (_) => _zoomStart = _zoom,
                 onScaleUpdate: (details) {
+                  // 巡天模式：单指拖动星图，不再跟随手机角度。
+                  if (!_solveMode && details.pointerCount == 1) {
+                    final width =
+                        math.max(1.0, MediaQuery.sizeOf(context).width);
+                    final degPerPixel = _effectiveFov / width;
+                    setState(() {
+                      _panYaw = (_panYaw -
+                              details.focalPointDelta.dx * degPerPixel)
+                          .clamp(-180.0, 180.0);
+                      _panPitch = (_panPitch +
+                              details.focalPointDelta.dy * degPerPixel)
+                          .clamp(-85.0, 85.0);
+                    });
+                  }
                   if (details.scale == 1) return;
                   _applyZoom(_zoomStart * details.scale, _maxZoom);
                 },

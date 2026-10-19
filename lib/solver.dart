@@ -108,6 +108,7 @@ class SolveHint {
     this.allowDeep = true,
     this.budgetMilliseconds = 0,
     this.patchSolve = false,
+    this.skipShallow = false,
   });
 
   /// 视场对角线下限（度）。
@@ -133,12 +134,19 @@ class SolveHint {
   /// 更接近局部相似变换，地景也只影响其中一两块。
   final bool patchSolve;
 
+  /// 是否跳过浅层，直接从中间层开始。
+  ///
+  /// 长焦/智能望远镜的视场里，浅层四万颗星往往一颗都进不了画面；先跑一遍
+  /// 只是白等，还会把预算花在注定失败的候选上。
+  final bool skipShallow;
+
   SolveHint copyWith({
     double? minFieldDegrees,
     double? maxFieldDegrees,
     bool? allowDeep,
     int? budgetMilliseconds,
     bool? patchSolve,
+    bool? skipShallow,
   }) =>
       SolveHint(
         minFieldDegrees: minFieldDegrees ?? this.minFieldDegrees,
@@ -146,6 +154,7 @@ class SolveHint {
         allowDeep: allowDeep ?? this.allowDeep,
         budgetMilliseconds: budgetMilliseconds ?? this.budgetMilliseconds,
         patchSolve: patchSolve ?? this.patchSolve,
+        skipShallow: skipShallow ?? this.skipShallow,
       );
 }
 
@@ -173,13 +182,10 @@ enum ShootingScene {
       };
 
   String get description => switch (this) {
-        ShootingScene.auto => t('不限制视场，最稳但最慢。'),
-        ShootingScene.wide =>
-          t('银河、星座、手机广角：约 8°–120°，跳过最深层，通常最快。'),
-        ShootingScene.deepSky =>
-          t('星云、星系等深空目标：约 2°–15°，大幅减少假候选。'),
-        ShootingScene.narrow =>
-          t('小目标、望远镜或智能望远镜：约 0.5°–8°，必要时仍会用最深层。'),
+        ShootingScene.auto => t('不限视场，最稳但最慢。'),
+        ShootingScene.wide => t('银河、星座、手机广角。'),
+        ShootingScene.deepSky => t('多数星云、星系。'),
+        ShootingScene.narrow => t('小目标、长焦望远镜。'),
       };
 
   SolveHint get hint => switch (this) {
@@ -201,6 +207,7 @@ enum ShootingScene {
             maxFieldDegrees: 8,
             budgetMilliseconds: 20000,
             patchSolve: true,
+            skipShallow: true,
           ),
       };
 }
@@ -344,6 +351,9 @@ class PlateSolver {
   ///
   /// 三层，从浅到深，前一层解出来就不碰后一层：
   ///
+  /// 长焦（[ShootingScene.narrow]）会用 [SolveHint.skipShallow] 直接从第二层
+  /// 开始：那个视场里浅层四万颗星通常一颗都进不了画面。
+  ///
   /// 1. **主星表**（Hipparcos，V ≤ 8，四万颗）。索引一秒上下，宽视场照片
   ///    基本都在这一层出结果。
   /// 2. **主星表 + Gaia 里 G ≤ [StarCatalog.gaiaMidMagLimit] 的那批**。窄视场
@@ -377,27 +387,28 @@ class PlateSolver {
     if (detections.length < _minimumDetections) return null;
 
     onProgress?.call(SolveProgress(0.05, t('正在准备离线解算索引')));
-    final index = _index;
-    if (index.triangleCount == 0) return null;
-    // 索引是跨帧复用的，像面尺寸每帧都可能不同，所以每次解算都更新。
-    index.frameWidth = analysis.width.toDouble();
-    index.frameHeight = analysis.height.toDouble();
-
-    final shallow = _matchWithRungs(
-      analysis,
-      index,
-      detections,
-      rungs: _imageStarRungs,
-      neighbours: neighbours,
-      candidatesPerTriangle: _candidatesPerTriangle,
-      verificationBudget: _verificationBudget,
-      budgetMilliseconds: hint.budgetMilliseconds,
-      progressBase: 0.25,
-      progressSpan: 0.35,
-      onProgress: onProgress,
-      layer: trace.startLayer(t('浅层'), _shallowPool.length),
-    );
-    if (shallow != null) return shallow;
+    if (!hint.skipShallow) {
+      final index = _index;
+      if (index.triangleCount == 0) return null;
+      // 索引是跨帧复用的，像面尺寸每帧都可能不同，所以每次解算都更新。
+      index.frameWidth = analysis.width.toDouble();
+      index.frameHeight = analysis.height.toDouble();
+      final shallow = _matchWithRungs(
+        analysis,
+        index,
+        detections,
+        rungs: _imageStarRungs,
+        neighbours: neighbours,
+        candidatesPerTriangle: _candidatesPerTriangle,
+        verificationBudget: _verificationBudget,
+        budgetMilliseconds: hint.budgetMilliseconds,
+        progressBase: 0.25,
+        progressSpan: 0.35,
+        onProgress: onProgress,
+        layer: trace.startLayer(t('浅层'), _shallowPool.length),
+      );
+      if (shallow != null) return shallow;
+    }
 
     // 浅层星表里这半天区根本没有几颗星，再往下就是唯一的路。
     if (_hasMidLayer) {

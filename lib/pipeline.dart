@@ -58,14 +58,10 @@ enum SkyAnalysisMode {
       };
 
   String get description => switch (this) {
-        SkyAnalysisMode.localOnly =>
-          t('全部在手机上完成，照片不出设备。'),
-        SkyAnalysisMode.onlineOnly =>
-          t('直接上传 Astrometry.net 解算，用在线结果生成报告。'),
-        SkyAnalysisMode.localFirst =>
-          t('先在本机解算，解不出来再上传在线服务。'),
-        SkyAnalysisMode.onlineFirst =>
-          t('先上传 Astrometry.net，再用本机算法补行星、彗星、矮行星和小行星。'),
+        SkyAnalysisMode.localOnly => t('全程本机，照片不出设备。'),
+        SkyAnalysisMode.onlineOnly => t('上传云端解算，用在线结果。'),
+        SkyAnalysisMode.localFirst => t('先本机，失败再上云端。'),
+        SkyAnalysisMode.onlineFirst => t('先云端定位，本机补天体。'),
       };
 }
 
@@ -322,7 +318,7 @@ class SkyPipeline {
           ),
         );
         warnings.add(
-          t('这次只报告月亮：月盘、亮面占比，以及按拍摄时刻算出来的相名。想在这张图里找别的天体，重新解析时选「继续寻找其他天体」。'),
+          t('这次只报告月亮：月盘、亮面占比，以及按拍摄时刻算出来的相名。想在这张图里找别的天体，重新解析时选「另觅星踪」。'),
         );
       }
     }

@@ -2,6 +2,15 @@
 
 版本号取自 [`pubspec.yaml`](./pubspec.yaml) 的 `version`，对应的 Git 标签是 `v<版本名>`。推送标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建 release APK 并发布到 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases)。
 
+## [0.4.3] - 2026-10-19
+
+### 变更
+
+- **巡天真正自由浏览**：进入巡天后冻结当前姿态，不再读 IMU；单指拖动星图、双指缩放，不受手机角度影响。切回解算时恢复 IMU 与星点匹配。
+- **长焦跳过浅层**：长焦场景直接用中间层（Gaia G<9）开始，失败再进最深层；分块解算也继承这条规则。
+- **Legacy Survey 兜底图层**：没有 DR10 光学覆盖时切到 **unWISE W1/W2 NEO11**（`unwise-neo11`），不再经过 SDSS / NEO7。
+- **按钮与注释瘦身**：月面岔路口改为「此间唯月 / 另觅星踪」；解析方式和拍摄场景的 8 条注释压到 15 字内；全屏橡皮擦提示改成「点按标注，临时擦除。」
+
 ## [0.4.2] - 2026-10-19
 
 ### 新增

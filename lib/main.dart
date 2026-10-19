@@ -1445,14 +1445,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               Expanded(
                 child: FilledButton(
                   onPressed: () => _answerMoon(false),
-                  child: Text(t('直接报告月亮')),
+                  child: Text(t('此间唯月')),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => _answerMoon(true),
-                  child: Text(t('继续寻找其他天体')),
+                  child: Text(t('另觅星踪')),
                 ),
               ),
             ],
@@ -4423,16 +4423,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   Future<void> _openLegacySurvey(SolveResult solve) async {
     // Legacy Survey 没有覆盖全天。M31 这类天区在 DR10 里就是一片黑，直接
-    // 打开只会看到「奇怪的背景」。先取一张 128 像素小图看有没有真的像素，
-    // 没有就退到 SDSS，再没有就退到全天覆盖的 unWISE 红外。
+    // 打开只会看到「奇怪的背景」。先取一张 128 像素小图看有没有真的像素；
+    // 没有就切到全天覆盖的 unWISE W1/W2 NEO11 红外图层。
     var layer = 'ls-dr10';
     var fallbackNote = false;
-    for (final candidate in const ['ls-dr10', 'sdss', 'unwise-neo7']) {
-      if (await _legacyLayerHasPixels(solve.centerRa, solve.centerDec, candidate)) {
-        layer = candidate;
-        fallbackNote = candidate != 'ls-dr10';
-        break;
-      }
+    if (!await _legacyLayerHasPixels(
+      solve.centerRa,
+      solve.centerDec,
+      layer,
+    )) {
+      layer = 'unwise-neo11';
+      fallbackNote = true;
     }
     final url = legacySurveyUrl(
       ra: solve.centerRa,
@@ -4449,9 +4450,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            layer == 'sdss'
-                ? t('Legacy Survey 在这片天区没有光学覆盖，已改用 SDSS。')
-                : t('Legacy Survey / SDSS 在这片天区没有覆盖，已改用全天覆盖的 unWISE 红外图。'),
+            t('Legacy Survey 没有光学覆盖，已切到 unWISE W1/W2 NEO11 红外图层。'),
           ),
         ),
       );
@@ -5185,7 +5184,7 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      t('点按圆圈或文字即可擦除；退出全屏后恢复原样。'),
+                      t('点按标注，临时擦除。'),
                       textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 12.5, color: Colors.white),
                     ),
