@@ -13,8 +13,7 @@ import 'orbit.dart';
 /// （加天顶镜的折射镜是镜像的，牛顿式是旋转的），单张图答不了这个问题。时刻
 /// 能答。
 class MoonPhase {
-  const MoonPhase({
-    required this.illuminatedFraction,
+  const MoonPhase({    required this.illuminatedFraction,
     required this.waxing,
   });
 
@@ -111,6 +110,83 @@ MoonPhase moonPhaseAt(DateTime moment) {
     // 平角距从 0° 走到 180° 是「新月到满月」，也就是盈。
     waxing: elongation < 180,
   );
+}
+
+/// 月球的地心赤道坐标（度）。实时星图只需要把月亮画在正确的大致位置，
+/// 用 Meeus 第 47 章的简化项，误差约 0.2°–0.4°，对广角叠层足够。
+class MoonPosition {
+  const MoonPosition(this.raDegrees, this.decDegrees);
+
+  final double raDegrees;
+  final double decDegrees;
+}
+
+MoonPosition moonPositionAt(DateTime moment) {
+  final t = julianCenturies(julianDay(moment));
+  final lp = _wrapDegrees(218.3164477 +
+      481267.88123421 * t -
+      0.0015786 * t * t +
+      t * t * t / 538841 -
+      t * t * t * t / 65194000);
+  final d = _wrapDegrees(297.8501921 +
+      445267.1114034 * t -
+      0.0018819 * t * t +
+      t * t * t / 545868 -
+      t * t * t * t / 113065000);
+  final m = _wrapDegrees(357.5291092 +
+      35999.0502909 * t -
+      0.0001536 * t * t +
+      t * t * t / 24490000);
+  final mp = _wrapDegrees(134.9633964 +
+      477198.8675055 * t +
+      0.0087414 * t * t +
+      t * t * t / 69699 -
+      t * t * t * t / 14712000);
+  final f = _wrapDegrees(93.2720950 +
+      483202.0175233 * t -
+      0.0036539 * t * t -
+      t * t * t / 3526000 +
+      t * t * t * t / 863310000);
+
+  final longitude = lp +
+      6.289 * _sinDegrees(mp) +
+      1.274 * _sinDegrees(2 * d - mp) +
+      0.658 * _sinDegrees(2 * d) +
+      0.214 * _sinDegrees(2 * mp) -
+      0.186 * _sinDegrees(m) -
+      0.114 * _sinDegrees(2 * f) +
+      0.059 * _sinDegrees(2 * d - 2 * mp) +
+      0.057 * _sinDegrees(2 * d - m - mp) +
+      0.053 * _sinDegrees(2 * d + mp) +
+      0.046 * _sinDegrees(2 * d - m) +
+      0.041 * _sinDegrees(m - mp) -
+      0.035 * _sinDegrees(d) -
+      0.031 * _sinDegrees(m + mp) -
+      0.015 * _sinDegrees(2 * f - 2 * d) +
+      0.011 * _sinDegrees(2 * d - 4 * mp);
+  final latitude = 5.128 * _sinDegrees(f) +
+      0.281 * _sinDegrees(mp + f) +
+      0.278 * _sinDegrees(mp - f) +
+      0.173 * _sinDegrees(2 * d - f) +
+      0.055 * _sinDegrees(2 * d - mp + f) +
+      0.046 * _sinDegrees(2 * d - mp - f) +
+      0.033 * _sinDegrees(2 * d + f) +
+      0.017 * _sinDegrees(2 * mp + f);
+
+  final lambda = longitude * math.pi / 180;
+  final beta = latitude * math.pi / 180;
+  final epsilon = obliquityJ2000 * math.pi / 180;
+  final x = math.cos(beta) * math.cos(lambda);
+  final y = math.cos(beta) * math.sin(lambda);
+  final z = math.sin(beta);
+  final ra = math.atan2(
+    y * math.cos(epsilon) - z * math.sin(epsilon),
+    x,
+  );
+  final dec = math.asin(
+    y * math.sin(epsilon) + z * math.cos(epsilon),
+  );
+  return MoonPosition(_wrapDegrees(ra * 180 / math.pi), dec * 180 / math.pi);
 }
 
 double _sinDegrees(double degrees) => math.sin(degrees * math.pi / 180);

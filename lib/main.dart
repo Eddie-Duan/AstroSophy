@@ -1787,6 +1787,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     required VoidCallback onPressed,
     required String tooltip,
     required IconData icon,
+    Widget? iconOverride,
     Color? color,
   }) =>
       IconButton(
@@ -1796,7 +1797,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         padding: EdgeInsets.zero,
         visualDensity: VisualDensity.compact,
         constraints: const BoxConstraints(minWidth: 40, minHeight: 44),
-        icon: Icon(icon, color: color),
+        icon: iconOverride ?? Icon(icon, color: color),
       );
 
   @override
@@ -1814,6 +1815,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             // 只有它是主色：另外几个是「去某个地方」的入口，而这一个是
             // 「叫个人过来」。颜色是同一条信息，不必再用文字说一遍。
             icon: noxIcon,
+            iconOverride: const NoxMoonIcon(size: 22),
             color: kMint,
           ),
           _topBarAction(
@@ -5357,11 +5359,15 @@ class _TopBarHint extends StatelessWidget {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(
-                              entry.icon,
-                              size: 17,
-                              color: entry.accent ? kMint : const Color(0xFF8192A8),
-                            ),
+                            entry.icon == noxIcon
+                                ? const NoxMoonIcon(size: 17)
+                                : Icon(
+                                    entry.icon,
+                                    size: 17,
+                                    color: entry.accent
+                                        ? kMint
+                                        : const Color(0xFF8192A8),
+                                  ),
                             const SizedBox(width: 9),
                             Expanded(
                               child: Column(

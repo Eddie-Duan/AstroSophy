@@ -13,6 +13,13 @@ void main() {
     expect(catalog.stars.length, greaterThan(1000));
     expect(catalog.constellations, isNotEmpty);
     expect(catalog.stars.first.magnitude, lessThanOrEqualTo(6.4));
+    final solar = catalog.solarSystemAt(DateTime.utc(2026, 10, 19, 12));
+    final moon = solar.where((body) => body.kind == LiveObjectKind.moon);
+    expect(solar.any((body) => body.kind == LiveObjectKind.sun), isTrue);
+    expect(moon, hasLength(1));
+    expect(moon.first.note, isNotNull);
+    expect(moon.first.raDegrees, inInclusiveRange(0, 360));
+    expect(moon.first.decDegrees.abs(), lessThanOrEqualTo(90));
   });
 
   test('从 Y 平面里能找到合成的亮点', () {
@@ -65,6 +72,7 @@ void main() {
             decDegrees: 0,
             magnitude: 2.0,
             kind: LiveObjectKind.star,
+            hip: i,
           ),
           enu,
         ),
@@ -92,9 +100,26 @@ void main() {
     );
     expect(fix, isNotNull);
     expect(fix!.matches, greaterThanOrEqualTo(6));
+    expect(fix.matchedHips, isNotEmpty);
     expect(fix.yawDegrees.abs(), lessThan(3));
     expect(fix.pitchDegrees.abs(), lessThan(3));
     expect(fix.rollDegrees.abs(), lessThan(3));
+  });
+
+  test('自动观测条件按太阳高度和月光决定极限星等', () {
+    double limit(double sun, double moon, double phase) =>
+        LiveSkyVisibility.autoLimit(
+          sunAltitude: sun,
+          moonAltitude: moon,
+          moonPhase: phase,
+          hasLocation: true,
+        );
+    expect(limit(10, 0, 0), 1.5);
+    expect(limit(-3, 0, 0), 2.5);
+    expect(limit(-8, 0, 0), 4.0);
+    expect(limit(-15, 0, 0), 5.0);
+    expect(limit(-25, 40, 0.8), 4.5);
+    expect(limit(-25, -10, 0.8), 6.0);
   });
 
   group('实时星图的坐标', () {

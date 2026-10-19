@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'strings.dart';
@@ -13,12 +15,76 @@ import 'theme.dart';
 /// 时不必先想「我在跟哪个功能说话」。
 const noxName = 'Nox';
 
-/// 图标：一个月牙。
+/// 旧图标常量：只在没有自定义绘制的兜底处使用。
 ///
-/// 和进度条上那个认出月面的标记是同一个形状，但那是有意的——它出现在这里
-/// 代表的是「夜里的那个助手」，而且月牙是这个 APP 里唯一一个既在天上、
-/// 又不属于任何一张照片的符号：它不偏向星场，也不偏向月亮。
+/// 实际显示用 [NoxMoonIcon]：白银色月牙 + 偏黄月面 + 两个褐色环形山。
 const noxIcon = Icons.nightlight_round;
+
+/// Nox 的实际图标：一枚有环形山的月亮，而不是系统自带的那弯细月牙。
+///
+/// 轮廓仍是圆的，白银色月牙占左侧，剩下偏黄的部分在右侧，两个褐色斑点
+/// 当环形山。尺寸很小（16–42 px）时也要能看出「这是月亮」。
+class NoxMoonIcon extends StatelessWidget {
+  const NoxMoonIcon({super.key, this.size = 22});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+        size: Size.square(size),
+        painter: const _NoxMoonPainter(),
+      );
+}
+
+class _NoxMoonPainter extends CustomPainter {
+  const _NoxMoonPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.shortestSide * 0.44;
+    final disc = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    canvas.save();
+    canvas.clipPath(disc);
+
+    // 底：偏黄的月面。
+    canvas.drawCircle(center, radius, Paint()..color = const Color(0xFFF2C14E));
+
+    // 白银色月牙：一个偏移的圆盖住左侧大部分，右侧留出黄色月牙。
+    final silverCenter = center.translate(radius * 0.28, -radius * 0.10);
+    canvas.drawCircle(
+      silverCenter,
+      radius * 1.02,
+      Paint()..color = const Color(0xFFE8EEF5),
+    );
+
+    // 两个褐色环形山，落在右侧偏黄的月面上。
+    final craterPaint = Paint()..color = const Color(0xFF8A6A45);
+    canvas.drawCircle(
+      center.translate(radius * 0.62, radius * 0.05),
+      radius * 0.09,
+      craterPaint,
+    );
+    canvas.drawCircle(
+      center.translate(radius * 0.52, radius * 0.38),
+      radius * 0.13,
+      craterPaint,
+    );
+    canvas.restore();
+
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = math.max(0.8, radius * 0.08)
+        ..color = const Color(0xCC9FB3CE),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _NoxMoonPainter oldDelegate) => false;
+}
 
 /// Nox 要「熟悉」的东西：这个应用是什么、会什么、数据在哪儿。
 ///
@@ -183,7 +249,7 @@ class _NoxScreenState extends State<NoxScreen> {
         appBar: AppBar(
           title: const Row(
             children: [
-              Icon(noxIcon, size: 20, color: kMint),
+              NoxMoonIcon(size: 20),
               SizedBox(width: 8),
               Text(noxName),
             ],
@@ -238,7 +304,7 @@ class _NoxScreenState extends State<NoxScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(noxIcon, size: 42, color: kMint),
+              const NoxMoonIcon(size: 42),
               const SizedBox(height: 14),
               Text(
                 t('我是 {0}，这个应用里的助手。', [noxName]),
@@ -273,7 +339,7 @@ class _NoxScreenState extends State<NoxScreen> {
             if (!turn.fromUser)
               const Padding(
                 padding: EdgeInsets.only(top: 2, right: 8),
-                child: Icon(noxIcon, size: 16, color: kMint),
+                child: NoxMoonIcon(size: 16),
               ),
             Expanded(
               child: turn.fromUser
@@ -303,7 +369,7 @@ class _NoxScreenState extends State<NoxScreen> {
           children: [
             Padding(
               padding: EdgeInsets.only(right: 8),
-              child: Icon(noxIcon, size: 16, color: kMint),
+              child: NoxMoonIcon(size: 16),
             ),
             Text('……', style: TextStyle(color: Color(0xFFA6B5C8))),
           ],

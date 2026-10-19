@@ -22,6 +22,7 @@ class LiveOrientationFix {
     required this.matches,
     required this.rotation,
     required this.residual,
+    required this.matchedHips,
   });
 
   final double yawDegrees;
@@ -34,6 +35,9 @@ class LiveOrientationFix {
 
   /// 匹配点的平均残差（归一化画面宽度）。越小越可信。
   final double residual;
+
+  /// 这一轮真正对上的星表 HIP 编号；锁定后只跟踪这几颗。
+  final Set<int> matchedHips;
 }
 
 /// 实时星图的视觉辅助：在相机帧里找亮点，和当前姿态投影下来的星表比。
@@ -150,12 +154,14 @@ class LiveStarTracker {
     required double fieldOfViewDegrees,
     required double previewAspect,
     int minimumMatches = 6,
+    int? rotation,
+    double magnitudeLimit = 6.4,
   }) {
     if (detections.length < 3 || stars.isEmpty) return null;
     final viewport = Size(1, previewAspect);
     final projected = <(Offset, LiveObject)>[];
     for (final star in stars) {
-      if (star.object.magnitude > 5.0) continue;
+      if (star.object.magnitude > magnitudeLimit) continue;
       final point = basis.project(
         star.enu,
         horizontalFovDegrees: fieldOfViewDegrees,
@@ -171,18 +177,22 @@ class LiveStarTracker {
     var bestScore = -1.0;
     var bestMatched = 0;
     var bestResidual = 1.0;
-    for (var rotation = 0; rotation < 4; rotation++) {
+    var bestHips = <int>{};
+    for (final rotationIndex in rotation == null
+        ? const [0, 1, 2, 3]
+        : [rotation]) {
       final matched = _match(
         detections,
         projected,
         previewAspect,
-        rotation,
+        rotationIndex,
       );
       if (matched.score > bestScore) {
         bestScore = matched.score;
-        bestRotation = rotation;
+        bestRotation = rotationIndex;
         bestMatched = matched.count;
         bestResidual = matched.residual;
+        bestHips = matched.hips;
       }
     }
     if (bestMatched < minimumMatches) return null;
@@ -206,7 +216,7 @@ class LiveStarTracker {
           );
           final candidateProjected = <(Offset, LiveObject)>[];
           for (final star in stars) {
-            if (star.object.magnitude > 5.0) continue;
+            if (star.object.magnitude > magnitudeLimit) continue;
             final point = candidateBasis.project(
               star.enu,
               horizontalFovDegrees: fieldOfViewDegrees,
@@ -226,6 +236,7 @@ class LiveStarTracker {
             score = matched.score;
             bestMatched = matched.count;
             bestResidual = matched.residual;
+            bestHips = matched.hips;
             yaw = candidateYaw;
             pitch = candidatePitch;
             roll = candidateRoll;
@@ -241,10 +252,11 @@ class LiveStarTracker {
       matches: bestMatched,
       rotation: bestRotation,
       residual: bestResidual,
+      matchedHips: bestHips,
     );
   }
 
-  static ({int count, double score, double residual}) _match(
+  static ({int count, double score, double residual, Set<int> hips}) _match(
     List<LiveStarDetection> detections,
     List<(Offset, LiveObject)> projected,
     double previewAspect,
@@ -271,6 +283,7 @@ class LiveStarTracker {
     var count = 0;
     var residual = 0.0;
     final used = <int>{};
+    final hips = <int>{};
     for (final detection in transformed) {
       var bestDistance = tolerance;
       var bestIndex = -1;
@@ -286,9 +299,11 @@ class LiveStarTracker {
         used.add(bestIndex);
         count++;
         residual += bestDistance;
+        final hip = projected[bestIndex].$2.hip;
+        if (hip != null) hips.add(hip);
       }
     }
     final mean = count == 0 ? 1.0 : residual / count;
-    return (count: count, score: count - mean * 8, residual: mean);
+    return (count: count, score: count - mean * 8, residual: mean, hips: hips);
   }
 }

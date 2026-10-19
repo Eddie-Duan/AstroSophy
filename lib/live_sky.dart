@@ -5,6 +5,7 @@ import 'dart:ui';
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'ephemeris.dart';
+import 'moon.dart';
 import 'smallbodies.dart';
 import 'strings.dart';
 
@@ -190,6 +191,7 @@ class LiveObject {
     required this.kind,
     this.sizeArcmin,
     this.hip,
+    this.note,
   });
 
   final String name;
@@ -200,6 +202,9 @@ class LiveObject {
   final double? sizeArcmin;
   final int? hip;
 
+  /// 附加说明，例如月亮的「凸月 68%」。
+  final String? note;
+
   LiveObject copyWithName(String name) => LiveObject(
         name: name,
         raDegrees: raDegrees,
@@ -208,10 +213,11 @@ class LiveObject {
         kind: kind,
         sizeArcmin: sizeArcmin,
         hip: hip,
+        note: note,
       );
 }
 
-enum LiveObjectKind { star, deepSky, planet, smallBody }
+enum LiveObjectKind { star, deepSky, planet, smallBody, sun, moon }
 
 /// 一条星座连线。
 class LiveConstellationSegment {
@@ -348,7 +354,28 @@ class LiveCatalog {
   List<LiveObject> solarSystemAt(DateTime utc) {
     final bodies = <LiveObject>[];
     final sun = sunPosition(utc);
-    for (final body in [...predictedBodies(utc), sun]) {
+    bodies.add(
+      LiveObject(
+        name: t('太阳'),
+        raDegrees: sun.ra,
+        decDegrees: sun.dec,
+        magnitude: -26.7,
+        kind: LiveObjectKind.sun,
+      ),
+    );
+    final phase = moonPhaseAt(utc);
+    final moon = moonPositionAt(utc);
+    bodies.add(
+      LiveObject(
+        name: t('月球'),
+        raDegrees: moon.raDegrees,
+        decDegrees: moon.decDegrees,
+        magnitude: -12.7,
+        kind: LiveObjectKind.moon,
+        note: '${phase.name} ${phase.fractionLabel}',
+      ),
+    );
+    for (final body in predictedBodies(utc)) {
       bodies.add(
         LiveObject(
           name: body.name,
@@ -401,6 +428,78 @@ double greenwichSiderealDegrees(DateTime utc) {
   if (value < 0) value += 360;
   return value;
 }
+
+/// 实时星图能看到多暗的天体。
+///
+/// 城市里把 6 等的星全画出来只会糊成一片，还会让星点匹配把噪声当星。
+/// 自动模式按太阳高度、月光和月相给一个极限星等；手动模式按光污染等级。
+enum LiveSkyVisibility {
+  auto('auto'),
+  dark('dark'),
+  rural('rural'),
+  suburban('suburban'),
+  city('city'),
+  all('all');
+
+  const LiveSkyVisibility(this.storageKey);
+
+  final String storageKey;
+
+  static LiveSkyVisibility fromStorage(String? value) => values.firstWhere(
+        (mode) => mode.storageKey == value,
+        orElse: () => LiveSkyVisibility.auto,
+      );
+
+  String get label => switch (this) {
+        LiveSkyVisibility.auto => t('自动'),
+        LiveSkyVisibility.dark => t('星海'),
+        LiveSkyVisibility.rural => t('星稠'),
+        LiveSkyVisibility.suburban => t('星稀'),
+        LiveSkyVisibility.city => t('星隐'),
+        LiveSkyVisibility.all => t('全部天体'),
+      };
+
+  String get description => switch (this) {
+        LiveSkyVisibility.auto => t('按太阳高度、月光和月相自动决定；没有位置时按星稀处理。'),
+        LiveSkyVisibility.dark => t('Bortle 1–3：极限星等约 6.5，能看到的都画。'),
+        LiveSkyVisibility.rural => t('Bortle 4–5：极限星等约 6.0。'),
+        LiveSkyVisibility.suburban => t('Bortle 6–7：极限星等约 5.0，只画较亮的星。'),
+        LiveSkyVisibility.city => t('Bortle 8–9：极限星等约 4.0，只画亮星。'),
+        LiveSkyVisibility.all => t('不做亮度筛选，显示目录里的全部恒星与深空。'),
+      };
+
+  double get fixedLimit => switch (this) {
+        LiveSkyVisibility.auto => 5.0,
+        LiveSkyVisibility.dark => 6.5,
+        LiveSkyVisibility.rural => 6.0,
+        LiveSkyVisibility.suburban => 5.0,
+        LiveSkyVisibility.city => 4.0,
+        LiveSkyVisibility.all => 6.5,
+      };
+
+  /// 自动模式的行为树。
+  ///
+  /// 太阳高度决定天光，月光决定月夜；没有位置就退回郊区。相机帧的亮度
+  /// 没有参与，是因为纯净模式下根本不该看画面，而两套模式应该给同一个答案。
+  static double autoLimit({
+    required double sunAltitude,
+    required double moonAltitude,
+    required double moonPhase,
+    required bool hasLocation,
+  }) {
+    if (!hasLocation) return 5.0;
+    if (sunAltitude > -0.5) return 1.5; // 白天
+    if (sunAltitude > -6) return 2.5; // 民用暮光
+    if (sunAltitude > -12) return 4.0; // 航海暮光
+    if (sunAltitude > -18) return 5.0; // 天文暮光
+    if (moonAltitude > 0 && moonPhase > 0.35) return 4.5; // 月夜
+    return 6.0; // 无月暗夜
+  }
+}
+
+/// 一个 ENU 方向的地平高度（度）。
+double altitudeDegreesOfEnu(LiveVec3 enu) =>
+    math.asin(enu.z.clamp(-1.0, 1.0)) * 180 / math.pi;
 
 /// 当地恒星时（度）。
 double localSiderealDegrees(DateTime utc, double longitudeDegrees) {
