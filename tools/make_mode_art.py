@@ -61,8 +61,10 @@ ART = {
         + PALETTE + ", centered, " + NO_TEXT
     ),
     "scene_wide": (
-        "flat vector illustration, a wide Milky Way arch over a low horizon, a tiny "
-        "phone silhouette pointing up, wide angle feeling, "
+        "flat vector illustration, ultra-wide fisheye night-sky panorama, a strongly "
+        "curved horizon near the bottom, the Milky Way arch wrapping around the frame, "
+        "several constellation patterns and bright stars, tiny landscape and a small "
+        "phone silhouette, exaggerated wide-angle distortion at the edges, "
         + PALETTE + ", centered, " + NO_TEXT
     ),
     "scene_medium": (

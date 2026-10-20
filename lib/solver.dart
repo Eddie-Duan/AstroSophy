@@ -167,6 +167,7 @@ class SolveHint {
 /// 拍摄场景。只是把用户看得懂的说法翻译成 [SolveHint]，不参与任何测量。
 enum ShootingScene {
   auto('auto'),
+  starField('star_field'),
   wide('wide'),
   deepSky('deep_sky'),
   narrow('narrow'),
@@ -184,6 +185,7 @@ enum ShootingScene {
 
   String get label => switch (this) {
         ShootingScene.auto => t('自动'),
+        ShootingScene.starField => t('星野'),
         ShootingScene.wide => t('广域'),
         ShootingScene.deepSky => t('深空'),
         ShootingScene.narrow => t('长焦'),
@@ -193,7 +195,8 @@ enum ShootingScene {
 
   String get description => switch (this) {
         ShootingScene.auto => t('不限视场，最稳但最慢。'),
-        ShootingScene.wide => t('银河、星座、手机广角。'),
+        ShootingScene.starField => t('普通星空、星点较密。'),
+        ShootingScene.wide => t('银河、地景、超广角。'),
         ShootingScene.deepSky => t('多数星云、星系。'),
         ShootingScene.narrow => t('小目标、长焦望远镜。'),
         ShootingScene.moon => t('只找月亮，随即报告。'),
@@ -202,6 +205,13 @@ enum ShootingScene {
 
   SolveHint get hint => switch (this) {
         ShootingScene.auto => const SolveHint(),
+        ShootingScene.starField => const SolveHint(
+            minFieldDegrees: 10,
+            maxFieldDegrees: 120,
+            allowDeep: false,
+            budgetMilliseconds: 15000,
+            patchSolve: true,
+          ),
         ShootingScene.wide => const SolveHint(
             minFieldDegrees: 8,
             maxFieldDegrees: 120,

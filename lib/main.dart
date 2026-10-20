@@ -2220,11 +2220,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               const SizedBox(height: 8),
               _optionGrid([
-                for (final scene in ShootingScene.values)
+                for (final scene in ShootingScene.values.take(6))
                   _optionTile(
                     label: scene.label,
                     asset: switch (scene) {
                       ShootingScene.auto => 'assets/ui/scene_auto.jpg',
+                      ShootingScene.starField => 'assets/ui/scene_starfield.jpg',
                       ShootingScene.wide => 'assets/ui/scene_wide.jpg',
                       ShootingScene.deepSky => 'assets/ui/scene_medium.jpg',
                       ShootingScene.narrow => 'assets/ui/scene_long.jpg',
@@ -2235,6 +2236,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     onTap: () => _setShootingScene(scene),
                   ),
               ]),
+              const SizedBox(height: 8),
+              _optionTile(
+                label: ShootingScene.sun.label,
+                asset: 'assets/ui/scene_sun.jpg',
+                selected: _shootingScene == ShootingScene.sun,
+                onTap: () => _setShootingScene(ShootingScene.sun),
+                aspectRatio: 3.2,
+              ),
             ],
           ),
           const Divider(height: 1),

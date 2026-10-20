@@ -91,6 +91,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   Set<int> _matchedHips = const {};
   List<LiveEnuObject> _trackedStars = const [];
   LiveObject? _targetObject;
+  LiveObject? _calibrationStar;
+  double _manualYaw = 0;
+  double _manualPitch = 0;
   int _lostFrames = 0;
   DateTime _lastTrackerRun = DateTime.fromMillisecondsSinceEpoch(0);
   bool _streaming = false;
@@ -522,9 +525,17 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   LiveCameraBasis? _calibratedBasis() {
     final raw = _fusedBasis ?? _rawSensorBasis();
     if (raw == null) return null;
-    return _headingOffset == 0
+    var basis = _headingOffset == 0
         ? raw
         : raw.rotatedAroundUp(_headingOffset);
+    if (_manualYaw != 0 || _manualPitch != 0) {
+      basis = basis.corrected(
+        yawDegrees: _manualYaw,
+        pitchDegrees: _manualPitch,
+        rollDegrees: 0,
+      );
+    }
+    return basis;
   }
 
   double get _effectiveFov => (_fov / _zoom).clamp(10.0, 140.0);
@@ -835,6 +846,133 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         LiveObjectKind.sun => t('太阳'),
         LiveObjectKind.moon => t('月球'),
       };
+
+  Future<void> _openStarCalibration() async {
+    final candidates = <LiveEnuObject>[
+      for (final star in _stars)
+        if (star.object.hip != null &&
+            star.object.magnitude <= 2.5 &&
+            !star.object.name.startsWith('HIP ') &&
+            star.enu.z > 0)
+          star,
+    ]..sort((a, b) {
+        final altA = altitudeDegreesOfEnu(a.enu);
+        final altB = altitudeDegreesOfEnu(b.enu);
+        return altB.compareTo(altA);
+      });
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('现在没有足够亮的星可供校准。'))),
+      );
+      return;
+    }
+    final selected = await showModalBottomSheet<LiveObject>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: kPanel,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text(
+                t('选择一颗你认识的亮星'),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            for (final item in candidates.take(30))
+              ListTile(
+                title: Text(item.object.name),
+                subtitle: Text(
+                  t('高度 {0}° · 星等 {1}', [
+                    altitudeDegreesOfEnu(item.enu).toStringAsFixed(0),
+                    item.object.magnitude.toStringAsFixed(1),
+                  ]),
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: const Icon(Icons.center_focus_strong, size: 18),
+                onTap: () => Navigator.pop(context, item.object),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      _calibrationStar = selected;
+      _locked = false;
+    });
+  }
+
+  void _cancelStarCalibration() {
+    setState(() => _calibrationStar = null);
+  }
+
+  void _commitStarCalibration() {
+    final star = _calibrationStar;
+    if (star == null) return;
+    final enu = equatorialToEnu(
+      raDegrees: star.raDegrees,
+      decDegrees: star.decDegrees,
+      latitudeDegrees: _latitude,
+      localSiderealDegrees: _sidereal,
+    );
+    if (enu.z <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('这颗星现在在地平线下。'))),
+      );
+      return;
+    }
+    final oldFix = _orientationFix;
+    setState(() => _orientationFix = null);
+    final basis = _calibratedBasis();
+    if (basis == null) {
+      setState(() => _orientationFix = oldFix);
+      return;
+    }
+    final point = basis.project(
+      enu,
+      horizontalFovDegrees: _effectiveFov,
+      viewport: Size(1, _previewAspect),
+      margin: 0,
+    );
+    if (point == null) {
+      setState(() => _orientationFix = oldFix);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('先把这颗星放到画面里，再点固定。'))),
+      );
+      return;
+    }
+    final dx = point.dx - 0.5;
+    final dy = point.dy - _previewAspect / 2;
+    final hfov = _effectiveFov;
+    final vfov = 2 *
+        math.atan(math.tan(hfov * math.pi / 360) / _previewAspect) *
+        180 /
+        math.pi;
+    var yaw = _manualYaw + dx * hfov;
+    if (yaw > 180) yaw -= 360;
+    if (yaw < -180) yaw += 360;
+    setState(() {
+      _manualYaw = yaw;
+      _manualPitch =
+          (_manualPitch - dy * vfov / _previewAspect).clamp(-89.0, 89.0);
+      _calibrationStar = null;
+      _orientationFix = null;
+      _locked = true;
+      _trackedStars = const [];
+      _matchedHips = const {};
+      _matchedStars = 0;
+      _lostFrames = 0;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(t('已用 {0} 校准，继续用星点跟踪校正。', [star.name]))),
+    );
+  }
 
   void _setTarget(LiveObject object) {
     setState(() => _targetObject = object);
@@ -1245,6 +1383,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       _orientationFix = null;
       _locked = false;
       _matchedStars = 0;
+      _manualYaw = 0;
+      _manualPitch = 0;
+      _calibrationStar = null;
       _fusedBasis = _rawSensorBasis();
     });
     unawaited(_restartTracking());
@@ -1457,12 +1598,19 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                       ],
                     ),
                   ),
-                  if (_solveMode)
+                  if (_solveMode) ...[
+                    _roundButton(
+                      icon: Icons.star_border_rounded,
+                      tooltip: t('亮星校准'),
+                      onTap: _openStarCalibration,
+                    ),
+                    const SizedBox(width: 8),
                     _roundButton(
                       icon: _locked ? Icons.lock : Icons.lock_open,
                       tooltip: _locked ? t('重新锁定') : t('锁定当前姿态'),
                       onTap: _toggleLock,
                     ),
+                  ],
                   if (_zoom > 1.01) ...[
                     const SizedBox(width: 8),
                     _roundButton(
@@ -1520,7 +1668,58 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 ),
               ),
             ),
-          if (_targetObject != null)
+          if (_calibrationStar != null)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 64,
+              child: SafeArea(
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0xFF6EE7A8).withValues(alpha: 0.7),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.star_border_rounded,
+                        size: 20,
+                        color: Color(0xFF6EE7A8),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          t('校准：{0} · 把它放到中心准星，再点固定', [
+                            _calibrationStar!.name,
+                          ]),
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            height: 1.35,
+                            color: Color(0xFFD8F5E5),
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _commitStarCalibration,
+                        child: Text(t('固定')),
+                      ),
+                      IconButton(
+                        onPressed: _cancelStarCalibration,
+                        tooltip: t('取消'),
+                        icon: const Icon(Icons.close, size: 16),
+                        color: const Color(0xFFA6B5C8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (_targetObject != null && _calibrationStar == null)
             Positioned(
               left: 12,
               right: 12,
