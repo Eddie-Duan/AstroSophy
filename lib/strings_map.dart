@@ -844,6 +844,7 @@ const Map<String, Map<String, String>> kLocalizedStrings = {
     '超新星遗迹': 'Supernova remnant',
     '距地球 {0} AU': '{0} AU from Earth',
     '跳过': 'Skip',
+    '轨迹中心约 ({0}, {1}) px；检出 {2} 条轨迹，长度中位数 {3} px，最长 {4} px。': 'Trail centre about ({0}, {1}) px; {2} trails, median length {3} px, longest {4} px.',
     '轻量模型 API Key': 'Light model API key',
     '轻量模型名称': 'Light model name',
     '较低 <35%': 'Low <35%',

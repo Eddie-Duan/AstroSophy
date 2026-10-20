@@ -15,6 +15,7 @@ import 'models.dart';
 import 'report.dart';
 import 'smallbodies.dart';
 import 'solver.dart';
+import 'star_trails.dart';
 
 /// 一次解析用哪种分析方式。
 ///
@@ -351,6 +352,19 @@ class SkyPipeline {
             ? t('星轨场景：没有检出明显的拉长轨迹。')
             : t('星轨场景：只统计拉长轨迹，不做星场解算。'),
       );
+      final stats = analyzeStarTrails(analysis);
+      if (stats != null) {
+        warnings.add(
+          t('轨迹中心约 ({0}, {1}) px；检出 {2} 条轨迹，长度中位数 {3} px，最长 {4} px。',
+              [
+                stats.centerX.round(),
+                stats.centerY.round(),
+                stats.count,
+                stats.medianLength.toStringAsFixed(1),
+                stats.maxLength.toStringAsFixed(1),
+              ]),
+        );
+      }
     } else if (scene == ShootingScene.sun) {
       sunOnly = true;
       sunOnlyReported = true;
