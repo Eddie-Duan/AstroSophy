@@ -987,16 +987,16 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        refChip('黄道', const Color(0xFFFFCC33), _showEcliptic,
+                        refChip('黄道', const Color(0xFFFFD54A), _showEcliptic,
                             (value) => _showEcliptic = value),
                         refChip(
                             '天赤道',
-                            const Color(0xFF35D6FF),
+                            const Color(0xFFFF5A5A),
                             _showCelestialEquator,
                             (value) => _showCelestialEquator = value),
-                        refChip('白道', const Color(0xFFD08CFF), _showLunarPath,
+                        refChip('白道', const Color(0xFFFFFFFF), _showLunarPath,
                             (value) => _showLunarPath = value),
-                        refChip('银道', const Color(0xFF69F0AE), _showGalactic,
+                        refChip('银道', const Color(0xFFB9C6D8), _showGalactic,
                             (value) => _showGalactic = value),
                       ],
                     ),
@@ -1755,18 +1755,18 @@ class LiveSkyPainter extends CustomPainter {
     if (showAltAzGrid) _paintAltAzGrid(canvas, size);
     if (showEquatorialGrid) _paintEquatorialGrid(canvas, size);
     if (showEcliptic) {
-      _paintReferenceCircle(canvas, size, _eclipticPoints(), const Color(0xFFFFCC33));
+      _paintReferenceCircle(canvas, size, _eclipticPoints(), const Color(0xFFFFD54A));
     }
     if (showCelestialEquator) {
       _paintReferenceCircle(
-          canvas, size, _celestialEquatorPoints(), const Color(0xFF35D6FF));
+          canvas, size, _celestialEquatorPoints(), const Color(0xFFFF5A5A));
     }
     if (showLunarPath) {
       _paintReferenceCircle(
-          canvas, size, _lunarPathPoints(), const Color(0xFFD08CFF));
+          canvas, size, _lunarPathPoints(), const Color(0xFFFFFFFF));
     }
     if (showGalactic) {
-      _paintReferenceCircle(canvas, size, _galacticPoints(), const Color(0xFF69F0AE));
+      _paintReferenceCircle(canvas, size, _galacticPoints(), const Color(0xFFB9C6D8));
     }
     if (showConstellations) _paintConstellations(canvas, size);
     if (showStars) _paintStars(canvas, size);
