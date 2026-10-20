@@ -131,6 +131,12 @@ MoonDisc? measureMoonDisc({
   if (coarseLevel <= 0) return null;
   final disc = _fitDisc(gray, width, height, coarseLevel, frameArea);
   if (disc == null) return null;
+  // 大半个画面都“亮成一个圆”的，通常是云带/地景/拼接过渡，而不是月亮。
+  // 月亮在手机广角里最多占几个百分点；真正的大月面特写应该用长焦场景，
+  // 不该让一张银河地景被整张吞进月面链路。
+  if (math.pi * disc.radius * disc.radius > frameArea * 0.30) {
+    return null;
+  }
 
   // 第二遍：用圆外的天空估出背景与噪声，把阈值定在「刚好看得出比天空亮」，
   // 再数一遍圆里有多少像素在它之上——这一遍定的是**亮面占比**。

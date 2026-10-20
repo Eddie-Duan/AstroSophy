@@ -537,8 +537,15 @@ class PlateSolver {
     ];
     final total = xs.length * ys.length;
     var attempted = 0;
+    final patchWatch = Stopwatch()..start();
     for (final y in ys) {
       for (final x in xs) {
+        // 3×3 分块在星点极密的银河片上可能把 9 块都跑满；给整轮分块一个
+        // 总上限，避免一张图在后台转十几分钟。
+        if (patchWatch.elapsed > const Duration(minutes: 3)) {
+          onProgress?.call(SolveProgress(0.92, t('分块解算超时')));
+          return null;
+        }
         attempted++;
         onProgress?.call(
           SolveProgress(
