@@ -314,6 +314,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         mode: job.mode,
         generateAgentReport: job.generateAgentReport,
         hint: job.scene.hint,
+        scene: job.scene,
       ).run(
         job.bytes,
         question: job.question,
@@ -1137,6 +1138,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         final adjustedAnalysis = await worker.analyze(
           analysis.preview,
           exclusions: exclusions,
+          detectMoon: _shootingScene == ShootingScene.auto ||
+              _shootingScene == ShootingScene.moon,
         );
         final (adjustedSolve, _) = await worker.solveLocal(adjustedAnalysis);
         _ensureCurrentAnalysis(analysis);
@@ -2212,7 +2215,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               const SizedBox(height: 8),
               _optionGrid([
-                for (final scene in ShootingScene.values)
+                for (final scene in ShootingScene.values.take(4))
                   _optionTile(
                     label: scene.label,
                     asset: switch (scene) {
@@ -2220,11 +2223,20 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ShootingScene.wide => 'assets/ui/scene_wide.jpg',
                       ShootingScene.deepSky => 'assets/ui/scene_medium.jpg',
                       ShootingScene.narrow => 'assets/ui/scene_long.jpg',
+                      ShootingScene.moon => 'assets/ui/scene_moon.jpg',
                     },
                     selected: _shootingScene == scene,
                     onTap: () => _setShootingScene(scene),
                   ),
               ]),
+              const SizedBox(height: 8),
+              _optionTile(
+                label: ShootingScene.moon.label,
+                asset: 'assets/ui/scene_moon.jpg',
+                selected: _shootingScene == ShootingScene.moon,
+                onTap: () => _setShootingScene(ShootingScene.moon),
+                aspectRatio: 3.2,
+              ),
             ],
           ),
           const Divider(height: 1),
@@ -2278,11 +2290,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     required bool selected,
     required VoidCallback onTap,
     bool enabled = true,
+    double aspectRatio = 1.55,
   }) =>
       Opacity(
         opacity: enabled ? 1 : 0.45,
         child: AspectRatio(
-          aspectRatio: 1.55,
+          aspectRatio: aspectRatio,
           child: Material(
             color: const Color(0xFF101C2E),
             borderRadius: BorderRadius.circular(14),

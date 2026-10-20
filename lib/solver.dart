@@ -163,7 +163,8 @@ enum ShootingScene {
   auto('auto'),
   wide('wide'),
   deepSky('deep_sky'),
-  narrow('narrow');
+  narrow('narrow'),
+  moon('moon');
 
   const ShootingScene(this.storageKey);
 
@@ -179,6 +180,7 @@ enum ShootingScene {
         ShootingScene.wide => t('广域'),
         ShootingScene.deepSky => t('深空'),
         ShootingScene.narrow => t('长焦'),
+        ShootingScene.moon => t('月亮'),
       };
 
   String get description => switch (this) {
@@ -186,6 +188,7 @@ enum ShootingScene {
         ShootingScene.wide => t('银河、星座、手机广角。'),
         ShootingScene.deepSky => t('多数星云、星系。'),
         ShootingScene.narrow => t('小目标、长焦望远镜。'),
+        ShootingScene.moon => t('只找月亮，随即报告。'),
       };
 
   SolveHint get hint => switch (this) {
@@ -209,6 +212,7 @@ enum ShootingScene {
             patchSolve: true,
             skipShallow: true,
           ),
+        ShootingScene.moon => const SolveHint(),
       };
 }
 

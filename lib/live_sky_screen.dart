@@ -43,6 +43,13 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   LiveCameraBasis? _freeBasis;
   double _panYaw = 0;
   double _panPitch = 0;
+  bool _showEcliptic = false;
+  bool _showCelestialEquator = false;
+  bool _showLunarPath = false;
+  bool _showGalactic = false;
+  bool _showAltAzGrid = false;
+  bool _showEquatorialGrid = false;
+  bool _showBelowHorizon = false;
   LiveSkyVisibility _visibility = LiveSkyVisibility.auto;
   double _starLimit = 5.0;
   double _deepSkyLimit = 8.0;
@@ -753,6 +760,19 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
             setSheetState(() {});
           }
 
+          Widget refChip(
+            String label,
+            Color color,
+            bool selected,
+            ValueChanged<bool> onChanged,
+          ) =>
+              FilterChip(
+                avatar: CircleAvatar(backgroundColor: color, radius: 5),
+                label: Text(label),
+                selected: selected,
+                onSelected: (value) => update(() => onChanged(value)),
+              );
+
           return SafeArea(
             child: ListView(
               shrinkWrap: true,
@@ -840,6 +860,105 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                         fontSize: 11,
                         height: 1.45,
                         color: Color(0xFF8192A8),
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 1),
+                ExpansionTile(
+                  initiallyExpanded: false,
+                  leading: const Icon(Icons.blur_circular, color: kMint),
+                  title: Text(t('天球参考线')),
+                  subtitle: Text(
+                    t('黄道、天赤道、白道、银道'),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  childrenPadding:
+                      const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        refChip('黄道', const Color(0xFFFFC857), _showEcliptic,
+                            (value) => _showEcliptic = value),
+                        refChip(
+                            '天赤道',
+                            const Color(0xFF64D9BD),
+                            _showCelestialEquator,
+                            (value) => _showCelestialEquator = value),
+                        refChip('白道', const Color(0xFFC9A7FF), _showLunarPath,
+                            (value) => _showLunarPath = value),
+                        refChip('银道', const Color(0xFF8BE28B), _showGalactic,
+                            (value) => _showGalactic = value),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      t('四种颜色对应四条天球大圆；只画地平线以上的一段。'),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.45,
+                        color: Color(0xFF8192A8),
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 1),
+                ExpansionTile(
+                  initiallyExpanded: false,
+                  leading: const Icon(Icons.grid_4x4, color: kMint),
+                  title: Text(t('坐标网格')),
+                  subtitle: Text(
+                    t('地平网格、赤道网格'),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  childrenPadding:
+                      const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        refChip('地平网格', const Color(0xFF9FB3CE),
+                            _showAltAzGrid, (value) => _showAltAzGrid = value),
+                        refChip('赤道网格', const Color(0xFF9FB3CE),
+                            _showEquatorialGrid,
+                            (value) => _showEquatorialGrid = value),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      t('地平网格是高度/方位，赤道网格是赤经/赤纬；网格间隔随缩放自动加密。'),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.45,
+                        color: Color(0xFF8192A8),
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 1),
+                ExpansionTile(
+                  initiallyExpanded: false,
+                  leading: const Icon(Icons.vertical_align_bottom, color: kMint),
+                  title: Text(t('地平线以下')),
+                  subtitle: Text(
+                    _showBelowHorizon ? t('已显示地平线下天体') : t('只显示地平线以上'),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  childrenPadding:
+                      const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: _showBelowHorizon,
+                      onChanged: (value) =>
+                          update(() => _showBelowHorizon = value),
+                      title: Text(t('显示地平线下天体')),
+                      subtitle: Text(
+                        t('星点会变暗；地下的参考圈和网格也一起显示。'),
+                        style: const TextStyle(fontSize: 11),
                       ),
                     ),
                   ],
@@ -1101,6 +1220,15 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                           fov: _effectiveFov,
                           starLimit: _starLimit,
                           deepSkyLimit: _deepSkyLimit,
+                          latitude: _latitude,
+                          sidereal: _sidereal,
+                          showEcliptic: _showEcliptic,
+                          showCelestialEquator: _showCelestialEquator,
+                          showLunarPath: _showLunarPath,
+                          showGalactic: _showGalactic,
+                          showAltAzGrid: _showAltAzGrid,
+                          showEquatorialGrid: _showEquatorialGrid,
+                          showBelowHorizon: _showBelowHorizon,
                           matchedHips: _matchedHips,
                           targetEnu: targetEnu,
                           targetName: _targetObject?.name,
@@ -1447,6 +1575,15 @@ class LiveSkyPainter extends CustomPainter {
     required this.fov,
     required this.starLimit,
     required this.deepSkyLimit,
+    required this.latitude,
+    required this.sidereal,
+    required this.showEcliptic,
+    required this.showCelestialEquator,
+    required this.showLunarPath,
+    required this.showGalactic,
+    required this.showAltAzGrid,
+    required this.showEquatorialGrid,
+    required this.showBelowHorizon,
     required this.matchedHips,
     required this.targetEnu,
     required this.targetName,
@@ -1468,6 +1605,15 @@ class LiveSkyPainter extends CustomPainter {
   final double fov;
   final double starLimit;
   final double deepSkyLimit;
+  final double latitude;
+  final double sidereal;
+  final bool showEcliptic;
+  final bool showCelestialEquator;
+  final bool showLunarPath;
+  final bool showGalactic;
+  final bool showAltAzGrid;
+  final bool showEquatorialGrid;
+  final bool showBelowHorizon;
   final Set<int> matchedHips;
   final LiveVec3? targetEnu;
   final String? targetName;
@@ -1481,6 +1627,22 @@ class LiveSkyPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _paintHorizon(canvas, size);
+    if (showAltAzGrid) _paintAltAzGrid(canvas, size);
+    if (showEquatorialGrid) _paintEquatorialGrid(canvas, size);
+    if (showEcliptic) {
+      _paintReferenceCircle(canvas, size, _eclipticPoints(), const Color(0xFFFFC857));
+    }
+    if (showCelestialEquator) {
+      _paintReferenceCircle(
+          canvas, size, _celestialEquatorPoints(), const Color(0xFF64D9BD));
+    }
+    if (showLunarPath) {
+      _paintReferenceCircle(
+          canvas, size, _lunarPathPoints(), const Color(0xFFC9A7FF));
+    }
+    if (showGalactic) {
+      _paintReferenceCircle(canvas, size, _galacticPoints(), const Color(0xFF8BE28B));
+    }
     if (showConstellations) _paintConstellations(canvas, size);
     if (showStars) _paintStars(canvas, size);
     if (showDeepSky) _paintDeepSky(canvas, size);
@@ -1489,6 +1651,190 @@ class LiveSkyPainter extends CustomPainter {
       _paintBodies(canvas, size, smallBodies);
     }
     _paintTarget(canvas, size);
+  }
+
+  // ---------- 天球参考圈与坐标网格 ----------
+
+  double get _gridStepDegrees {
+    if (fov >= 80) return 30;
+    if (fov >= 45) return 15;
+    if (fov >= 25) return 10;
+    if (fov >= 12) return 5;
+    return 2;
+  }
+
+  List<LiveVec3> _ringFromEquatorial(
+    ({double ra, double dec}) Function(double longitude) convert, {
+    double step = 3,
+  }) {
+    final points = <LiveVec3>[];
+    for (var lon = 0.0; lon < 360; lon += step) {
+      final eq = convert(lon);
+      points.add(
+        equatorialToEnu(
+          raDegrees: eq.ra,
+          decDegrees: eq.dec,
+          latitudeDegrees: latitude,
+          localSiderealDegrees: sidereal,
+        ),
+      );
+    }
+    return points;
+  }
+
+  List<LiveVec3> _eclipticPoints() => _ringFromEquatorial(
+        (lon) => eclipticToEquatorialDegrees(lon, 0),
+      );
+
+  List<LiveVec3> _celestialEquatorPoints() => _ringFromEquatorial(
+        (lon) => (ra: lon, dec: 0.0),
+      );
+
+  List<LiveVec3> _lunarPathPoints() {
+    final node = lunarAscendingNodeDegrees(DateTime.now().toUtc());
+    return _ringFromEquatorial(
+      (lon) => lunarOrbitToEquatorialDegrees(lon, node),
+    );
+  }
+
+  List<LiveVec3> _galacticPoints() => _ringFromEquatorial(
+        (lon) => galacticToEquatorialDegrees(lon, 0),
+      );
+
+  void _paintReferenceCircle(
+    Canvas canvas,
+    Size size,
+    List<LiveVec3> points,
+    Color color,
+  ) {
+    final path = Path();
+    var drawing = false;
+    for (final enu in points) {
+      if (!showBelowHorizon && enu.z < 0) {
+        drawing = false;
+        continue;
+      }
+      final point = basis.project(
+        enu,
+        horizontalFovDegrees: fov,
+        viewport: size,
+        margin: 80,
+      );
+      if (point == null) {
+        drawing = false;
+        continue;
+      }
+      if (drawing) {
+        path.lineTo(point.dx, point.dy);
+      } else {
+        path.moveTo(point.dx, point.dy);
+        drawing = true;
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = color.withValues(alpha: 0.85),
+    );
+  }
+
+  void _paintPolyline(
+    Canvas canvas,
+    Size size,
+    List<LiveVec3> points,
+    Color color,
+  ) {
+    final path = Path();
+    var drawing = false;
+    for (final enu in points) {
+      if (!showBelowHorizon && enu.z < 0) {
+        drawing = false;
+        continue;
+      }
+      final point = basis.project(
+        enu,
+        horizontalFovDegrees: fov,
+        viewport: size,
+        margin: 40,
+      );
+      if (point == null) {
+        drawing = false;
+        continue;
+      }
+      if (drawing) {
+        path.lineTo(point.dx, point.dy);
+      } else {
+        path.moveTo(point.dx, point.dy);
+        drawing = true;
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8
+        ..color = color,
+    );
+  }
+
+  void _paintAltAzGrid(Canvas canvas, Size size) {
+    final color = const Color(0xFF9FB3CE).withValues(alpha: 0.28);
+    final step = _gridStepDegrees;
+    final startAlt = showBelowHorizon ? -90.0 : 0.0;
+    for (var alt = startAlt; alt <= 90; alt += step) {
+      final altRad = alt * math.pi / 180;
+      final points = <LiveVec3>[
+        for (var az = 0.0; az <= 360; az += 3)
+          LiveVec3(
+            math.cos(altRad) * math.sin(az * math.pi / 180),
+            math.cos(altRad) * math.cos(az * math.pi / 180),
+            math.sin(altRad),
+          ),
+      ];
+      _paintPolyline(canvas, size, points, color);
+    }
+    for (var az = 0.0; az < 360; az += step) {
+      final points = <LiveVec3>[
+        for (var alt = startAlt; alt <= 90; alt += 3)
+          LiveVec3(
+            math.cos(alt * math.pi / 180) * math.sin(az * math.pi / 180),
+            math.cos(alt * math.pi / 180) * math.cos(az * math.pi / 180),
+            math.sin(alt * math.pi / 180),
+          ),
+      ];
+      _paintPolyline(canvas, size, points, color);
+    }
+  }
+
+  void _paintEquatorialGrid(Canvas canvas, Size size) {
+    final color = const Color(0xFF9FB3CE).withValues(alpha: 0.24);
+    final step = _gridStepDegrees;
+    for (var dec = -80.0; dec <= 80; dec += step) {
+      final points = <LiveVec3>[
+        for (var ra = 0.0; ra <= 360; ra += 3)
+          equatorialToEnu(
+            raDegrees: ra,
+            decDegrees: dec,
+            latitudeDegrees: latitude,
+            localSiderealDegrees: sidereal,
+          ),
+      ];
+      _paintPolyline(canvas, size, points, color);
+    }
+    for (var ra = 0.0; ra < 360; ra += step) {
+      final points = <LiveVec3>[
+        for (var dec = -85.0; dec <= 85; dec += 3)
+          equatorialToEnu(
+            raDegrees: ra,
+            decDegrees: dec,
+            latitudeDegrees: latitude,
+            localSiderealDegrees: sidereal,
+          ),
+      ];
+      _paintPolyline(canvas, size, points, color);
+    }
   }
 
   /// 目标高亮：在视野里画准星；不在视野里就在屏幕边缘画箭头。
@@ -1608,7 +1954,7 @@ class LiveSkyPainter extends CustomPainter {
 
   void _paintStars(Canvas canvas, Size size) {
     for (final item in stars) {
-      if (item.enu.z < 0) continue;
+      if (!showBelowHorizon && item.enu.z < 0) continue;
       if (item.object.magnitude > starLimit) continue;
       final point = basis.project(
         item.enu,
@@ -1617,6 +1963,7 @@ class LiveSkyPainter extends CustomPainter {
       );
       if (point == null) continue;
       final magnitude = item.object.magnitude;
+      final belowFactor = item.enu.z < 0 ? 0.35 : 1.0;
       final radius = magnitude <= 1.0
           ? 3.2
           : magnitude <= 2.5
@@ -1628,7 +1975,8 @@ class LiveSkyPainter extends CustomPainter {
         point,
         radius,
         Paint()..color = Colors.white.withValues(
-          alpha: (0.55 + (5 - magnitude).clamp(0, 4) * 0.1).clamp(0.45, 0.95),
+          alpha: ((0.55 + (5 - magnitude).clamp(0, 4) * 0.1).clamp(0.45, 0.95)) *
+              belowFactor,
         ),
       );
       if (item.object.hip != null &&
@@ -1666,7 +2014,7 @@ class LiveSkyPainter extends CustomPainter {
         final a = starEnu[segment.a.hip];
         final b = starEnu[segment.b.hip];
         if (a == null || b == null) continue;
-        if (a.z < 0 || b.z < 0) continue;
+        if (!showBelowHorizon && (a.z < 0 || b.z < 0)) continue;
         if (segment.a.magnitude > starLimit ||
             segment.b.magnitude > starLimit) {
           continue;
@@ -1686,7 +2034,7 @@ class LiveSkyPainter extends CustomPainter {
 
   void _paintDeepSky(Canvas canvas, Size size) {
     for (final item in deepSky) {
-      if (item.enu.z < 0) continue;
+      if (!showBelowHorizon && item.enu.z < 0) continue;
       if (item.object.magnitude > deepSkyLimit) continue;
       final point = basis.project(
         item.enu,
@@ -1716,7 +2064,7 @@ class LiveSkyPainter extends CustomPainter {
     List<LiveEnuObject> bodies,
   ) {
     for (final item in bodies) {
-      if (item.enu.z < 0) continue;
+      if (!showBelowHorizon && item.enu.z < 0) continue;
       final point = basis.project(
         item.enu,
         horizontalFovDegrees: fov,

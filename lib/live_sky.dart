@@ -507,6 +507,79 @@ double localSiderealDegrees(DateTime utc, double longitudeDegrees) {
   return value % 360;
 }
 
+/// 天球参考圈：把黄道、天赤道、白道、银道都化成赤道坐标再交给 [equatorialToEnu]。
+///
+/// 这些圈在星图上只是参考线，不参与解算；角度用 J2000 的近似值就够了。
+const double _obliquityDegrees = 23.4392911111;
+const double _galacticPoleRa = 192.85948;
+const double _galacticPoleDec = 27.12825;
+const double _galacticNorthCelestialPoleLon = 122.93192;
+
+/// 黄道坐标（经度、纬度，度）→ 赤道坐标。
+({double ra, double dec}) eclipticToEquatorialDegrees(
+  double longitude,
+  double latitude,
+) {
+  const rad = math.pi / 180;
+  final lon = longitude * rad;
+  final lat = latitude * rad;
+  final eps = _obliquityDegrees * rad;
+  final x = math.cos(lat) * math.cos(lon);
+  final y = math.cos(lat) * math.sin(lon);
+  final z = math.sin(lat);
+  final ra = math.atan2(
+    y * math.cos(eps) - z * math.sin(eps),
+    x,
+  );
+  final dec = math.asin(y * math.sin(eps) + z * math.cos(eps));
+  return (ra: _wrapDegrees(ra / rad), dec: dec / rad);
+}
+
+/// 银道坐标（银经、银纬，度）→ 赤道坐标。
+({double ra, double dec}) galacticToEquatorialDegrees(
+  double longitude,
+  double latitude,
+) {
+  const rad = math.pi / 180;
+  final b = latitude * rad;
+  final decG = _galacticPoleDec * rad;
+  final delta = (_galacticNorthCelestialPoleLon - longitude) * rad;
+  final sinDec =
+      math.sin(b) * math.sin(decG) + math.cos(b) * math.cos(decG) * math.cos(delta);
+  final dec = math.asin(sinDec.clamp(-1.0, 1.0));
+  final y = math.cos(b) * math.sin(delta);
+  final x = math.sin(b) * math.cos(decG) -
+      math.cos(b) * math.sin(decG) * math.cos(delta);
+  final ra = (_galacticPoleRa * rad + math.atan2(y, x)) / rad;
+  return (ra: _wrapDegrees(ra), dec: dec / rad);
+}
+
+/// 白道的近似：以黄道为基准、倾角 5.145°，升交点取当天的平节点。
+///
+/// 不追求毫角秒：这是画在手机屏幕上的参考圈，不是轨道计算。
+double lunarAscendingNodeDegrees(DateTime utc) {
+  final t = (julianDayUtc(utc) - 2451545.0) / 36525.0;
+  return _wrapDegrees(125.04452 - 1934.136261 * t);
+}
+
+({double ra, double dec}) lunarOrbitToEquatorialDegrees(
+  double longitude,
+  double nodeDegrees,
+) {
+  const rad = math.pi / 180;
+  final inclination = 5.145 * rad;
+  final lon = longitude * rad;
+  final node = nodeDegrees * rad;
+  final lat = math.asin(math.sin(inclination) * math.sin(lon - node));
+  return eclipticToEquatorialDegrees(longitude, lat / rad);
+}
+
+/// 归到 [0, 360)。
+double _wrapDegrees(double degrees) {
+  final wrapped = degrees % 360;
+  return wrapped < 0 ? wrapped + 360 : wrapped;
+}
+
 /// 赤道坐标 → 地平 ENU 单位向量。
 LiveVec3 equatorialToEnu({
   required double raDegrees,

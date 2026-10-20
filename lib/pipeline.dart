@@ -172,6 +172,7 @@ class SkyPipeline {
     this.mode = SkyAnalysisMode.localFirst,
     this.generateAgentReport = false,
     this.hint = const SolveHint(),
+    this.scene = ShootingScene.auto,
   });
 
   final SkyWorker worker;
@@ -191,6 +192,9 @@ class SkyPipeline {
   /// 用户选的拍摄场景对应的视场先验。默认不限制。
   final SolveHint hint;
 
+  /// 用户选的拍摄场景。只有自动和月亮会做月面判定。
+  final ShootingScene scene;
+
   bool get _canUpload => allowUpload && astrometryKey.trim().isNotEmpty;
 
   /// 没有 Key/授权时，需要联网的方式退回「本机优先」，不让整次解析直接空转。
@@ -206,6 +210,10 @@ class SkyPipeline {
   /// 动辄一两分钟，而本地分析只要一秒。平分的话进度条前半程几乎不动，
   /// 用户反而更慌。
   List<_Stage> get _stages => switch (_effectiveMode) {
+        _ when scene == ShootingScene.moon => [
+            _Stage(t('正在分析星图'), 60),
+            if (_canExplain) _Stage(t('正在生成解读'), 40),
+          ],
         SkyAnalysisMode.localOnly => [
             _Stage(t('正在分析星图'), 30),
             _Stage(t('正在本机解算天区'), 54),
@@ -281,7 +289,9 @@ class SkyPipeline {
     final warnings = <String>[];
 
     report(0, 0);
-    final analysis = await worker.analyze(bytes);
+    final detectMoon =
+        scene == ShootingScene.auto || scene == ShootingScene.moon;
+    final analysis = await worker.analyze(bytes, detectMoon: detectMoon);
 
     // 认出月面就在这里停下来问一句，而不是接着往下解算。
     //
@@ -294,7 +304,33 @@ class SkyPipeline {
     // 月球没有任何恒星尺度上的点源，星表怎么对都对不上，上传只会白等一次
     // 超时。所以这一句必须问在解算之前。
     var moonOnly = false;
-    if (analysis.isMoonShot) {
+    if (scene == ShootingScene.moon) {
+      // 用户已经明确说「这次只看月亮」：有月亮就报月亮，没有就报没有，
+      // 不再问「要不要继续找星星」。
+      moonOnly = true;
+      moonOnlyReported = true;
+      if (analysis.isMoonShot) {
+        final disc = analysis.moonDisc!;
+        onProgress?.call(
+          PipelineProgress(
+            bounds.first.$2,
+            t('月亮 · 亮面 {0}%', [(disc.illuminatedFraction * 100).toStringAsFixed(1)]),
+            moon: true,
+            moonOnly: true,
+          ),
+        );
+        warnings.add(t('月亮场景：只报告月面，不寻找星场。'));
+      } else {
+        onProgress?.call(
+          PipelineProgress(
+            bounds.first.$2,
+            t('没有检测到月亮'),
+            moonOnly: true,
+          ),
+        );
+        warnings.add(t('这张图里没有检测到月亮。'));
+      }
+    } else if (analysis.isMoonShot) {
       final disc = analysis.moonDisc!;
       onProgress?.call(
         PipelineProgress(
@@ -738,10 +774,11 @@ class SkyWorker {
   Future<SkyAnalysis> analyze(
     Uint8List bytes, {
     List<ImageExclusion> exclusions = const [],
+    bool detectMoon = true,
   }) async =>
       await _request(
         'analyze',
-        _AnalyzeRequest(bytes, exclusions),
+        _AnalyzeRequest(bytes, exclusions, detectMoon),
         null,
       ) as SkyAnalysis;
 
@@ -803,10 +840,11 @@ class _MovingRequest {
 }
 
 class _AnalyzeRequest {
-  const _AnalyzeRequest(this.bytes, this.exclusions);
+  const _AnalyzeRequest(this.bytes, this.exclusions, this.detectMoon);
 
   final Uint8List bytes;
   final List<ImageExclusion> exclusions;
+  final bool detectMoon;
 }
 
 /// 一次本机解算请求：分析结果 + 用户给的视场先验。
@@ -853,6 +891,7 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
               await analyzeImageBytes(
                 request.bytes,
                 exclusions: request.exclusions,
+                detectMoon: request.detectMoon,
               ),
             ),
           );

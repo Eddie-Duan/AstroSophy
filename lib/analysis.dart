@@ -347,6 +347,7 @@ class SkyAnalysis {
   static SkyAnalysis analyze(
     Uint8List bytes, {
     List<ImageExclusion> exclusions = const [],
+    bool detectMoon = true,
   }) {
     final decoded = decodeImageOrRawPreview(bytes);
     if (decoded == null) {
@@ -365,11 +366,13 @@ class SkyAnalysis {
     // 不这么做的话后果是实打实的——实测一张月球照会被现有星点判据老老实实
     // 判成「正常星场」，在月面上找出 13 颗「星」。月面本身就亮得离谱，等星点
     // 流程跑完再回头看，报告里的星等、噪声、解算建议早就编好了。
-    final moonDisc = measureMoonDisc(
-      gray: _byteGrayscale(gray),
-      width: width,
-      height: height,
-    );
+    final moonDisc = detectMoon
+        ? measureMoonDisc(
+            gray: _byteGrayscale(gray),
+            width: width,
+            height: height,
+          )
+        : null;
     if (moonDisc != null) {
       return _analyzeMoon(image, gray, width, height, moonDisc);
     }
@@ -730,8 +733,13 @@ void _fillMask(
 Future<SkyAnalysis> analyzeImageBytes(
   Uint8List bytes, {
   List<ImageExclusion> exclusions = const [],
+  bool detectMoon = true,
 }) async =>
-    SkyAnalysis.analyze(bytes, exclusions: exclusions);
+    SkyAnalysis.analyze(
+      bytes,
+      exclusions: exclusions,
+      detectMoon: detectMoon,
+    );
 
 // ---------------------------------------------------------------------------
 // 解码

@@ -1,13 +1,14 @@
-"""生成解析方式/拍摄场景的四宫格背景图（开发期一次性素材）。
+"""生成解析方式/拍摄场景的选项背景图（开发期一次性素材）。
 
-用法：python tools/make_mode_art.py
-令牌从 .env.recraft 读取，不写进仓库。生成 512×512 的 JPEG，压缩到适合
-二百来逻辑像素的卡片。
+用法：python tools/make_mode_art.py [--force]
+令牌从 .env.recraft 读取，不写进仓库。生成 1024×1024 的 JPEG，再压到卡片尺寸。
+已有的图默认跳过；加 --force 才全部重画。
 """
 
 import io
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -65,13 +66,23 @@ ART = {
         + PALETTE + ", centered, " + NO_TEXT
     ),
     "scene_medium": (
-        "flat vector illustration, a colorful nebula and a spiral galaxy inside a "
-        "telescope view circle, medium field, "
-        + PALETTE + ", centered, " + NO_TEXT
+        "flat digital illustration, very wide-field astrophotography view: a tiny "
+        "blue Iris Nebula only about one fifth of the frame width, alone in the "
+        "center of a vast dark star field, hundreds of small stars spread across "
+        "the whole frame, lots of empty black sky around the small nebula, "
+        "medium-field context, " + PALETTE + ", centered, " + NO_TEXT
     ),
     "scene_long": (
-        "flat vector illustration, a small distant galaxy and a ringed planet inside a "
-        "long telescope view circle, narrow field, "
+        "flat digital illustration, extreme narrow-field telescope close-up: the "
+        "Ring Nebula fills almost the entire frame, huge ring-shaped planetary "
+        "nebula with a bright central star, only three or four faint stars at the "
+        "edges, no wide star field, high magnification, black sky, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "scene_moon": (
+        "flat vector illustration, a large detailed full moon with silver lit crescent "
+        "and warm yellow earthshine, two brown craters, a small telescope silhouette "
+        "at the lower edge, deep navy night sky, "
         + PALETTE + ", centered, " + NO_TEXT
     ),
 }
@@ -127,6 +138,9 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     key = token()
     for name, prompt in ART.items():
+        path = os.path.join(OUT, name + ".jpg")
+        if os.path.exists(path) and '--force' not in sys.argv:
+            continue
         generate(name, prompt, key)
 
 

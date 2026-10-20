@@ -106,6 +106,20 @@ void main() {
     expect(fix.rollDegrees.abs(), lessThan(3));
   });
 
+  test('天球参考圈的坐标换算', () {
+    final vernal = eclipticToEquatorialDegrees(0, 0);
+    expect(vernal.ra, closeTo(0, 0.01));
+    expect(vernal.dec, closeTo(0, 0.01));
+    final galacticCenter = galacticToEquatorialDegrees(0, 0);
+    expect(galacticCenter.ra, closeTo(266.4, 0.5));
+    expect(galacticCenter.dec, closeTo(-28.9, 0.5));
+    final node = lunarAscendingNodeDegrees(DateTime.utc(2026, 10, 20));
+    expect(node, inInclusiveRange(0, 360));
+    final moonOrbit = lunarOrbitToEquatorialDegrees(0, node);
+    expect(moonOrbit.ra, inInclusiveRange(0, 360));
+    expect(moonOrbit.dec.abs(), lessThanOrEqualTo(90));
+  });
+
   test('自动观测条件按太阳高度和月光决定极限星等', () {
     double limit(double sun, double moon, double phase) =>
         LiveSkyVisibility.autoLimit(
