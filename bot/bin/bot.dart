@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:astrosophy_core/analysis.dart';
 import 'package:astrosophy_core/catalog.dart';
@@ -16,6 +17,9 @@ import 'package:web_socket_channel/io.dart';
 final _lastRequest = <int, DateTime>{};
 Future<void> _queueTail = Future<void>.value();
 var _queued = 0;
+final _pendingCommands = <String, _PendingCommand>{};
+final _pendingImages = <String, _PendingImage>{};
+const _pendingTtl = Duration(minutes: 2);
 
 /// AstroSophy 的 NapCat / OneBot 11 网关。
 ///
@@ -99,9 +103,31 @@ void _handleEvent(
     return;
   }
   final raw = (data['raw_message'] as String? ?? '').trim();
+  final userId = (data['user_id'] as num?)?.toInt() ?? 0;
+  final key = '$groupId:$userId';
   final urls = _imageUrls(data['message']);
   if (raw.isEmpty && urls.isEmpty) return;
-  stdout.writeln('[$groupId] $raw${urls.isEmpty ? '' : ' [${urls.length} 图]'}');
+  stdout.writeln('[$groupId/$userId] $raw${urls.isEmpty ? '' : ' [${urls.length} 图]'}');
+
+  // 清掉过期的两步操作。
+  final now = DateTime.now();
+  final pendingCommand = _pendingCommands[key];
+  if (pendingCommand != null &&
+      now.difference(pendingCommand.createdAt) > _pendingTtl) {
+    _pendingCommands.remove(key);
+  }
+  final pendingImage = _pendingImages[key];
+  if (pendingImage != null &&
+      now.difference(pendingImage.createdAt) > _pendingTtl) {
+    _pendingImages.remove(key);
+  }
+
+  if (raw == '/取消') {
+    _pendingCommands.remove(key);
+    _pendingImages.remove(key);
+    reply(groupId, '已取消等待。');
+    return;
+  }
 
   if (raw == '/ping' || raw.startsWith('/ping ')) {
     reply(groupId, 'pong · AstroSophy');
@@ -111,40 +137,83 @@ void _handleEvent(
     reply(
       groupId,
       'AstroSophy 命令：\n'
-      '/ping 检查在线\n'
-      '/解析 + 图片 分析星图\n'
-      '/月亮 + 图片 月面信息\n'
-      '/太阳 + 图片 日面信息\n'
-      '/天象 城市 今晚可见天体',
+      '/解析 然后发图片\n'
+      '/月亮 然后发图片\n'
+      '/太阳 然后发图片\n'
+      '/天象 城市\n'
+      '/取消 清除等待中的命令或图片',
     );
-    return;
-  }
-  if (raw.startsWith('/解析') || raw.startsWith('/月亮') || raw.startsWith('/太阳')) {
-    if (urls.isEmpty) {
-      reply(groupId, '请把照片和命令放在同一条消息里。');
-      return;
-    }
-    final now = DateTime.now();
-    final last = _lastRequest[groupId];
-    if (last != null && now.difference(last).inSeconds < 20) {
-      reply(groupId, '刚处理过一条，请等 ${20 - now.difference(last).inSeconds} 秒。');
-      return;
-    }
-    _lastRequest[groupId] = now;
-    final ahead = _queued;
-    reply(groupId, ahead == 0 ? '收到图片，开始分析…' : '收到图片，前面还有 $ahead 个任务。');
-    _enqueue(() => _analyzeAndReply(
-          groupId,
-          raw,
-          urls.first,
-          reply,
-          config.maxImageMb,
-        ));
     return;
   }
   if (raw.startsWith('/天象')) {
     _replySky(groupId, raw.replaceFirst('/天象', '').trim(), reply);
+    return;
   }
+
+  final isImageCommand = raw.startsWith('/解析') ||
+      raw.startsWith('/月亮') ||
+      raw.startsWith('/太阳');
+  if (isImageCommand) {
+    final stored = _pendingImages.remove(key);
+    final source = urls.isNotEmpty ? urls.first : stored?.url;
+    if (source == null) {
+      _pendingCommands[key] = _PendingCommand(raw, now);
+      reply(groupId, '收到命令。请在 2 分钟内发图片；发 /取消 可撤销。');
+      return;
+    }
+    _pendingCommands.remove(key);
+    _submitImage(groupId, raw, source, reply, config);
+    return;
+  }
+
+  if (urls.isNotEmpty) {
+    final pending = _pendingCommands.remove(key);
+    if (pending != null) {
+      _submitImage(groupId, pending.command, urls.first, reply, config);
+      return;
+    }
+    _pendingImages[key] = _PendingImage(urls.first, now);
+    reply(groupId, '收到图片。请发 /解析、/月亮 或 /太阳；2 分钟内有效。');
+  }
+}
+
+void _submitImage(
+  int groupId,
+  String command,
+  String source,
+  void Function(int groupId, String text) reply,
+  BotConfig config,
+) {
+  final now = DateTime.now();
+  final last = _lastRequest[groupId];
+  if (last != null && now.difference(last).inSeconds < 20) {
+    reply(groupId, '刚处理过一条，请等 ${20 - now.difference(last).inSeconds} 秒。');
+    return;
+  }
+  _lastRequest[groupId] = now;
+  final ahead = _queued;
+  reply(groupId, ahead == 0 ? '收到图片，开始分析…' : '收到图片，前面还有 $ahead 个任务。');
+  _enqueue(() => _analyzeAndReply(
+        groupId,
+        command,
+        source,
+        reply,
+        config.maxImageMb,
+      ));
+}
+
+class _PendingCommand {
+  _PendingCommand(this.command, this.createdAt);
+
+  final String command;
+  final DateTime createdAt;
+}
+
+class _PendingImage {
+  _PendingImage(this.url, this.createdAt);
+
+  final String url;
+  final DateTime createdAt;
 }
 
 void _enqueue(Future<void> Function() job) {
@@ -167,14 +236,10 @@ Future<void> _analyzeAndReply(
   int maxImageMb,
 ) async {
   try {
-    final response = await http.get(Uri.parse(url)).timeout(
+    final response = await _fetchImage(url).timeout(
           const Duration(seconds: 30),
         );
-    if (response.statusCode != 200) {
-      reply(groupId, '图片下载失败：HTTP ${response.statusCode}');
-      return;
-    }
-    final bytes = response.bodyBytes;
+    final bytes = response;
     if (bytes.isEmpty || bytes.length > maxImageMb * 1024 * 1024) {
       reply(groupId, '图片为空或超过 $maxImageMb MB。');
       return;
@@ -314,14 +379,38 @@ const _cities = <String, (double, double, String)>{
   '三亚': (18.2528, 109.5119, '三亚'),
 };
 
-List<String> _imageUrls(Object? message) {  if (message is! List) return const [];
+Future<Uint8List> _fetchImage(String source) async {
+  if (source.startsWith('http://') || source.startsWith('https://')) {
+    final response = await http.get(Uri.parse(source));
+    if (response.statusCode != 200) {
+      throw HttpException('HTTP ${response.statusCode}', uri: Uri.parse(source));
+    }
+    return response.bodyBytes;
+  }
+  final uri = Uri.tryParse(source);
+  final file = uri != null && uri.scheme == 'file'
+      ? File.fromUri(uri)
+      : File(source);
+  if (!file.existsSync()) {
+    throw FileSystemException('图片文件不存在', source);
+  }
+  return file.readAsBytes();
+}
+
+List<String> _imageUrls(Object? message) {
+  if (message is! List) return const [];
   final urls = <String>[];
   for (final segment in message) {
     if (segment is! Map || segment['type'] != 'image') continue;
     final data = segment['data'];
     if (data is! Map) continue;
     final url = data['url'] ?? data['file'];
-    if (url is String && url.startsWith('http')) urls.add(url);
+    if (url is String &&
+        (url.startsWith('http') ||
+            url.startsWith('file://') ||
+            File(url).existsSync())) {
+      urls.add(url);
+    }
   }
   return urls;
 }
