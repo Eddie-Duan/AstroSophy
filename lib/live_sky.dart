@@ -192,6 +192,8 @@ class LiveObject {
     this.sizeArcmin,
     this.hip,
     this.note,
+    this.moonIlluminatedFraction,
+    this.moonWaxing,
   });
 
   final String name;
@@ -205,6 +207,10 @@ class LiveObject {
   /// 附加说明，例如月亮的「凸月 68%」。
   final String? note;
 
+  /// 月面亮面占比与盈亏方向；只有 [LiveObjectKind.moon] 有。
+  final double? moonIlluminatedFraction;
+  final bool? moonWaxing;
+
   LiveObject copyWithName(String name) => LiveObject(
         name: name,
         raDegrees: raDegrees,
@@ -214,6 +220,8 @@ class LiveObject {
         sizeArcmin: sizeArcmin,
         hip: hip,
         note: note,
+        moonIlluminatedFraction: moonIlluminatedFraction,
+        moonWaxing: moonWaxing,
       );
 }
 
@@ -373,6 +381,8 @@ class LiveCatalog {
         magnitude: -12.7,
         kind: LiveObjectKind.moon,
         note: '${phase.name} ${phase.fractionLabel}',
+        moonIlluminatedFraction: phase.illuminatedFraction,
+        moonWaxing: phase.waxing,
       ),
     );
     for (final body in predictedBodies(utc)) {

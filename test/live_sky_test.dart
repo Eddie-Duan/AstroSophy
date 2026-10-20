@@ -18,6 +18,8 @@ void main() {
     expect(solar.any((body) => body.kind == LiveObjectKind.sun), isTrue);
     expect(moon, hasLength(1));
     expect(moon.first.note, isNotNull);
+    expect(moon.first.moonIlluminatedFraction, isNotNull);
+    expect(moon.first.moonWaxing, isNotNull);
     expect(moon.first.raDegrees, inInclusiveRange(0, 360));
     expect(moon.first.decDegrees.abs(), lessThanOrEqualTo(90));
   });

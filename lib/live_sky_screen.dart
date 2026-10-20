@@ -50,6 +50,28 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   bool _showAltAzGrid = false;
   bool _showEquatorialGrid = false;
   bool _showBelowHorizon = false;
+  bool _redMode = false;
+
+  static const _fallbackSurveyBasis = LiveCameraBasis(
+    forward: LiveVec3.north,
+    up: LiveVec3.up,
+    right: LiveVec3.east,
+  );
+
+  static const _identity = <double>[
+    1, 0, 0, 0, 0,
+    0, 1, 0, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 0, 1, 0,
+  ];
+
+  /// 把画面压成红/黑两色，夜里看屏幕不刺眼。
+  static const _redFilter = ColorFilter.matrix(<double>[
+    1.25, 0.20, 0.10, 0, 0,
+    0, 0.04, 0, 0, 0,
+    0, 0.02, 0, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
   LiveSkyVisibility _visibility = LiveSkyVisibility.auto;
   double _starLimit = 5.0;
   double _deepSkyLimit = 8.0;
@@ -479,8 +501,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   LiveCameraBasis? _basis() {
     if (!_solveMode) {
       // 巡天模式：冻结进入时的那套姿态，不再读 IMU；手指拖动只改 yaw/pitch。
-      final frozen = _freeBasis;
-      if (frozen == null) return _calibratedBasis();
+      final frozen = _freeBasis ?? _fallbackSurveyBasis;
       return frozen.corrected(
         yawDegrees: _panYaw,
         pitchDegrees: _panPitch,
@@ -630,7 +651,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
 
   Future<void> _setSolveMode(bool value) async {
     if (value == _solveMode) return;
-    final frozen = value ? null : _basis();
+    final frozen = value ? null : (_basis() ?? _fallbackSurveyBasis);
     setState(() {
       _solveMode = value;
       _freeBasis = frozen;
@@ -642,6 +663,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         _matchedHips = const {};
         _trackedStars = const [];
         _matchedStars = 0;
+        _redMode = false;
       }
     });
     if (value) {
@@ -965,16 +987,16 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        refChip('黄道', const Color(0xFFFFC857), _showEcliptic,
+                        refChip('黄道', const Color(0xFFFFCC33), _showEcliptic,
                             (value) => _showEcliptic = value),
                         refChip(
                             '天赤道',
-                            const Color(0xFF64D9BD),
+                            const Color(0xFF35D6FF),
                             _showCelestialEquator,
                             (value) => _showCelestialEquator = value),
-                        refChip('白道', const Color(0xFFC9A7FF), _showLunarPath,
+                        refChip('白道', const Color(0xFFD08CFF), _showLunarPath,
                             (value) => _showLunarPath = value),
-                        refChip('银道', const Color(0xFF8BE28B), _showGalactic,
+                        refChip('银道', const Color(0xFF69F0AE), _showGalactic,
                             (value) => _showGalactic = value),
                       ],
                     ),
@@ -1259,9 +1281,11 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         : (math.atan2(targetEnu.x, targetEnu.y) * 180 / math.pi + 360) % 360;
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
+      body: ColorFiltered(
+        colorFilter: _redMode ? _redFilter : const ColorFilter.matrix(_identity),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
           Center(
             child: AspectRatio(
               aspectRatio: _previewAspect,
@@ -1270,17 +1294,20 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 onScaleStart: (_) => _zoomStart = _zoom,
                 onScaleUpdate: (details) {
                   // 巡天模式：单指拖动星图，不再跟随手机角度。
-                  if (!_solveMode && details.pointerCount == 1) {
+                  if (!_solveMode && details.pointerCount <= 1) {
                     final width =
                         math.max(1.0, MediaQuery.sizeOf(context).width);
                     final degPerPixel = _effectiveFov / width;
                     setState(() {
-                      _panYaw = (_panYaw -
-                              details.focalPointDelta.dx * degPerPixel)
-                          .clamp(-180.0, 180.0);
+                      var yaw =
+                          _panYaw - details.focalPointDelta.dx * degPerPixel;
+                      // 方位角是圆的，不该在 ±180° 处硬停住。
+                      if (yaw > 180) yaw -= 360;
+                      if (yaw < -180) yaw += 360;
+                      _panYaw = yaw;
                       _panPitch = (_panPitch +
                               details.focalPointDelta.dy * degPerPixel)
-                          .clamp(-85.0, 85.0);
+                          .clamp(-89.0, 89.0);
                     });
                   }
                   if (details.scale == 1) return;
@@ -1552,6 +1579,15 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  if (_solveMode) ...[
+                    _roundButton(
+                      icon: _redMode ? Icons.circle : Icons.circle_outlined,
+                      color: const Color(0xFFFF5A5A),
+                      tooltip: _redMode ? t('关闭红光模式') : t('红光模式'),
+                      onTap: () => setState(() => _redMode = !_redMode),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
                   _roundButton(
                     icon: _targetObject == null ? Icons.search : Icons.close,
                     tooltip: _targetObject == null
@@ -1571,7 +1607,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1630,6 +1667,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     required IconData icon,
     required String tooltip,
     required VoidCallback onTap,
+    Color color = kMint,
   }) =>
       Material(
         color: Colors.black54,
@@ -1641,7 +1679,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
             onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.all(9),
-              child: Icon(icon, size: 20, color: kMint),
+              child: Icon(icon, size: 20, color: color),
             ),
           ),
         ),
@@ -1713,21 +1751,22 @@ class LiveSkyPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _paintHorizon(canvas, size);
+    _paintZenith(canvas, size);
     if (showAltAzGrid) _paintAltAzGrid(canvas, size);
     if (showEquatorialGrid) _paintEquatorialGrid(canvas, size);
     if (showEcliptic) {
-      _paintReferenceCircle(canvas, size, _eclipticPoints(), const Color(0xFFFFC857));
+      _paintReferenceCircle(canvas, size, _eclipticPoints(), const Color(0xFFFFCC33));
     }
     if (showCelestialEquator) {
       _paintReferenceCircle(
-          canvas, size, _celestialEquatorPoints(), const Color(0xFF64D9BD));
+          canvas, size, _celestialEquatorPoints(), const Color(0xFF35D6FF));
     }
     if (showLunarPath) {
       _paintReferenceCircle(
-          canvas, size, _lunarPathPoints(), const Color(0xFFC9A7FF));
+          canvas, size, _lunarPathPoints(), const Color(0xFFD08CFF));
     }
     if (showGalactic) {
-      _paintReferenceCircle(canvas, size, _galacticPoints(), const Color(0xFF8BE28B));
+      _paintReferenceCircle(canvas, size, _galacticPoints(), const Color(0xFF69F0AE));
     }
     if (showConstellations) _paintConstellations(canvas, size);
     if (showStars) _paintStars(canvas, size);
@@ -2000,11 +2039,16 @@ class LiveSkyPainter extends CustomPainter {
   /// 地平线和东南西北。实时模式里用户经常把手机举到地平线附近，
   /// 没有这条线就分不清「星在地上还是天上」。
   void _paintHorizon(Canvas canvas, Size size) {
+    final emphasis = showBelowHorizon;
+    final color = emphasis
+        ? const Color(0xFF6EE7A8)
+        : Colors.white.withValues(alpha: 0.16);
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9
-      ..color = Colors.white.withValues(alpha: 0.16);
+      ..strokeWidth = emphasis ? 2.4 : 0.9
+      ..color = color;
     Offset? previous;
+    Offset? labelPoint;
     for (var azimuth = 0; azimuth <= 360; azimuth += 4) {
       final radians = azimuth * math.pi / 180;
       final point = basis.project(
@@ -2016,7 +2060,16 @@ class LiveSkyPainter extends CustomPainter {
       if (point != null && previous != null) {
         canvas.drawLine(previous, point, paint);
       }
+      if (point != null && labelPoint == null) labelPoint = point;
       previous = point;
+    }
+    if (emphasis && labelPoint != null) {
+      _label(
+        canvas,
+        labelPoint + const Offset(6, -16),
+        t('地平线'),
+        const Color(0xFF6EE7A8),
+      );
     }
     for (final (azimuth, label) in const [
       (0.0, 'N'),
@@ -2036,6 +2089,28 @@ class LiveSkyPainter extends CustomPainter {
             Colors.white.withValues(alpha: 0.42));
       }
     }
+  }
+
+  /// 天顶标记：绿色圆点 + 加粗圆环，抬头就知道正上方在哪。
+  void _paintZenith(Canvas canvas, Size size) {
+    final point = basis.project(
+      LiveVec3.up,
+      horizontalFovDegrees: fov,
+      viewport: size,
+      margin: 0,
+    );
+    if (point == null) return;
+    const color = Color(0xFF6EE7A8);
+    canvas.drawCircle(
+      point,
+      13,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..color = color,
+    );
+    canvas.drawCircle(point, 3.2, Paint()..color = color);
+    _label(canvas, point + const Offset(14, -18), t('天顶'), color);
   }
 
   void _paintStars(Canvas canvas, Size size) {
@@ -2167,22 +2242,79 @@ class LiveSkyPainter extends CustomPainter {
               item.object.kind == LiveObjectKind.moon
           ? 5.5
           : 4.2;
-      canvas.drawCircle(point, radius, Paint()..color = color);
-      canvas.drawCircle(
-        point,
-        radius + 2.8,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = color.withValues(alpha: 0.8),
-      );
+      if (item.object.kind == LiveObjectKind.moon &&
+          item.object.moonIlluminatedFraction != null) {
+        _paintMoonDisc(
+          canvas,
+          point,
+          radius + 1,
+          item.object.moonIlluminatedFraction!,
+          item.object.moonWaxing ?? true,
+        );
+      } else {
+        canvas.drawCircle(point, radius, Paint()..color = color);
+        canvas.drawCircle(
+          point,
+          radius + 2.8,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1
+            ..color = color.withValues(alpha: 0.8),
+        );
+      }
       if (showLabels) {
-        final text = item.object.note == null
+        final text = item.object.note == null ||
+                item.object.kind == LiveObjectKind.moon
             ? item.object.name
             : '${item.object.name} · ${item.object.note}';
         _label(canvas, point + const Offset(7, -8), text, color);
       }
     }
+  }
+
+  /// 用亮面形状表示月相：白银色是被照亮的部分，深色是暗面。
+  void _paintMoonDisc(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    double fraction,
+    bool waxing,
+  ) {
+    final lit = const Color(0xFFE8EEF5);
+    final dark = const Color(0xFF172033);
+    final path = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    canvas.save();
+    canvas.clipPath(path);
+    canvas.drawCircle(center, radius, Paint()..color = dark);
+    final f = fraction.clamp(0.0, 1.0);
+    final direction = waxing ? 1.0 : -1.0;
+    if (f >= 0.5) {
+      canvas.drawCircle(center, radius, Paint()..color = lit);
+      final width = math.max(0.4, 2 * radius * (1 - f));
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: center.translate(-direction * radius * 0.85, 0),
+          width: width,
+          height: radius * 2,
+        ),
+        Paint()..color = dark,
+      );
+    } else {
+      canvas.drawCircle(
+        center.translate(direction * radius * 2 * (1 - f), 0),
+        radius,
+        Paint()..color = lit,
+      );
+    }
+    canvas.restore();
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9
+        ..color = lit.withValues(alpha: 0.75),
+    );
   }
 
   void _label(Canvas canvas, Offset offset, String text, Color color) {
