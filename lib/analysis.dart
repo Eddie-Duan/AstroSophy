@@ -6,6 +6,7 @@ import 'package:image/image.dart' as imglib;
 import 'strings.dart';
 import 'models.dart';
 import 'moon_disc.dart';
+import 'sun_disc.dart';
 
 /// 图像分析层：解码、星点检测、非星空掩膜、孔径测光和处理图生成。
 ///
@@ -80,6 +81,10 @@ class ImageExclusion {
 }
 
 /// 一次本地分析的完整结果。
+/// 星点检测的松紧程度。广域用它把银河纹理里更暗的星也捞出来，
+/// 普通场景仍保持原来的 5σ/3.2σ，避免假星。
+enum StarDetectionProfile { normal, wide }
+
 class SkyAnalysis {
   const SkyAnalysis({
     required this.width,
@@ -101,6 +106,7 @@ class SkyAnalysis {
     required this.brightFlatFraction,
     this.solverExtras = const [],
     this.moonDisc,
+    this.sunDisc,
   });
 
   final int width;
@@ -154,8 +160,13 @@ class SkyAnalysis {
   /// 局部对比度还挺高。等它跑完再改判，报告里那些数字早就编好了。
   final MoonDisc? moonDisc;
 
+  /// 太阳圆盘；只在「太阳」场景里尝试，和月亮是互斥的两条盘面链路。
+  final SunDisc? sunDisc;
+
   /// 这张照片是不是以月面为主。
   bool get isMoonShot => moonDisc != null;
+
+  bool get isSunShot => sunDisc != null;
 
   /// 参与星表匹配和测光的紧凑点源（排除拉长候选和用户剔除项）。
   List<DetectedStar> get compactSources => stars
@@ -275,6 +286,7 @@ class SkyAnalysis {
         brightFlatFraction: brightFlatFraction,
         solverExtras: solverExtras,
         moonDisc: moonDisc,
+        sunDisc: sunDisc,
       );
 
   static bool _sameSource(DetectedStar a, DetectedStar b) =>
@@ -298,6 +310,7 @@ class SkyAnalysis {
         'bright_flat_fraction': brightFlatFraction,
         'solver_extras': solverExtras.map((star) => star.toJson()).toList(),
         'moon_disc': moonDisc?.toJson(),
+        'sun_disc': sunDisc?.toJson(),
       };
 
   /// 历史记录里只存索引信息，图片从磁盘重新读，不在 JSON 里塞 base64。
@@ -341,13 +354,22 @@ class SkyAnalysis {
                 Map<String, Object?>.from(json['moon_disc'] as Map<Object?, Object?>),
               )
             : null,
+        sunDisc: json['sun_disc'] is Map<Object?, Object?>
+            ? SunDisc.fromJson(
+                Map<String, Object?>.from(json['sun_disc'] as Map<Object?, Object?>),
+              )
+            : null,
       );
 
   /// 对外唯一入口：给一份图片字节，返回分析结果。
+  /// 星点检测的松紧程度。广域用它把银河纹理里更暗的星也捞出来，
+  /// 普通场景仍保持原来的 5σ/3.2σ，避免假星。
   static SkyAnalysis analyze(
     Uint8List bytes, {
     List<ImageExclusion> exclusions = const [],
     bool detectMoon = true,
+    bool detectSun = false,
+    StarDetectionProfile profile = StarDetectionProfile.normal,
   }) {
     final decoded = decodeImageOrRawPreview(bytes);
     if (decoded == null) {
@@ -360,6 +382,18 @@ class SkyAnalysis {
     final height = image.height;
 
     final gray = _toGrayscale(image);
+    final grayBytes = _byteGrayscale(gray);
+
+    if (detectSun) {
+      final sunDisc = measureSunDisc(
+        gray: grayBytes,
+        width: width,
+        height: height,
+      );
+      if (sunDisc != null) {
+        return _analyzeSun(image, gray, width, height, sunDisc);
+      }
+    }
 
     // 定性分流放在最一开始：月面为主的照片走月面那条链路，根本不进星点流程。
     //
@@ -368,7 +402,7 @@ class SkyAnalysis {
     // 流程跑完再回头看，报告里的星等、噪声、解算建议早就编好了。
     final moonDisc = detectMoon
         ? measureMoonDisc(
-            gray: _byteGrayscale(gray),
+            gray: grayBytes,
             width: width,
             height: height,
           )
@@ -390,7 +424,7 @@ class SkyAnalysis {
     final saturatedFraction = saturated / gray.length;
 
     final grid = _BackgroundGrid(gray, width, height);
-    final threshold = _ThresholdMap(gray, width, height, grid);
+    final threshold = _ThresholdMap(gray, width, height, grid, profile);
 
     var classified = _classify(
       _findComponents(gray, width, height, threshold.primary, grid),
@@ -619,6 +653,76 @@ SkyAnalysis _analyzeMoon(
   );
 }
 
+SkyAnalysis _analyzeSun(
+  imglib.Image image,
+  Float32List gray,
+  int width,
+  int height,
+  SunDisc disc,
+) {
+  final bytes = _byteGrayscale(gray);
+  final outer = disc.radiusPixels * 1.15 + 4;
+  final outerSq = outer * outer;
+  var sum = 0.0;
+  var sumSq = 0.0;
+  var count = 0;
+  var saturated = 0;
+  for (var y = 0; y < height; y++) {
+    final dy = y - disc.centerY;
+    for (var x = 0; x < width; x++) {
+      final value = bytes[y * width + x];
+      if (value >= 250) saturated++;
+      final dx = x - disc.centerX;
+      if (dx * dx + dy * dy <= outerSq) continue;
+      final level = value.toDouble();
+      sum += level;
+      sumSq += level * level;
+      count++;
+    }
+  }
+  final skyMean = count == 0 ? 0.0 : sum / count;
+  final variance = count == 0 ? 0.0 : sumSq / count - skyMean * skyMean;
+  final background = skyMean / 255.0;
+  final noise = variance > 0 ? math.sqrt(variance) / 255.0 : 0.0;
+  final saturatedFraction = bytes.isEmpty ? 0.0 : saturated / bytes.length;
+  final preview = Uint8List.fromList(imglib.encodeJpg(image, quality: 92));
+  final discPercent = (disc.discAreaFraction * 100).toStringAsFixed(2);
+
+  return SkyAnalysis(
+    width: width,
+    height: height,
+    stars: const [],
+    quality: t('日面'),
+    background: background,
+    noise: noise,
+    backgroundIndex: background * 100,
+    saturatedFraction: saturatedFraction,
+    diagnostics: [
+      t('这张照片以日面为主，走的是太阳盘面分析，不做星点检测。'),
+      t('日面：圆心 ({0}, {1}) 像素，半径 {2} 像素，占画面 {3}%。', [
+        disc.centerX.round(),
+        disc.centerY.round(),
+        disc.radiusPixels.toStringAsFixed(1),
+        discPercent,
+      ]),
+      t('检出 {0} 处暗斑，合计约占日面 {1}%；暗斑可能是黑子，也可能来自灰尘或处理痕迹。', [
+        disc.darkSpotCount,
+        (disc.darkSpotAreaFraction * 100).toStringAsFixed(2),
+      ]),
+      t('拍摄太阳必须使用合格的太阳滤镜；没有滤镜时不要用手机或望远镜直视太阳。'),
+    ],
+    preview: preview,
+    processedPreview: preview,
+    fwhm: 0,
+    nonStarFraction: 0,
+    maskRegions: const [],
+    isLikelyStarfield: false,
+    starfieldConfidence: 0,
+    brightFlatFraction: 0,
+    sunDisc: disc,
+  );
+}
+
 List<MaskRegion> _applyImageExclusions(
   Float32List gray,
   int width,
@@ -734,11 +838,15 @@ Future<SkyAnalysis> analyzeImageBytes(
   Uint8List bytes, {
   List<ImageExclusion> exclusions = const [],
   bool detectMoon = true,
+  bool detectSun = false,
+  StarDetectionProfile profile = StarDetectionProfile.normal,
 }) async =>
     SkyAnalysis.analyze(
       bytes,
       exclusions: exclusions,
       detectMoon: detectMoon,
+      detectSun: detectSun,
+      profile: profile,
     );
 
 // ---------------------------------------------------------------------------
@@ -917,7 +1025,17 @@ class _BackgroundGrid {
 /// 每个像素的判断阈值 = 局部背景 + kσ 局部噪声。
 /// 局部化以后，光污染梯度强的区域不会因为全局阈值过高而漏检暗星。
 class _ThresholdMap {
-  _ThresholdMap(Float32List gray, int width, int height, _BackgroundGrid grid) {
+  _ThresholdMap(
+    Float32List gray,
+    int width,
+    int height,
+    _BackgroundGrid grid,
+    StarDetectionProfile profile,
+  ) {
+    final primarySigma =
+        profile == StarDetectionProfile.wide ? 4.2 : 5.0;
+    final relaxedSigma =
+        profile == StarDetectionProfile.wide ? 2.8 : 3.2;
     primary = Float32List(gray.length);
     relaxed = Float32List(gray.length);
     for (var y = 0; y < height; y++) {
@@ -925,8 +1043,10 @@ class _ThresholdMap {
         final index = y * width + x;
         final background = grid.backgroundAt(x.toDouble(), y.toDouble());
         final sigma = grid.noiseAt(x.toDouble(), y.toDouble());
-        primary[index] = math.max(background + 5 * sigma, background + 4 / 255);
-        relaxed[index] = math.max(background + 3.2 * sigma, background + 3 / 255);
+        primary[index] =
+            math.max(background + primarySigma * sigma, background + 4 / 255);
+        relaxed[index] =
+            math.max(background + relaxedSigma * sigma, background + 3 / 255);
       }
     }
   }

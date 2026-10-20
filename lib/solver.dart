@@ -109,6 +109,7 @@ class SolveHint {
     this.budgetMilliseconds = 0,
     this.patchSolve = false,
     this.skipShallow = false,
+    this.patchGrid = 2,
   });
 
   /// 视场对角线下限（度）。
@@ -140,6 +141,9 @@ class SolveHint {
   /// 只是白等，还会把预算花在注定失败的候选上。
   final bool skipShallow;
 
+  /// 分块解算的网格数：2 就是 2×2，3 就是 3×3。
+  final int patchGrid;
+
   SolveHint copyWith({
     double? minFieldDegrees,
     double? maxFieldDegrees,
@@ -147,6 +151,7 @@ class SolveHint {
     int? budgetMilliseconds,
     bool? patchSolve,
     bool? skipShallow,
+    int? patchGrid,
   }) =>
       SolveHint(
         minFieldDegrees: minFieldDegrees ?? this.minFieldDegrees,
@@ -155,6 +160,7 @@ class SolveHint {
         budgetMilliseconds: budgetMilliseconds ?? this.budgetMilliseconds,
         patchSolve: patchSolve ?? this.patchSolve,
         skipShallow: skipShallow ?? this.skipShallow,
+        patchGrid: patchGrid ?? this.patchGrid,
       );
 }
 
@@ -164,7 +170,8 @@ enum ShootingScene {
   wide('wide'),
   deepSky('deep_sky'),
   narrow('narrow'),
-  moon('moon');
+  moon('moon'),
+  sun('sun');
 
   const ShootingScene(this.storageKey);
 
@@ -181,6 +188,7 @@ enum ShootingScene {
         ShootingScene.deepSky => t('深空'),
         ShootingScene.narrow => t('长焦'),
         ShootingScene.moon => t('月亮'),
+        ShootingScene.sun => t('太阳'),
       };
 
   String get description => switch (this) {
@@ -189,6 +197,7 @@ enum ShootingScene {
         ShootingScene.deepSky => t('多数星云、星系。'),
         ShootingScene.narrow => t('小目标、长焦望远镜。'),
         ShootingScene.moon => t('只找月亮，随即报告。'),
+        ShootingScene.sun => t('只找太阳，随即报告。'),
       };
 
   SolveHint get hint => switch (this) {
@@ -199,6 +208,7 @@ enum ShootingScene {
             allowDeep: false,
             budgetMilliseconds: 15000,
             patchSolve: true,
+            patchGrid: 3,
           ),
         ShootingScene.deepSky => const SolveHint(
             minFieldDegrees: 2,
@@ -213,6 +223,7 @@ enum ShootingScene {
             skipShallow: true,
           ),
         ShootingScene.moon => const SolveHint(),
+        ShootingScene.sun => const SolveHint(),
       };
 }
 
@@ -511,11 +522,19 @@ class PlateSolver {
     final fullDiagonal = math.sqrt(
       analysis.width * analysis.width + analysis.height * analysis.height,
     );
-    final tileWidth = (analysis.width * 0.62).round().clamp(16, analysis.width);
+    final grid = hint.patchGrid.clamp(2, 4);
+    final tileFraction = grid == 2 ? 0.62 : grid == 3 ? 0.46 : 0.36;
+    final tileWidth = (analysis.width * tileFraction).round().clamp(16, analysis.width);
     final tileHeight =
-        (analysis.height * 0.62).round().clamp(16, analysis.height);
-    final xs = <int>{0, analysis.width - tileWidth}.toList();
-    final ys = <int>{0, analysis.height - tileHeight}.toList();
+        (analysis.height * tileFraction).round().clamp(16, analysis.height);
+    final xs = [
+      for (var i = 0; i < grid; i++)
+        ((analysis.width - tileWidth) * i / (grid - 1)).round(),
+    ];
+    final ys = [
+      for (var i = 0; i < grid; i++)
+        ((analysis.height - tileHeight) * i / (grid - 1)).round(),
+    ];
     final total = xs.length * ys.length;
     var attempted = 0;
     for (final y in ys) {
@@ -1363,12 +1382,14 @@ class PlateSolver {
 
     // 视场大到十几度时，线性近似会把边角拉歪；这里做个上限判断，
     // 太离谱的结果宁可当解算失败，也不给用户一个错的坐标。
+    // 上限跟 SolveHint 的最大视场一致（120°）；原来的 90° 会把手机超广角
+    // 和宽幅拼接片直接判死。
     final diagonalDegrees = math.sqrt(
           analysis.width * analysis.width +
               analysis.height * analysis.height,
         ) *
         current.a.abs;
-    if (diagonalDegrees > 90) return null;
+    if (diagonalDegrees > 120) return null;
 
     final ar = current.a.real;
     final ai = current.a.imaginary;

@@ -73,6 +73,7 @@ class PipelineProgress {
     this.online = false,
     this.moon = false,
     this.moonOnly = false,
+    this.sunOnly = false,
     this.solvedLocally = false,
     this.deep = false,
   });
@@ -106,6 +107,9 @@ class PipelineProgress {
   /// [moonOnly] 说的是「他拿了主意，这一次就报月亮」。
   final bool moonOnly;
 
+  /// 用户已经明确选了「太阳」，这一次只报日面。
+  final bool sunOnly;
+
   /// 本机解算**已经成功**。
   ///
   /// 非空即「这张照片的天区是手机上算出来的」——它一次都没出过设备。界面靠它
@@ -134,6 +138,7 @@ class PipelineOutcome {
     required this.explanation,
     required this.warnings,
     this.moonOnly = false,
+    this.sunOnly = false,
     this.solveDuration,
   });
 
@@ -152,6 +157,9 @@ class PipelineOutcome {
   /// 这一次**没有**做解算，也没有上传照片。界面要据此把话说明白，而不是
   /// 让用户以为「解算失败了」。
   final bool moonOnly;
+
+  /// 这一次只报日面，没有解算也没有上传。
+  final bool sunOnly;
 
   /// 解算这一步实际花了多久（本机 + 在线回退，不含星点分析和 AI 解读）。
   ///
@@ -210,7 +218,7 @@ class SkyPipeline {
   /// 动辄一两分钟，而本地分析只要一秒。平分的话进度条前半程几乎不动，
   /// 用户反而更慌。
   List<_Stage> get _stages => switch (_effectiveMode) {
-        _ when scene == ShootingScene.moon => [
+        _ when scene == ShootingScene.moon || scene == ShootingScene.sun => [
             _Stage(t('正在分析星图'), 60),
             if (_canExplain) _Stage(t('正在生成解读'), 40),
           ],
@@ -270,6 +278,7 @@ class SkyPipeline {
     // 底加蓝斑点，直到这一屏结束。和 [solvedLocally] 一样，一路持续到最后：
     // 中间漏带一次，颜色就会在那一瞬间翻回去。
     var moonOnlyReported = false;
+    var sunOnlyReported = false;
 
     void report(int index, double local, [String? text, bool deep = false]) {
       if (index >= bounds.length) return;
@@ -281,6 +290,7 @@ class SkyPipeline {
           online: stages[index].online,
           solvedLocally: solvedLocally,
           moonOnly: moonOnlyReported,
+          sunOnly: sunOnlyReported,
           deep: deep,
         ),
       );
@@ -291,7 +301,14 @@ class SkyPipeline {
     report(0, 0);
     final detectMoon =
         scene == ShootingScene.auto || scene == ShootingScene.moon;
-    final analysis = await worker.analyze(bytes, detectMoon: detectMoon);
+    final analysis = await worker.analyze(
+      bytes,
+      detectMoon: detectMoon,
+      detectSun: scene == ShootingScene.sun,
+      profile: scene == ShootingScene.wide
+          ? StarDetectionProfile.wide
+          : StarDetectionProfile.normal,
+    );
 
     // 认出月面就在这里停下来问一句，而不是接着往下解算。
     //
@@ -304,7 +321,31 @@ class SkyPipeline {
     // 月球没有任何恒星尺度上的点源，星表怎么对都对不上，上传只会白等一次
     // 超时。所以这一句必须问在解算之前。
     var moonOnly = false;
-    if (scene == ShootingScene.moon) {
+    var sunOnly = false;
+    if (scene == ShootingScene.sun) {
+      sunOnly = true;
+      sunOnlyReported = true;
+      if (analysis.isSunShot) {
+        final disc = analysis.sunDisc!;
+        onProgress?.call(
+          PipelineProgress(
+            bounds.first.$2,
+            t('太阳 · 半径 {0} px', [disc.radiusPixels.toStringAsFixed(0)]),
+            sunOnly: true,
+          ),
+        );
+        warnings.add(t('太阳场景：只报告日面，不寻找星场。'));
+      } else {
+        onProgress?.call(
+          PipelineProgress(
+            bounds.first.$2,
+            t('没有检测到太阳'),
+            sunOnly: true,
+          ),
+        );
+        warnings.add(t('这张图里没有检测到太阳圆盘。'));
+      }
+    } else if (scene == ShootingScene.moon) {
       // 用户已经明确说「这次只看月亮」：有月亮就报月亮，没有就报没有，
       // 不再问「要不要继续找星星」。
       moonOnly = true;
@@ -476,8 +517,8 @@ class SkyPipeline {
       }
     }
 
-    if (moonOnly) {
-      // 用户选了只要月亮：跳过解算和上传，直接走到解读那一步。
+    if (moonOnly || sunOnly) {
+      // 用户选了只要盘面：跳过解算和上传，直接走到解读那一步。
     } else if (effectiveMode == SkyAnalysisMode.onlineFirst ||
         effectiveMode == SkyAnalysisMode.onlineOnly) {
       final onlineFirst = effectiveMode == SkyAnalysisMode.onlineFirst;
@@ -551,6 +592,7 @@ class SkyPipeline {
         t('解析完成'),
         moon: analysis.isMoonShot,
         moonOnly: moonOnlyReported,
+        sunOnly: sunOnlyReported,
         solvedLocally: solvedLocally,
       ),
     );
@@ -560,6 +602,7 @@ class SkyPipeline {
       explanation: explanation,
       warnings: warnings,
       moonOnly: moonOnly,
+      sunOnly: sunOnly,
       solveDuration: solve == null ? null : solveWatch.elapsed,
     );
   }
@@ -775,10 +818,12 @@ class SkyWorker {
     Uint8List bytes, {
     List<ImageExclusion> exclusions = const [],
     bool detectMoon = true,
+    bool detectSun = false,
+    StarDetectionProfile profile = StarDetectionProfile.normal,
   }) async =>
       await _request(
         'analyze',
-        _AnalyzeRequest(bytes, exclusions, detectMoon),
+        _AnalyzeRequest(bytes, exclusions, detectMoon, detectSun, profile),
         null,
       ) as SkyAnalysis;
 
@@ -840,11 +885,19 @@ class _MovingRequest {
 }
 
 class _AnalyzeRequest {
-  const _AnalyzeRequest(this.bytes, this.exclusions, this.detectMoon);
+  const _AnalyzeRequest(
+    this.bytes,
+    this.exclusions,
+    this.detectMoon,
+    this.detectSun,
+    this.profile,
+  );
 
   final Uint8List bytes;
   final List<ImageExclusion> exclusions;
   final bool detectMoon;
+  final bool detectSun;
+  final StarDetectionProfile profile;
 }
 
 /// 一次本机解算请求：分析结果 + 用户给的视场先验。
@@ -892,6 +945,8 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
                 request.bytes,
                 exclusions: request.exclusions,
                 detectMoon: request.detectMoon,
+                detectSun: request.detectSun,
+                profile: request.profile,
               ),
             ),
           );

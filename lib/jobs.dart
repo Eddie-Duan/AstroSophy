@@ -174,6 +174,7 @@ class JobCenter extends ChangeNotifier {
         online: outcome.solve?.source == SolveSource.online,
         moon: outcome.analysis.isMoonShot,
         moonOnly: outcome.moonOnly,
+        sunOnly: outcome.sunOnly,
       );
       // 没人在看的时候替用户存下来。
       //

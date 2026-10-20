@@ -113,6 +113,9 @@ void main() {
     final galacticCenter = galacticToEquatorialDegrees(0, 0);
     expect(galacticCenter.ra, closeTo(266.4, 0.5));
     expect(galacticCenter.dec, closeTo(-28.9, 0.5));
+    final centre = equatorialToGalacticDegrees(266.4051, -28.9362);
+    expect(centre.l, closeTo(0, 0.5));
+    expect(centre.b, closeTo(0, 0.5));
     final node = lunarAscendingNodeDegrees(DateTime.utc(2026, 10, 20));
     expect(node, inInclusiveRange(0, 360));
     final moonOrbit = lunarOrbitToEquatorialDegrees(0, node);

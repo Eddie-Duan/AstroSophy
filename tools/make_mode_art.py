@@ -85,6 +85,12 @@ ART = {
         "at the lower edge, deep navy night sky, "
         + PALETTE + ", centered, " + NO_TEXT
     ),
+    "scene_sun": (
+        "flat vector illustration, a large orange solar disc with a few tiny dark "
+        "sunspots, a safe solar filter in front of a small telescope silhouette, "
+        "deep navy sky, warm amber highlights, astronomy observation, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
 }
 
 

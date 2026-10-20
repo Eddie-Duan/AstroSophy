@@ -167,6 +167,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 屏幕上写着「还没解开这片天区，点上面的『一键解析』」——用户刚看过一张
   /// 算得好好的月亮，却被告知什么都没识别出来。
   bool get _isMoonReport => _analysis?.moonDisc != null && _solve == null;
+  bool get _isSunReport => _analysis?.sunDisc != null && _solve == null;
 
   /// 正在裁剪选中的那张图。
   bool _cropping = false;
@@ -1140,6 +1141,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           exclusions: exclusions,
           detectMoon: _shootingScene == ShootingScene.auto ||
               _shootingScene == ShootingScene.moon,
+          detectSun: _shootingScene == ShootingScene.sun,
+          profile: _shootingScene == ShootingScene.wide
+              ? StarDetectionProfile.wide
+              : StarDetectionProfile.normal,
         );
         final (adjustedSolve, _) = await worker.solveLocal(adjustedAnalysis);
         _ensureCurrentAnalysis(analysis);
@@ -2215,7 +2220,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               const SizedBox(height: 8),
               _optionGrid([
-                for (final scene in ShootingScene.values.take(4))
+                for (final scene in ShootingScene.values)
                   _optionTile(
                     label: scene.label,
                     asset: switch (scene) {
@@ -2224,19 +2229,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ShootingScene.deepSky => 'assets/ui/scene_medium.jpg',
                       ShootingScene.narrow => 'assets/ui/scene_long.jpg',
                       ShootingScene.moon => 'assets/ui/scene_moon.jpg',
+                      ShootingScene.sun => 'assets/ui/scene_sun.jpg',
                     },
                     selected: _shootingScene == scene,
                     onTap: () => _setShootingScene(scene),
                   ),
               ]),
-              const SizedBox(height: 8),
-              _optionTile(
-                label: ShootingScene.moon.label,
-                asset: 'assets/ui/scene_moon.jpg',
-                selected: _shootingScene == ShootingScene.moon,
-                onTap: () => _setShootingScene(ShootingScene.moon),
-                aspectRatio: 3.2,
-              ),
             ],
           ),
           const Divider(height: 1),
@@ -3124,9 +3122,11 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                         // 月面照片上当然「没有检出目标」——那条链路压根不在月面上
                         // 找点源。照直写「没有检出目标」，用户会以为这张图白拍了，
                         // 而其实月盘、亮面占比、相名都算出来了，只是画在图上了。
-                        analysis.moonDisc != null
-                            ? t('这是月面照片：星点、深空天体和系内天体都不在月面上找。月盘的位置和亮面占比已经标在图上了。')
-                            : t('没有检出目标。'),
+                        analysis.sunDisc != null
+                            ? t('这是日面照片：星点、深空天体和系内天体都不在日面上找。日面半径和暗斑已经记在下面的诊断里。')
+                            : analysis.moonDisc != null
+                                ? t('这是月面照片：星点、深空天体和系内天体都不在月面上找。月盘的位置和亮面占比已经标在图上了。')
+                                : t('没有检出目标。'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Color(0xFF8192A8)),
                       ),
@@ -4201,18 +4201,17 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ],
               ),
-              if (_isMoonReport)
+              if (_isMoonReport || _isSunReport)
                 // 不解释的话，用户看到的就是「没有解开这片天区」——而真相是
                 // 这一次压根没去解。同一块屏幕上两种截然不同的意思，必须说清。
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Text(
-                    // 分两句是因为「这一次」在两条路上指的不同的东西：刚跑完
-                    // 的那次是用户自己选的；从仓库里翻出来的那条，用户早忘了
-                    // 当时点过什么，说「这是月面链路」才对他有用。
-                    _moonOnly
-                        ? t('这次只报告了月亮，没有解算天区。')
-                        : t('这张照片走的是月面链路，没有解算天区。'),
+                    _isSunReport
+                        ? t('这次只报告了日面，没有解算天区。')
+                        : _moonOnly
+                            ? t('这次只报告了月亮，没有解算天区。')
+                            : t('这张照片走的是月面链路，没有解算天区。'),
                   ),
                 )
               else if (solve == null)

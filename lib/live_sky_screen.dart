@@ -78,12 +78,19 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
 
   StreamSubscription<AccelerometerEvent>? _accelSub;
   StreamSubscription<MagnetometerEvent>? _magSub;
+  StreamSubscription<GyroscopeEvent>? _gyroSub;
   Timer? _ticker;
   Timer? _solarTimer;
   bool _sensorError = false;
 
   LiveVec3 _accelerometer = const LiveVec3(0, 0, 9.8);
   LiveVec3 _magnetometer = const LiveVec3(0, 1, 0);
+  LiveVec3 _gyroscope = LiveVec3.zero;
+  LiveVec3 _gyroBias = LiveVec3.zero;
+  LiveCameraBasis? _fusedBasis;
+  DateTime _lastGyroAt = DateTime.now();
+  bool _accelSeen = false;
+  bool _magSeen = false;
 
   double _latitude = 0;
   double _longitude = 0;
@@ -135,6 +142,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     _solarTimer?.cancel();
     _accelSub?.cancel();
     _magSub?.cancel();
+    _gyroSub?.cancel();
     if (_streaming) {
       unawaited(_camera?.stopImageStream().catchError((_) {}));
     }
@@ -231,8 +239,13 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   void _initSensors() {
     _accelSub = accelerometerEventStream().listen(
       (event) {
-        _accelerometer =
-            _accelerometer.lerp(LiveVec3(event.x, event.y, event.z), 0.18);
+        final next = LiveVec3(event.x, event.y, event.z);
+        // 加速度计偶尔会甩出一两个尖峰；直接 lerp 进去会让整幅星图跳一下。
+        if (next.length < 1 || next.length > 40) return;
+        _accelerometer = _accelerometer.lerp(next, 0.14);
+        _accelSeen = true;
+        _ensureFusedBasis();
+        _correctFusedBasis();
       },
       onError: (_) {
         if (mounted) setState(() => _sensorError = true);
@@ -241,14 +254,89 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     );
     _magSub = magnetometerEventStream().listen(
       (event) {
-        _magnetometer =
-            _magnetometer.lerp(LiveVec3(event.x, event.y, event.z), 0.10);
+        final next = LiveVec3(event.x, event.y, event.z);
+        if (next.length < 1 || next.length > 300) return;
+        _magnetometer = _magnetometer.lerp(next, 0.08);
+        _magSeen = true;
+        _ensureFusedBasis();
+        _correctFusedBasis();
       },
       onError: (_) {
         if (mounted) setState(() => _sensorError = true);
       },
       cancelOnError: false,
     );
+    _gyroSub = gyroscopeEventStream().listen(
+      (event) {
+        final now = DateTime.now();
+        final dt = (now.difference(_lastGyroAt).inMicroseconds / 1e6)
+            .clamp(0.001, 0.08);
+        _lastGyroAt = now;
+        final raw = LiveVec3(event.x, event.y, event.z);
+        // 只在接近静止时慢慢估陀螺零偏；转动时把转动本身当偏置会把方向带歪。
+        if (raw.length < 0.25) {
+          _gyroBias = _gyroBias.lerp(raw, 0.01);
+        }
+        final gyro = raw - _gyroBias;
+        _gyroscope = gyro;
+        if (gyro.length < 0.008) {
+          _correctFusedBasis();
+          return;
+        }
+        final basis = _fusedBasis;
+        if (basis == null) return;
+        final degrees = 180 / math.pi;
+        // 陀螺仪是设备坐标：x 右、y 上、z 朝屏幕外。相机 forward=-z；
+        // LiveCameraBasis.rotatedAroundUp 的方向约定是反的，所以这里取负号。
+        _fusedBasis = basis
+            .rotatedAroundRight(gyro.x * dt * degrees)
+            .rotatedAroundUp(-gyro.y * dt * degrees)
+            .rotatedAroundForward(-gyro.z * dt * degrees);
+        _correctFusedBasis();
+      },
+      onError: (_) {
+        if (mounted) setState(() => _sensorError = true);
+      },
+      cancelOnError: false,
+    );
+  }
+
+  LiveCameraBasis? _rawSensorBasis() => LiveCameraBasis.fromSensors(
+        accelerometer: _accelerometer,
+        magnetometer: _magnetometer,
+      );
+
+  void _ensureFusedBasis() {
+    if (_fusedBasis != null || !_accelSeen || !_magSeen) return;
+    _fusedBasis = _rawSensorBasis();
+  }
+
+  /// 互补滤波：陀螺仪负责短时转动，加速度计/磁力计用很小的增益慢慢纠偏。
+  ///
+  /// 增益按角速度自适应：静止时多信一点绝对方向，快速转动时几乎只信陀螺，
+  /// 免得磁力计的噪声把已经转过去的画面又拽回来。
+  void _correctFusedBasis() {
+    final target = _rawSensorBasis();
+    final current = _fusedBasis;
+    if (target == null) return;
+    if (current == null) {
+      _fusedBasis = target;
+      return;
+    }
+    final speed = _gyroscope.length;
+    final gain = speed > 0.40
+        ? 0.006
+        : speed > 0.10
+            ? 0.015
+            : 0.040;
+    final forward = current.forward.lerp(target.forward, gain).normalized();
+    if (forward.length <= 0) return;
+    var up = current.up.lerp(target.up, gain);
+    up = (up - forward * up.dot(forward)).normalized();
+    if (up.length <= 0) return;
+    final right = forward.cross(up).normalized();
+    if (right.length <= 0) return;
+    _fusedBasis = LiveCameraBasis(forward: forward, up: up, right: right);
   }
 
   Future<void> _initLocation() async {
@@ -411,10 +499,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   }
 
   LiveCameraBasis? _calibratedBasis() {
-    final raw = LiveCameraBasis.fromSensors(
-      accelerometer: _accelerometer,
-      magnetometer: _magnetometer,
-    );
+    final raw = _fusedBasis ?? _rawSensorBasis();
     if (raw == null) return null;
     return _headingOffset == 0
         ? raw
@@ -1138,6 +1223,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       _orientationFix = null;
       _locked = false;
       _matchedStars = 0;
+      _fusedBasis = _rawSensorBasis();
     });
     unawaited(_restartTracking());
     await _store.write(key: 'liveFov', value: '$_fov');

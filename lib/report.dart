@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'strings.dart';
 import 'analysis.dart';
 import 'deepsky_names.dart';
+import 'live_sky.dart';
 import 'models.dart';
 import 'moon.dart';
 import 'smallbodies.dart';
@@ -294,11 +295,48 @@ String buildHeadlineMarkdown(
     lines.add(
       t('- 视场 =={0}== · =={1}″==/像素 · 星表匹配 =={2}== 颗', [formatFieldOfView(solve.fieldOfViewDegrees), solve.arcsecPerPixel.toStringAsFixed(1), solve.matchedCount]),
     );
+    final galactic = equatorialToGalacticDegrees(
+      solve.centerRa,
+      solve.centerDec,
+    );
+    final widthDeg = analysis.width * solve.arcsecPerPixel / 3600;
+    final heightDeg = analysis.height * solve.arcsecPerPixel / 3600;
+    final area = widthDeg * heightDeg;
+    final density = area > 0 ? analysis.compactSources.length / area : 0.0;
+    final toCentre = _angularSeparationDegrees(
+      solve.centerRa,
+      solve.centerDec,
+      266.4051,
+      -28.9362,
+    );
+    lines.add(
+      t('- 银道坐标 ==l={0}° b={1}°== · 距银心 =={2}°== · 星点密度 =={3}/平方度==', [
+        galactic.l.toStringAsFixed(1),
+        galactic.b.toStringAsFixed(1),
+        toCentre.toStringAsFixed(1),
+        density.toStringAsFixed(1),
+      ]),
+    );
   } else if (analysis.compactSources.isNotEmpty) {
     lines.add(t('- 检出 =={0}== 个紧凑点源，但没和星表对上', [analysis.compactSources.length]));
   }
 
   return lines.join('\n');
+}
+
+double _angularSeparationDegrees(
+  double ra1,
+  double dec1,
+  double ra2,
+  double dec2,
+) {
+  const rad = math.pi / 180;
+  final d1 = dec1 * rad;
+  final d2 = dec2 * rad;
+  final delta = (ra1 - ra2) * rad;
+  final cosine = math.sin(d1) * math.sin(d2) +
+      math.cos(d1) * math.cos(d2) * math.cos(delta);
+  return math.acos(cosine.clamp(-1.0, 1.0)) / rad;
 }
 
 /// 画面里最亮、且**有中文名**的几颗星。

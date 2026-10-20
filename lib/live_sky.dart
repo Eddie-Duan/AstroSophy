@@ -554,6 +554,26 @@ const double _galacticNorthCelestialPoleLon = 122.93192;
   return (ra: _wrapDegrees(ra), dec: dec / rad);
 }
 
+/// 赤道坐标 → 银道坐标（度）。
+({double l, double b}) equatorialToGalacticDegrees(
+  double raDegrees,
+  double decDegrees,
+) {
+  const rad = math.pi / 180;
+  final ra = raDegrees * rad;
+  final dec = decDegrees * rad;
+  final decG = _galacticPoleDec * rad;
+  final delta = ra - _galacticPoleRa * rad;
+  final sinB = math.sin(dec) * math.sin(decG) +
+      math.cos(dec) * math.cos(decG) * math.cos(delta);
+  final b = math.asin(sinB.clamp(-1.0, 1.0));
+  final y = math.cos(dec) * math.sin(delta);
+  final x = math.sin(dec) * math.cos(decG) -
+      math.cos(dec) * math.sin(decG) * math.cos(delta);
+  final l = _galacticNorthCelestialPoleLon - math.atan2(y, x) / rad;
+  return (l: _wrapDegrees(l), b: b / rad);
+}
+
 /// 白道的近似：以黄道为基准、倾角 5.145°，升交点取当天的平节点。
 ///
 /// 不追求毫角秒：这是画在手机屏幕上的参考圈，不是轨道计算。
