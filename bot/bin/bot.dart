@@ -1,13 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:astrosophy_core/analysis.dart';
 import 'package:astrosophy_core/catalog.dart';
 import 'package:astrosophy_core/deepsky.dart';
+import 'package:astrosophy_core/ephemeris.dart';
+import 'package:astrosophy_core/moon.dart';
+import 'package:astrosophy_core/orbit.dart';
 import 'package:astrosophy_core/solver.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/io.dart';
+
+final _lastRequest = <int, DateTime>{};
+Future<void> _queueTail = Future<void>.value();
+var _queued = 0;
 
 /// AstroSophy 的 NapCat / OneBot 11 网关。
 ///
@@ -116,13 +124,39 @@ void _handleEvent(
       reply(groupId, '请把照片和命令放在同一条消息里。');
       return;
     }
-    reply(groupId, '收到图片，开始分析…');
-    unawaited(_analyzeAndReply(groupId, raw, urls.first, reply));
+    final now = DateTime.now();
+    final last = _lastRequest[groupId];
+    if (last != null && now.difference(last).inSeconds < 20) {
+      reply(groupId, '刚处理过一条，请等 ${20 - now.difference(last).inSeconds} 秒。');
+      return;
+    }
+    _lastRequest[groupId] = now;
+    final ahead = _queued;
+    reply(groupId, ahead == 0 ? '收到图片，开始分析…' : '收到图片，前面还有 $ahead 个任务。');
+    _enqueue(() => _analyzeAndReply(
+          groupId,
+          raw,
+          urls.first,
+          reply,
+          config.maxImageMb,
+        ));
     return;
   }
   if (raw.startsWith('/天象')) {
-    reply(groupId, '天象查询还没接入。');
+    _replySky(groupId, raw.replaceFirst('/天象', '').trim(), reply);
   }
+}
+
+void _enqueue(Future<void> Function() job) {
+  _queued++;
+  _queueTail = _queueTail.then((_) async {
+    _queued--;
+    try {
+      await job();
+    } on Exception catch (error) {
+      stdout.writeln('任务失败：$error');
+    }
+  });
 }
 
 Future<void> _analyzeAndReply(
@@ -130,6 +164,7 @@ Future<void> _analyzeAndReply(
   String command,
   String url,
   void Function(int groupId, String text) reply,
+  int maxImageMb,
 ) async {
   try {
     final response = await http.get(Uri.parse(url)).timeout(
@@ -140,8 +175,8 @@ Future<void> _analyzeAndReply(
       return;
     }
     final bytes = response.bodyBytes;
-    if (bytes.isEmpty || bytes.length > 25 * 1024 * 1024) {
-      reply(groupId, '图片为空或超过 25 MB。');
+    if (bytes.isEmpty || bytes.length > maxImageMb * 1024 * 1024) {
+      reply(groupId, '图片为空或超过 $maxImageMb MB。');
       return;
     }
     final core = await _loadCore();
@@ -212,8 +247,74 @@ Future<void> _analyzeAndReply(
   }
 }
 
-List<String> _imageUrls(Object? message) {
-  if (message is! List) return const [];
+void _replySky(
+  int groupId,
+  String city,
+  void Function(int groupId, String text) reply,
+) {
+  final place = _cities[city] ?? _cities['北京']!;
+  final utc = DateTime.now().toUtc();
+  final jd = julianDay(utc);
+  final d = jd - 2451545.0;
+  final t = d / 36525.0;
+  var gmst = 280.46061837 +
+      360.98564736629 * d +
+      0.000387933 * t * t -
+      t * t * t / 38710000.0;
+  gmst %= 360;
+  final lst = (gmst + place.$2) % 360;
+  final sun = sunPosition(utc);
+  final sunAlt = _altitude(sun.ra, sun.dec, place.$1, lst);
+  final phase = moonPhaseAt(utc);
+  final moon = moonPositionAt(utc);
+  final moonAlt = _altitude(moon.raDegrees, moon.decDegrees, place.$1, lst);
+  final visible = <String>[];
+  for (final body in predictedBodies(utc)) {
+    final alt = _altitude(body.ra, body.dec, place.$1, lst);
+    if (alt > 5) {
+      visible.add('${body.name} 高度 ${alt.toStringAsFixed(0)}°');
+    }
+  }
+  final lines = <String>[
+    '天象 · ${place.$3}',
+    '月相：${phase.name} ${phase.fractionLabel}'
+        '${moonAlt > 0 ? ' · 月亮高度 ${moonAlt.toStringAsFixed(0)}°' : ' · 月亮在地平线下'}',
+    '太阳高度：${sunAlt.toStringAsFixed(0)}°${sunAlt > 0 ? '（白天）' : ''}',
+    if (visible.isEmpty) '此刻没有亮行星在地平线上。' else '可见行星：${visible.join('、')}',
+  ];
+  reply(groupId, lines.join('\n'));
+}
+
+double _altitude(double ra, double dec, double lat, double lst) {
+  const rad = math.pi / 180;
+  final hourAngle = (lst - ra) * rad;
+  final d = dec * rad;
+  final p = lat * rad;
+  final sinAlt = math.sin(d) * math.sin(p) +
+      math.cos(d) * math.cos(p) * math.cos(hourAngle);
+  return math.asin(sinAlt.clamp(-1.0, 1.0)) / rad;
+}
+
+const _cities = <String, (double, double, String)>{
+  '北京': (39.9042, 116.4074, '北京'),
+  '上海': (31.2304, 121.4737, '上海'),
+  '广州': (23.1291, 113.2644, '广州'),
+  '深圳': (22.5431, 114.0579, '深圳'),
+  '成都': (30.5728, 104.0668, '成都'),
+  '西安': (34.3416, 108.9398, '西安'),
+  '南京': (32.0603, 118.7969, '南京'),
+  '杭州': (30.2741, 120.1551, '杭州'),
+  '武汉': (30.5928, 114.3055, '武汉'),
+  '重庆': (29.5630, 106.5516, '重庆'),
+  '天津': (39.3434, 117.3616, '天津'),
+  '昆明': (25.0389, 102.7183, '昆明'),
+  '拉萨': (29.6520, 91.1721, '拉萨'),
+  '乌鲁木齐': (43.8256, 87.6168, '乌鲁木齐'),
+  '哈尔滨': (45.8038, 126.5350, '哈尔滨'),
+  '三亚': (18.2528, 109.5119, '三亚'),
+};
+
+List<String> _imageUrls(Object? message) {  if (message is! List) return const [];
   final urls = <String>[];
   for (final segment in message) {
     if (segment is! Map || segment['type'] != 'image') continue;
