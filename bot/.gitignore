@@ -1,0 +1,6 @@
+.dart_tool/
+.packages
+config.json
+data/
+*.log
+.env
