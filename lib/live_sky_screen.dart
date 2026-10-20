@@ -855,6 +855,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
             !star.object.name.startsWith('HIP ') &&
             star.enu.z > 0)
           star,
+      // 月亮也是高精度绝对参考；它不在恒星表里，单独从太阳系列表补进来。
+      for (final body in _planets)
+        if (body.object.kind == LiveObjectKind.moon && body.enu.z > 0) body,
     ]..sort((a, b) {
         final altA = altitudeDegreesOfEnu(a.enu);
         final altB = altitudeDegreesOfEnu(b.enu);
@@ -877,7 +880,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
               child: Text(
-                t('选择一颗你认识的亮星'),
+                t('选择一颗亮星或月亮'),
                 style: const TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w600,
@@ -888,10 +891,14 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
               ListTile(
                 title: Text(item.object.name),
                 subtitle: Text(
-                  t('高度 {0}° · 星等 {1}', [
-                    altitudeDegreesOfEnu(item.enu).toStringAsFixed(0),
-                    item.object.magnitude.toStringAsFixed(1),
-                  ]),
+                  item.object.kind == LiveObjectKind.moon
+                      ? t('高度 {0}° · 月亮', [
+                          altitudeDegreesOfEnu(item.enu).toStringAsFixed(0),
+                        ])
+                      : t('高度 {0}° · 星等 {1}', [
+                          altitudeDegreesOfEnu(item.enu).toStringAsFixed(0),
+                          item.object.magnitude.toStringAsFixed(1),
+                        ]),
                   style: const TextStyle(fontSize: 11),
                 ),
                 trailing: const Icon(Icons.center_focus_strong, size: 18),
