@@ -2,12 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:astrosophy_core/analysis.dart';
+import 'package:astrosophy_core/catalog.dart';
+import 'package:astrosophy_core/deepsky.dart';
+import 'package:astrosophy_core/solver.dart';
+import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/io.dart';
 
 /// AstroSophy 的 NapCat / OneBot 11 网关。
 ///
-/// 这一步只负责“连上 QQ、收消息、回消息”，不碰星点分析。等 `astrosophy_core`
-/// 从 Flutter 工程里拆出来之后，`/解析` 再调用核心；这样 bot 可以先独立跑通。
+/// 真正的星点分析在 `packages/astrosophy_core`（纯 Dart），这里只做 QQ 消息、
+/// 图片下载、命令路由和文本回复。
 Future<void> main(List<String> args) async {
   final config = BotConfig.load();
   stdout.writeln('AstroSophy bot: ${config.wsUrl}');
@@ -85,14 +90,10 @@ void _handleEvent(
       !config.allowedGroups.contains(groupId)) {
     return;
   }
-
   final raw = (data['raw_message'] as String? ?? '').trim();
-  final message = data['message'];
-  final hasImage = message is List &&
-      message.any((segment) =>
-          segment is Map && segment['type'] == 'image');
-  if (raw.isEmpty && !hasImage) return;
-  stdout.writeln('[$groupId] $raw${hasImage ? ' [图片]' : ''}');
+  final urls = _imageUrls(data['message']);
+  if (raw.isEmpty && urls.isEmpty) return;
+  stdout.writeln('[$groupId] $raw${urls.isEmpty ? '' : ' [${urls.length} 图]'}');
 
   if (raw == '/ping' || raw.startsWith('/ping ')) {
     reply(groupId, 'pong · AstroSophy');
@@ -111,17 +112,151 @@ void _handleEvent(
     return;
   }
   if (raw.startsWith('/解析') || raw.startsWith('/月亮') || raw.startsWith('/太阳')) {
-    if (!hasImage) {
+    if (urls.isEmpty) {
       reply(groupId, '请把照片和命令放在同一条消息里。');
       return;
     }
-    // 核心接入点：后续在这里下载图片，交给 astrosophy_core。
-    reply(groupId, '收到图片。分析核心还没接入，这一步目前只验证 NapCat 链路。');
+    reply(groupId, '收到图片，开始分析…');
+    unawaited(_analyzeAndReply(groupId, raw, urls.first, reply));
     return;
   }
   if (raw.startsWith('/天象')) {
     reply(groupId, '天象查询还没接入。');
   }
+}
+
+Future<void> _analyzeAndReply(
+  int groupId,
+  String command,
+  String url,
+  void Function(int groupId, String text) reply,
+) async {
+  try {
+    final response = await http.get(Uri.parse(url)).timeout(
+          const Duration(seconds: 30),
+        );
+    if (response.statusCode != 200) {
+      reply(groupId, '图片下载失败：HTTP ${response.statusCode}');
+      return;
+    }
+    final bytes = response.bodyBytes;
+    if (bytes.isEmpty || bytes.length > 25 * 1024 * 1024) {
+      reply(groupId, '图片为空或超过 25 MB。');
+      return;
+    }
+    final core = await _loadCore();
+    final sun = command.startsWith('/太阳');
+    final moon = command.startsWith('/月亮');
+    final analysis = SkyAnalysis.analyze(
+      bytes,
+      detectMoon: moon,
+      detectSun: sun,
+      profile: StarDetectionProfile.normal,
+    );
+    if (sun) {
+      final disc = analysis.sunDisc;
+      reply(
+        groupId,
+        disc == null
+            ? '没有检测到太阳圆盘。拍摄太阳请务必使用合格的太阳滤镜。'
+            : '太阳盘面\n'
+                '圆心 ${disc.centerX.toStringAsFixed(0)}, ${disc.centerY.toStringAsFixed(0)} px\n'
+                '半径 ${disc.radiusPixels.toStringAsFixed(1)} px\n'
+                '占画面 ${(disc.discAreaFraction * 100).toStringAsFixed(2)}%\n'
+                '暗斑 ${disc.darkSpotCount} 处\n'
+                '提醒：拍摄太阳必须使用合格太阳滤镜。',
+      );
+      return;
+    }
+    if (moon) {
+      final disc = analysis.moonDisc;
+      reply(
+        groupId,
+        disc == null
+            ? '没有检测到月面。'
+            : '月面\n'
+                '圆心 ${disc.centerX.toStringAsFixed(0)}, ${disc.centerY.toStringAsFixed(0)} px\n'
+                '半径 ${disc.radiusPixels.toStringAsFixed(1)} px\n'
+                '亮面 ${(disc.illuminatedFraction * 100).toStringAsFixed(1)}%',
+      );
+      return;
+    }
+    final watch = Stopwatch()..start();
+    final solve = core.solver.solve(
+      analysis,
+      hint: const SolveHint(
+        budgetMilliseconds: 20000,
+        patchSolve: true,
+      ),
+    );
+    watch.stop();
+    if (solve == null) {
+      reply(
+        groupId,
+        '本机没能解开这片天区。\n'
+        '检出 ${analysis.stars.length} 个点源，FWHM ${analysis.fwhm.toStringAsFixed(1)} px。\n'
+        '可以试试更广的焦段，或在线解算。',
+      );
+      return;
+    }
+    reply(
+      groupId,
+      '解算成功（${watch.elapsed.inSeconds} s）\n'
+      '中心 RA ${solve.centerRa.toStringAsFixed(3)}° / Dec ${solve.centerDec.toStringAsFixed(3)}°\n'
+      '视场 ${solve.fieldOfViewDegrees.toStringAsFixed(2)}°\n'
+      '像素比例 ${solve.arcsecPerPixel.toStringAsFixed(2)}″/px\n'
+      '星表匹配 ${solve.matchedCount} 颗',
+    );
+  } on Exception catch (error) {
+    reply(groupId, '分析失败：$error');
+  }
+}
+
+List<String> _imageUrls(Object? message) {
+  if (message is! List) return const [];
+  final urls = <String>[];
+  for (final segment in message) {
+    if (segment is! Map || segment['type'] != 'image') continue;
+    final data = segment['data'];
+    if (data is! Map) continue;
+    final url = data['url'] ?? data['file'];
+    if (url is String && url.startsWith('http')) urls.add(url);
+  }
+  return urls;
+}
+
+Future<_Core>? _coreFuture;
+Future<_Core> _loadCore() => _coreFuture ??= _createCore();
+
+Future<_Core> _createCore() async {
+  final directory = _assetsDirectory();
+  if (directory == null) {
+    throw StateError('找不到 assets/catalog；设置 ASTRO_ASSETS');
+  }
+  final catalog = await StarCatalog.loadDirectory(directory);
+  final deepSky = await DeepSkyCatalog.loadFile('$directory/deepsky.json');
+  final solver = PlateSolver(catalog, deepSky: deepSky)..warmUp();
+  return _Core(solver);
+}
+
+String? _assetsDirectory() {
+  final env = Platform.environment['ASTRO_ASSETS'];
+  final candidates = [
+    if (env != null) env,
+    'assets/catalog',
+    '../assets/catalog',
+    '../../assets/catalog',
+  ];
+  for (final path in candidates) {
+    if (Directory(path).existsSync()) return path;
+  }
+  return null;
+}
+
+class _Core {
+  const _Core(this.solver);
+
+  final PlateSolver solver;
 }
 
 class BotConfig {

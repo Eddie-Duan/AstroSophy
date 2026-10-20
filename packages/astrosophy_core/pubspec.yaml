@@ -1,0 +1,10 @@
+name: astrosophy_core
+description: Pure-Dart analysis, plate solving and ephemeris for AstroSophy.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  image: ^4.3.0

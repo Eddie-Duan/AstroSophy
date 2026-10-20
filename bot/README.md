@@ -1,14 +1,19 @@
 # AstroSophy NapCat bot
 
-`napcat` 分支上的 QQ 群 bot 雏形。当前只验证 **NapCat / OneBot 11 链路**，还没有接星点分析核心。
+`napcat` 分支上的 QQ 群 bot。核心算法在 `packages/astrosophy_core`（纯 Dart），
+bot 只负责 QQ 消息、图片下载和回复。
 
 ## 当前能做什么
 
 - 连接 NapCat 的 OneBot 11 WebSocket；
 - 只在白名单群响应；
 - `/ping`、`/help`；
-- `/解析`、`/月亮`、`/太阳` 收到图片时回“核心尚未接入”；
+- `/解析` + 图片：本机星点分析 + 解算，回坐标/视场/匹配数；
+- `/月亮` + 图片：月面圆心、半径、亮面占比；
+- `/太阳` + 图片：日面半径、暗斑数量，并提示太阳滤镜；
 - 断线自动重连。
+
+`/天象` 还是占位。
 
 ## 运行
 
@@ -40,10 +45,27 @@ dart pub get
 dart run bin/bot.dart
 ```
 
-也可以不用配置文件，直接给环境变量：
+也可以不用配置文件：
 
 ```bash
 NAPCAT_WS=ws://127.0.0.1:3001 NAPCAT_TOKEN=xxx dart run bin/bot.dart
+```
+
+## 先验证核心
+
+不接 QQ 也能跑：
+
+```bash
+cd bot
+dart run bin/cli.dart ../assets/demo/demo_m31.jpg --scene auto
+```
+
+会输出星点数、月亮/太阳检测、解算坐标和耗时。M31 在本机应能解出约 4.18° 视场。
+
+星表默认从仓库的 `assets/catalog` 读取；部署到别处时设置：
+
+```bash
+ASTRO_ASSETS=/path/to/assets/catalog
 ```
 
 ## 安全
@@ -53,15 +75,13 @@ NAPCAT_WS=ws://127.0.0.1:3001 NAPCAT_TOKEN=xxx dart run bin/bot.dart
 - `config.json` 已加入 `.gitignore`，不要提交 token；
 - 非官方协议有掉线、限制、封号风险，先在测试群跑。
 
-## 下一步
+## 还没做
 
-1. 把 `analysis.dart` / `solver.dart` / `catalog.dart` / `report.dart` 拆成纯 Dart core；
-2. 做一个 `tools/astrosophy_cli.dart`，先证明服务端能出同样的解算结果；
-3. bot 里下载群图片 → 调 core → 回文字报告；
-4. 加队列、限流、临时文件清理；
-5. 月亮/太阳命令复用现有分支；
-6. 标注图渲染；
-7. 稳定后再考虑官方 QQ bot。
+- 按群/用户的队列与限流；
+- 标注图（目前只回文字）；
+- `/天象 城市`；
+- 在线解算回退；
+- 官方 QQ bot 迁移。
 
 ## 分支
 

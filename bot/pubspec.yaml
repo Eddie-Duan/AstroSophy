@@ -7,6 +7,8 @@ environment:
   sdk: ">=3.5.0 <4.0.0"
 
 dependencies:
+  astrosophy_core:
+    path: ../packages/astrosophy_core
   http: ^1.2.2
   web_socket_channel: ^3.0.1
 
