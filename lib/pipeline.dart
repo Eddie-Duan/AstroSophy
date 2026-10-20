@@ -74,6 +74,7 @@ class PipelineProgress {
     this.moon = false,
     this.moonOnly = false,
     this.sunOnly = false,
+    this.trailOnly = false,
     this.solvedLocally = false,
     this.deep = false,
   });
@@ -110,6 +111,9 @@ class PipelineProgress {
   /// 用户已经明确选了「太阳」，这一次只报日面。
   final bool sunOnly;
 
+  /// 用户选了「星轨」：只统计拉长轨迹，不做星场解算。
+  final bool trailOnly;
+
   /// 本机解算**已经成功**。
   ///
   /// 非空即「这张照片的天区是手机上算出来的」——它一次都没出过设备。界面靠它
@@ -139,6 +143,7 @@ class PipelineOutcome {
     required this.warnings,
     this.moonOnly = false,
     this.sunOnly = false,
+    this.trailOnly = false,
     this.solveDuration,
   });
 
@@ -160,6 +165,9 @@ class PipelineOutcome {
 
   /// 这一次只报日面，没有解算也没有上传。
   final bool sunOnly;
+
+  /// 这一次只统计星轨，没有解算。
+  final bool trailOnly;
 
   /// 解算这一步实际花了多久（本机 + 在线回退，不含星点分析和 AI 解读）。
   ///
@@ -218,7 +226,9 @@ class SkyPipeline {
   /// 动辄一两分钟，而本地分析只要一秒。平分的话进度条前半程几乎不动，
   /// 用户反而更慌。
   List<_Stage> get _stages => switch (_effectiveMode) {
-        _ when scene == ShootingScene.moon || scene == ShootingScene.sun => [
+        _ when scene == ShootingScene.moon ||
+                scene == ShootingScene.sun ||
+                scene == ShootingScene.starTrails => [
             _Stage(t('正在分析星图'), 60),
             if (_canExplain) _Stage(t('正在生成解读'), 40),
           ],
@@ -279,6 +289,7 @@ class SkyPipeline {
     // 中间漏带一次，颜色就会在那一瞬间翻回去。
     var moonOnlyReported = false;
     var sunOnlyReported = false;
+    var trailOnlyReported = false;
 
     void report(int index, double local, [String? text, bool deep = false]) {
       if (index >= bounds.length) return;
@@ -291,6 +302,7 @@ class SkyPipeline {
           solvedLocally: solvedLocally,
           moonOnly: moonOnlyReported,
           sunOnly: sunOnlyReported,
+          trailOnly: trailOnlyReported,
           deep: deep,
         ),
       );
@@ -322,7 +334,24 @@ class SkyPipeline {
     // 超时。所以这一句必须问在解算之前。
     var moonOnly = false;
     var sunOnly = false;
-    if (scene == ShootingScene.sun) {
+    var trailOnly = false;
+    if (scene == ShootingScene.starTrails) {
+      trailOnly = true;
+      trailOnlyReported = true;
+      final trails = analysis.streakCandidates.length;
+      onProgress?.call(
+        PipelineProgress(
+          bounds.first.$2,
+          t('星轨 · 检出 {0} 条拉长轨迹', [trails]),
+          trailOnly: true,
+        ),
+      );
+      warnings.add(
+        trails == 0
+            ? t('星轨场景：没有检出明显的拉长轨迹。')
+            : t('星轨场景：只统计拉长轨迹，不做星场解算。'),
+      );
+    } else if (scene == ShootingScene.sun) {
       sunOnly = true;
       sunOnlyReported = true;
       if (analysis.isSunShot) {
@@ -517,8 +546,8 @@ class SkyPipeline {
       }
     }
 
-    if (moonOnly || sunOnly) {
-      // 用户选了只要盘面：跳过解算和上传，直接走到解读那一步。
+    if (moonOnly || sunOnly || trailOnly) {
+      // 用户选了只要盘面/轨迹：跳过解算和上传，直接走到解读那一步。
     } else if (effectiveMode == SkyAnalysisMode.onlineFirst ||
         effectiveMode == SkyAnalysisMode.onlineOnly) {
       final onlineFirst = effectiveMode == SkyAnalysisMode.onlineFirst;
@@ -593,6 +622,7 @@ class SkyPipeline {
         moon: analysis.isMoonShot,
         moonOnly: moonOnlyReported,
         sunOnly: sunOnlyReported,
+        trailOnly: trailOnlyReported,
         solvedLocally: solvedLocally,
       ),
     );
@@ -603,6 +633,7 @@ class SkyPipeline {
       warnings: warnings,
       moonOnly: moonOnly,
       sunOnly: sunOnly,
+      trailOnly: trailOnly,
       solveDuration: solve == null ? null : solveWatch.elapsed,
     );
   }

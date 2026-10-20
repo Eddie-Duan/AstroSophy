@@ -171,6 +171,7 @@ enum ShootingScene {
   wide('wide'),
   deepSky('deep_sky'),
   narrow('narrow'),
+  starTrails('star_trails'),
   moon('moon'),
   sun('sun');
 
@@ -189,6 +190,7 @@ enum ShootingScene {
         ShootingScene.wide => t('广域'),
         ShootingScene.deepSky => t('深空'),
         ShootingScene.narrow => t('长焦'),
+        ShootingScene.starTrails => t('星轨'),
         ShootingScene.moon => t('月亮'),
         ShootingScene.sun => t('太阳'),
       };
@@ -199,6 +201,7 @@ enum ShootingScene {
         ShootingScene.wide => t('银河、地景、超广角。'),
         ShootingScene.deepSky => t('多数星云、星系。'),
         ShootingScene.narrow => t('小目标、长焦望远镜。'),
+        ShootingScene.starTrails => t('只记录拉长的星点轨迹。'),
         ShootingScene.moon => t('只找月亮，随即报告。'),
         ShootingScene.sun => t('只找太阳，随即报告。'),
       };
@@ -232,6 +235,7 @@ enum ShootingScene {
             patchSolve: true,
             skipShallow: true,
           ),
+        ShootingScene.starTrails => const SolveHint(),
         ShootingScene.moon => const SolveHint(),
         ShootingScene.sun => const SolveHint(),
       };

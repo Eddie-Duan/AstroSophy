@@ -75,10 +75,17 @@ ART = {
         "medium-field context, " + PALETTE + ", centered, " + NO_TEXT
     ),
     "scene_long": (
-        "flat digital illustration, extreme narrow-field telescope close-up: the "
-        "Ring Nebula fills almost the entire frame, huge ring-shaped planetary "
+        "flat vector illustration, narrow-field telescope close-up: the Ring "
+        "Nebula fills almost the entire frame, huge ring-shaped planetary "
         "nebula with a bright central star, only three or four faint stars at the "
         "edges, no wide star field, high magnification, black sky, "
+        + PALETTE + ", centered, " + NO_TEXT
+    ),
+    "scene_trails": (
+        "flat vector illustration, long-exposure star trails: hundreds of "
+        "concentric circular light arcs around a still centre in the night sky, "
+        "a dark landscape and a small tripod silhouette below, motion blur arcs "
+        "in teal, amber and pale white, no star points, "
         + PALETTE + ", centered, " + NO_TEXT
     ),
     "scene_moon": (

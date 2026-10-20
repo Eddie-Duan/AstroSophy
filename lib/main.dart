@@ -168,6 +168,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 算得好好的月亮，却被告知什么都没识别出来。
   bool get _isMoonReport => _analysis?.moonDisc != null && _solve == null;
   bool get _isSunReport => _analysis?.sunDisc != null && _solve == null;
+  bool get _isTrailReport =>
+      _analysis != null &&
+      _shootingScene == ShootingScene.starTrails &&
+      _solve == null;
 
   /// 正在裁剪选中的那张图。
   bool _cropping = false;
@@ -2220,7 +2224,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               ),
               const SizedBox(height: 8),
               _optionGrid([
-                for (final scene in ShootingScene.values.take(6))
+                for (final scene in ShootingScene.values)
                   _optionTile(
                     label: scene.label,
                     asset: switch (scene) {
@@ -2229,6 +2233,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       ShootingScene.wide => 'assets/ui/scene_wide.jpg',
                       ShootingScene.deepSky => 'assets/ui/scene_medium.jpg',
                       ShootingScene.narrow => 'assets/ui/scene_long.jpg',
+                      ShootingScene.starTrails => 'assets/ui/scene_trails.jpg',
                       ShootingScene.moon => 'assets/ui/scene_moon.jpg',
                       ShootingScene.sun => 'assets/ui/scene_sun.jpg',
                     },
@@ -2236,14 +2241,6 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     onTap: () => _setShootingScene(scene),
                   ),
               ]),
-              const SizedBox(height: 8),
-              _optionTile(
-                label: ShootingScene.sun.label,
-                asset: 'assets/ui/scene_sun.jpg',
-                selected: _shootingScene == ShootingScene.sun,
-                onTap: () => _setShootingScene(ShootingScene.sun),
-                aspectRatio: 3.2,
-              ),
             ],
           ),
           const Divider(height: 1),
@@ -4210,17 +4207,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ],
               ),
-              if (_isMoonReport || _isSunReport)
+              if (_isMoonReport || _isSunReport || _isTrailReport)
                 // 不解释的话，用户看到的就是「没有解开这片天区」——而真相是
                 // 这一次压根没去解。同一块屏幕上两种截然不同的意思，必须说清。
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Text(
-                    _isSunReport
-                        ? t('这次只报告了日面，没有解算天区。')
-                        : _moonOnly
-                            ? t('这次只报告了月亮，没有解算天区。')
-                            : t('这张照片走的是月面链路，没有解算天区。'),
+                    _isTrailReport
+                        ? t('这次只统计星轨，没有解算天区。')
+                        : _isSunReport
+                            ? t('这次只报告了日面，没有解算天区。')
+                            : _moonOnly
+                                ? t('这次只报告了月亮，没有解算天区。')
+                                : t('这张照片走的是月面链路，没有解算天区。'),
                   ),
                 )
               else if (solve == null)
