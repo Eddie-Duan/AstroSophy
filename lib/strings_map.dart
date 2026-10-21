@@ -676,6 +676,7 @@ const Map<String, Map<String, String>> kLocalizedStrings = {
     '画面正中最亮的那一点就是土星，它周围的点全是恒星': 'The brightest point at the centre of the frame is Saturn; every point around it is a star',
     '画面里有 {0} 个深空天体，其中最主要的是 {1}——{2}{3}。': 'There are {0} deep-sky objects in the frame, the main one being {1} — {2}{3}.',
     '画面里没有可用的星场——拍月亮的时候基本拍不到别的。': 'There is no usable star field here — when you shoot the Moon there is usually nothing else in frame.',
+    '画面里的大面积亮斑更像星场，已按星点分析处理。': 'The large bright patch looks more like a star field; switched to star analysis.',
     '界面语言': 'Language',
     '界面语言：{0}': 'Language: {0}',
     '疏散星团': 'Open cluster',

@@ -314,7 +314,7 @@ class SkyPipeline {
     report(0, 0);
     final detectMoon =
         scene == ShootingScene.auto || scene == ShootingScene.moon;
-    final analysis = await worker.analyze(
+    var analysis = await worker.analyze(
       bytes,
       detectMoon: detectMoon,
       detectSun: scene == ShootingScene.sun,
@@ -322,6 +322,23 @@ class SkyPipeline {
           ? StarDetectionProfile.wide
           : StarDetectionProfile.normal,
     );
+    // 银河/云带偶尔会亮成一大块“圆盘”。如果它大到接近半幅，先用无月面
+    // 模式再跑一次星点；星点多且像星场就按星场处理，否则保留月面结论。
+    if (detectMoon &&
+        analysis.isMoonShot &&
+        analysis.moonDisc!.discAreaFraction > 0.30) {
+      final starAnalysis = await worker.analyze(
+        bytes,
+        detectMoon: false,
+        profile: scene == ShootingScene.wide
+            ? StarDetectionProfile.wide
+            : StarDetectionProfile.normal,
+      );
+      if (starAnalysis.isLikelyStarfield || starAnalysis.stars.length > 50) {
+        analysis = starAnalysis;
+        warnings.add(t('画面里的大面积亮斑更像星场，已按星点分析处理。'));
+      }
+    }
 
     // 认出月面就在这里停下来问一句，而不是接着往下解算。
     //
