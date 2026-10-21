@@ -1770,7 +1770,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 上传任何东西；相机只是取景器，星表和解算都在本机。
   Future<void> _openLiveSky() async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => const LiveSkyScreen()),
+      MaterialPageRoute(
+        builder: (_) => LiveSkyScreen(loadModelSettings: _readModelSettings),
+      ),
     );
   }
 

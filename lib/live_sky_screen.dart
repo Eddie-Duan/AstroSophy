@@ -11,6 +11,8 @@ import 'ephemeris.dart';
 import 'live_nox.dart';
 import 'live_sky.dart';
 import 'live_star_tracker.dart';
+import 'model.dart';
+import 'models.dart';
 import 'moon.dart';
 import 'strings.dart';
 import 'theme.dart';
@@ -21,9 +23,12 @@ import 'theme.dart';
 /// 看见真实的天空；方向来自加速度计和磁力计，位置来自 GPS，时间来自系统时钟。
 /// 因此它不需要联网、不需要上传照片，也不会把相机帧送去做识别。
 class LiveSkyScreen extends StatefulWidget {
-  const LiveSkyScreen({super.key, this.storage});
+  const LiveSkyScreen({super.key, this.storage, this.loadModelSettings});
 
   final FlutterSecureStorage? storage;
+
+  /// Nox 的自由输入回退到模型时，用来读取本机 API 设置。
+  final Future<ModelSettings> Function()? loadModelSettings;
 
   @override
   State<LiveSkyScreen> createState() => _LiveSkyScreenState();
@@ -1061,7 +1066,54 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       }
       return t('没找到「{0}」。', [query]);
     }
-    return t('可以试试：状态、红光、银河、星座、星名、地平线、找木星、取消目标。');
+    return _noxAskApi(command);
+  }
+
+  /// 本地预设没命中时，把这句话交给模型判断意图。
+  Future<String> _noxAskApi(String command) async {
+    final loader = widget.loadModelSettings;
+    if (loader == null) {
+      return t('请先在设置里配置模型 API，才能处理自由指令。');
+    }
+    final settings = await loader();
+    if (!settings.hasAnyModel) {
+      return t('请先在设置里配置模型 API，才能处理自由指令。');
+    }
+    final center = _centeredObject;
+    try {
+      final reply = await ModelService.chatWithTools(
+        baseUrl: settings.baseUrl,
+        lightKey: settings.lightKey,
+        lightModel: settings.lightModel,
+        strongKey: settings.strongKey,
+        strongModel: settings.strongModel,
+        report: {
+          '场景': t('实时星图'),
+          '状态': _noxRead(),
+          '中心天体': center?.name ?? t('没有明显天体'),
+        },
+        question: t('用户在实时星图里说：“{0}”。如果这是控制星图的意图，只回复一个预设命令（红光/银河/星座/星名/地平线/锁定/取消目标/找<天体>）；否则用一两句话回答，先给结论，不要长篇。', [command]),
+        executeTool: (name, arguments) async => {'error': '实时 Nox 不执行工具'},
+        assistantName: 'Nox',
+        appBrief: t('实时星图里的语音/文字助手，回答要短。'),
+        contextLabel: t('实时星图状态'),
+      );
+      final trimmed = reply.trim();
+      for (final preset in const [
+        '红光',
+        '银河',
+        '星座',
+        '星名',
+        '地平线',
+        '锁定',
+        '取消目标',
+      ]) {
+        if (trimmed == preset) return await _noxRun(preset);
+      }
+      return trimmed;
+    } catch (error) {
+      return t('AI 分析失败：{0}', [error]);
+    }
   }
 
   Future<void> _openStarCalibration() async {
