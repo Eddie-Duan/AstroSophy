@@ -91,6 +91,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   /// 视觉修正后的姿态偏置。锁定时保持不变；重新锁定时清零。
   LiveOrientationFix? _orientationFix;
   bool _locked = false;
+  LiveNoxVoiceEngine? _noxVoice;
+  bool _noxActive = false;
+  String _noxState = '';
   int _matchedStars = 0;
   Set<int> _matchedHips = const {};
   List<LiveEnuObject> _trackedStars = const [];
@@ -167,6 +170,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
 
   @override
   void dispose() {
+    unawaited(_noxVoice?.stop() ?? Future<void>.value());
     _ticker?.cancel();
     _solarTimer?.cancel();
     _accelSub?.cancel();
@@ -919,7 +923,44 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         LiveObjectKind.moon => t('月球'),
       };
 
-  Future<void> _openNox() async {
+  Future<void> _toggleNox() async {
+    if (_noxActive) {
+      await _noxVoice?.stop();
+      if (!mounted) return;
+      setState(() {
+        _noxActive = false;
+        _noxState = '';
+      });
+      return;
+    }
+    final engine = LiveNoxVoiceEngine(
+      onCommand: _noxRun,
+      onStateChanged: (state) {
+        if (!mounted) return;
+        setState(() => _noxState = state);
+      },
+      onActiveChanged: (active) {
+        if (!mounted) return;
+        setState(() => _noxActive = active);
+      },
+      onError: (message) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      },
+    );
+    setState(() {
+      _noxVoice = engine;
+      _noxActive = true;
+      _noxState = t('正在启动麦克风…');
+    });
+    await engine.start();
+  }
+
+  Future<void> _openNoxText() async {
+    await _noxVoice?.pause();
+    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -931,6 +972,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         ),
       ),
     );
+    if (!mounted) return;
+    if (_noxActive) await _noxVoice?.resume();
   }
 
   Map<String, Object?> _noxRead() => {
@@ -1786,8 +1829,11 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                   ),
                   _roundButton(
                     icon: Icons.nightlight_round,
-                    tooltip: t('Nox'),
-                    onTap: _openNox,
+                    color: _noxActive
+                        ? const Color(0xFFFFD166)
+                        : const Color(0xFF8192A8),
+                    tooltip: _noxActive ? t('关闭 Nox') : t('唤醒 Nox'),
+                    onTap: _toggleNox,
                   ),
                   const SizedBox(width: 8),
                   if (_solveMode) ...[
@@ -1856,6 +1902,53 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                       height: 1.4,
                       color: Color(0xFFFFDE77),
                     ),
+                  ),
+                ),
+              ),
+            ),
+          if (_noxActive)
+            Positioned(
+              left: 12,
+              bottom: 94,
+              child: SafeArea(
+                child: Container(
+                  padding: const EdgeInsets.only(left: 10, right: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: const Color(0xFFFFD166).withValues(alpha: 0.55),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.mic,
+                        size: 14,
+                        color: Color(0xFFFFD166),
+                      ),
+                      const SizedBox(width: 5),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 190),
+                        child: Text(
+                          _noxState.isEmpty ? t('Nox 在听') : _noxState,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            color: Color(0xFFFFE6A8),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: t('文字输入'),
+                        onPressed: _openNoxText,
+                        icon: const Icon(Icons.keyboard, size: 15),
+                        visualDensity: VisualDensity.compact,
+                        color: const Color(0xFFFFD166),
+                      ),
+                    ],
                   ),
                 ),
               ),

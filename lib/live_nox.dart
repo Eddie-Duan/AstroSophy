@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -7,8 +9,7 @@ import 'theme.dart';
 
 /// 实时星图与 Nox 之间的读写接口。
 ///
-/// 实时星图只暴露 [read] / [run]：以后接语音、接大模型时，只要换掉这两个
-/// 回调，Nox 的界面和指令不用动。
+/// 实时星图只暴露 [read] / [run]：语音、文字和大模型都走同一条命令入口。
 class LiveNoxBridge {
   const LiveNoxBridge({
     required this.read,
@@ -19,7 +20,209 @@ class LiveNoxBridge {
   final Future<String> Function(String command) run;
 }
 
-/// 实时星图里的轻量 Nox。文字和语音共用同一个 [LiveNoxBridge]。
+/// Nox 常驻语音模式。
+///
+/// 点亮点亮 Nox 图标后开始监听唤醒词“嘿 Nox”；听到之后进入一次命令窗口，
+/// 执行完继续回到唤醒监听。超过 [idleTimeout] 没有交互就自动关闭，避免
+/// 麦克风一直开着耗电。
+class LiveNoxVoiceEngine {
+  LiveNoxVoiceEngine({
+    required this.onCommand,
+    required this.onStateChanged,
+    required this.onActiveChanged,
+    required this.onError,
+    this.idleTimeout = const Duration(minutes: 2),
+  });
+
+  final Future<String> Function(String command) onCommand;
+  final void Function(String state) onStateChanged;
+  final void Function(bool active) onActiveChanged;
+  final void Function(String message) onError;
+  final Duration idleTimeout;
+
+  final _speech = SpeechToText();
+  final _tts = FlutterTts();
+  Timer? _restartTimer;
+  Timer? _idleTimer;
+  bool _active = false;
+  bool _paused = false;
+  bool _listening = false;
+  bool _busy = false;
+  bool _transitioning = false;
+
+  bool get active => _active;
+
+  Future<void> start() async {
+    if (_active) return;
+    _active = true;
+    onActiveChanged(true);
+    await _tts.setLanguage('zh-CN');
+    await _tts.setSpeechRate(0.62);
+    await _tts.setPitch(1.0);
+    final ready = await _speech.initialize(
+      onStatus: _onStatus,
+      onError: (error) {
+        onError(t('语音识别出错：{0}', [error.errorMsg]));
+      },
+    );
+    if (!ready) {
+      await stop();
+      onError(t('系统语音识别不可用，请检查麦克风权限或语音服务。'));
+      return;
+    }
+    _armIdle();
+    await _listenWake();
+  }
+
+  Future<void> pause() async {
+    _paused = true;
+    _restartTimer?.cancel();
+    await _speech.stop();
+    _listening = false;
+  }
+
+  Future<void> resume() async {
+    if (!_active) return;
+    _paused = false;
+    _armIdle();
+    await _listenWake();
+  }
+
+  Future<void> stop() async {
+    _active = false;
+    _restartTimer?.cancel();
+    _idleTimer?.cancel();
+    await _speech.stop();
+    await _tts.stop();
+    _listening = false;
+    onActiveChanged(false);
+  }
+
+  void _armIdle() {
+    _idleTimer?.cancel();
+    _idleTimer = Timer(idleTimeout, () async {
+      if (!_active) return;
+      await stop();
+    });
+  }
+
+  void _onStatus(String status) {
+    _listening = false;
+    if (!_active || _paused || _busy || _transitioning) return;
+    if (status == 'done' || status == 'notListening') {
+      _restartTimer?.cancel();
+      _restartTimer = Timer(const Duration(milliseconds: 350), () {
+        if (!_active || _paused || _busy || _listening) return;
+            _listenWake();
+      });
+    }
+  }
+
+  Future<void> _listenWake() async {
+    if (!_active || _paused || _listening) return;
+    _listening = true;
+    onStateChanged(t('等你说“嘿 Nox”'));
+    try {
+      await _speech.listen(
+        listenOptions: SpeechListenOptions(
+          localeId: 'zh_CN',
+          listenFor: const Duration(seconds: 30),
+          pauseFor: const Duration(seconds: 6),
+          partialResults: true,
+          cancelOnError: true,
+          listenMode: ListenMode.confirmation,
+        ),
+        onResult: (result) {
+          if (!result.finalResult) return;
+          final words = result.recognizedWords.trim();
+          if (words.isEmpty) return;
+          final normalized =
+              words.toLowerCase().replaceAll(RegExp(r'[\s,，。.!！?？]'), '');
+          final match = RegExp(r'(嘿|黑|hey|hi)(nox|诺克斯|nocks)(.*)')
+              .firstMatch(normalized);
+          if (match == null) return;
+          final rest = (match.group(3) ?? '').trim();
+          _armIdle();
+          if (rest.isNotEmpty) {
+            unawaited(_takeCommand(rest));
+          } else {
+            unawaited(_enterCommand());
+          }
+        },
+      );
+    } catch (error) {
+      _listening = false;
+      onError(t('无法启动语音识别：{0}', [error]));
+    }
+  }
+
+  Future<void> _enterCommand() async {
+    _transitioning = true;
+    await _speech.stop();
+    _listening = false;
+    _transitioning = false;
+    onStateChanged(t('我在，说命令'));
+    await _listenCommand();
+  }
+
+  Future<void> _takeCommand(String command) async {
+    _transitioning = true;
+    await _speech.stop();
+    _listening = false;
+    _transitioning = false;
+    await _execute(command);
+  }
+
+  Future<void> _listenCommand() async {
+    if (!_active || _paused) return;
+    _listening = true;
+    try {
+      await _speech.listen(
+        listenOptions: SpeechListenOptions(
+          localeId: 'zh_CN',
+          listenFor: const Duration(seconds: 8),
+          pauseFor: const Duration(seconds: 2),
+          partialResults: true,
+          cancelOnError: true,
+          listenMode: ListenMode.dictation,
+        ),
+        onResult: (result) {
+          if (!result.finalResult) return;
+          final words = result.recognizedWords.trim();
+          if (words.isEmpty) return;
+          unawaited(_takeCommand(words));
+        },
+      );
+    } catch (error) {
+      _listening = false;
+      onError(t('命令识别失败：{0}', [error]));
+    }
+  }
+
+  Future<void> _execute(String command) async {
+    if (_busy) return;
+    _busy = true;
+    onStateChanged(t('正在处理：{0}', [command]));
+    final reply = await onCommand(command);
+    await _speak(reply);
+    _busy = false;
+    _armIdle();
+    await _listenWake();
+  }
+
+  Future<void> _speak(String text) async {
+    var spoken = text
+        .replaceAll(RegExp(r'[*_`#]'), '')
+        .replaceAll('\n', ' ')
+        .trim();
+    if (spoken.isEmpty) return;
+    if (spoken.length > 140) spoken = '${spoken.substring(0, 140)}…';
+    await _tts.stop();
+    await _tts.speak(spoken);
+  }
+}
+
+/// 实时星图里的文字 Nox，语音模式下的辅助输入。
 class LiveNoxPanel extends StatefulWidget {
   const LiveNoxPanel({super.key, required this.bridge});
 
@@ -33,63 +236,27 @@ class _LiveNoxPanelState extends State<LiveNoxPanel> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final _turns = <({String text, bool fromUser})>[];
-  final _speech = SpeechToText();
-  final _tts = FlutterTts();
   bool _busy = false;
-  bool _speechReady = false;
-  bool _listening = false;
-  bool _speakReplies = true;
-  String _heard = '';
 
   @override
   void initState() {
     super.initState();
-    _turns.add((
-      text: t('我在。可以打字，也可以点麦克风。'),
-      fromUser: false,
-    ));
-    _initVoice();
-  }
-
-  Future<void> _initVoice() async {
-    await _tts.setLanguage('zh-CN');
-    await _tts.setSpeechRate(0.62);
-    await _tts.setPitch(1.0);
-    await _tts.setVolume(1.0);
-    final ready = await _speech.initialize(
-      onStatus: (status) {
-        if (!mounted) return;
-        if (status == 'done' || status == 'notListening') {
-          setState(() => _listening = false);
-        }
-      },
-      onError: (error) {
-        if (!mounted) return;
-        setState(() => _listening = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t('语音识别不可用：{0}', [error.errorMsg]))),
-        );
-      },
-    );
-    if (mounted) setState(() => _speechReady = ready);
+    _turns.add((text: t('我在。可以打字，也可以直接说“嘿 Nox”。'), fromUser: false));
   }
 
   @override
   void dispose() {
-    _speech.stop();
-    _tts.stop();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  Future<void> _send({String? preset, bool speak = false}) async {
+  Future<void> _send([String? preset]) async {
     final command = (preset ?? _input.text).trim();
     if (command.isEmpty || _busy) return;
     _input.clear();
     setState(() {
       _busy = true;
-      _heard = '';
       _turns.add((text: command, fromUser: true));
     });
     _scrollDown();
@@ -100,58 +267,6 @@ class _LiveNoxPanelState extends State<LiveNoxPanel> {
       _turns.add((text: reply, fromUser: false));
     });
     _scrollDown();
-    if (speak && _speakReplies) await _speak(reply);
-  }
-
-  Future<void> _speak(String text) async {
-    var spoken = text.replaceAll(RegExp(r'[*_`#]'), '').replaceAll('\n', ' ').trim();
-    if (spoken.isEmpty) return;
-    // 语音只播结论；模型偶尔超长时，宁可截断也不要让用户站在寒风里听一分钟。
-    if (spoken.length > 140) spoken = '${spoken.substring(0, 140)}…';
-    await _tts.stop();
-    await _tts.speak(spoken);
-  }
-
-  Future<void> _startListening() async {
-    if (!_speechReady) {
-      await _initVoice();
-    }
-    if (!_speechReady) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t('麦克风或系统语音识别不可用。'))),
-      );
-      return;
-    }
-    setState(() {
-      _heard = '';
-      _listening = true;
-    });
-    await _speech.listen(
-      listenOptions: SpeechListenOptions(
-        localeId: 'zh_CN',
-        listenFor: const Duration(seconds: 8),
-        pauseFor: const Duration(seconds: 2),
-        partialResults: true,
-        cancelOnError: true,
-        listenMode: ListenMode.dictation,
-      ),
-      onResult: (result) {
-        if (!mounted) return;
-        final words = result.recognizedWords.trim();
-        if (words.isEmpty) return;
-        setState(() => _heard = words);
-        if (result.finalResult) {
-          _speech.stop();
-          _send(preset: words, speak: true);
-        }
-      },
-    );
-  }
-
-  Future<void> _stopListening() async {
-    await _speech.stop();
-    if (mounted) setState(() => _listening = false);
   }
 
   void _scrollDown() {
@@ -194,8 +309,10 @@ class _LiveNoxPanelState extends State<LiveNoxPanel> {
                   ),
                   const Spacer(),
                   Text(
-                    t('红光 {0} · 星名 {1}',
-                        [snapshot['red'] == true ? '开' : '关', snapshot['labels'] == true ? '开' : '关']),
+                    t('红光 {0} · 星名 {1}', [
+                      snapshot['red'] == true ? t('开') : t('关'),
+                      snapshot['labels'] == true ? t('开') : t('关'),
+                    ]),
                     style: const TextStyle(
                       fontSize: 10,
                       color: Color(0xFF8192A8),
@@ -204,19 +321,6 @@ class _LiveNoxPanelState extends State<LiveNoxPanel> {
                 ],
               ),
               const SizedBox(height: 6),
-              if (_listening || _heard.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text(
-                    _listening ? t('正在听… {0}', [_heard]) : '“$_heard”',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF8FE3C8),
-                    ),
-                  ),
-                ),
               Expanded(
                 child: ListView.builder(
                   controller: _scroll,
@@ -266,8 +370,12 @@ class _LiveNoxPanelState extends State<LiveNoxPanel> {
                       Padding(
                         padding: const EdgeInsets.only(right: 6),
                         child: ActionChip(
-                          label: Text(command, style: const TextStyle(fontSize: 11)),
-                          onPressed: _busy ? null : () => _send(preset: command),
+                          label: Text(
+                            command,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          onPressed:
+                              _busy ? null : () => _send(command),
                         ),
                       ),
                   ],
@@ -294,28 +402,6 @@ class _LiveNoxPanelState extends State<LiveNoxPanel> {
                     tooltip: t('发送'),
                     onPressed: _busy ? null : () => _send(),
                     icon: const Icon(Icons.send, size: 18),
-                  ),
-                  IconButton(
-                    tooltip: _listening ? t('停止聆听') : t('语音'),
-                    onPressed: _busy
-                        ? null
-                        : _listening
-                            ? _stopListening
-                            : _startListening,
-                    icon: Icon(
-                      _listening ? Icons.mic : Icons.mic_none,
-                      color: _listening ? const Color(0xFFFF6B6B) : null,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: _speakReplies ? t('关闭播报') : t('开启播报'),
-                    onPressed: () =>
-                        setState(() => _speakReplies = !_speakReplies),
-                    icon: Icon(
-                      _speakReplies
-                          ? Icons.volume_up_outlined
-                          : Icons.volume_off_outlined,
-                    ),
                   ),
                 ],
               ),
