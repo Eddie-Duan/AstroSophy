@@ -58,7 +58,7 @@ void main() {
     '使用引导': find.byTooltip('使用引导'),
     '观星仓库': find.byTooltip('观星仓库'),
     '界面语言': find.byTooltip('界面语言：简体中文'),
-    'API': find.text('API'),
+    '设置': find.text('设置'),
   };
 
   testWidgets('中文下整屏建得起来，框架自带的文案也在', (tester) async {
@@ -104,9 +104,14 @@ void main() {
     expect(appLanguage.value, AppLanguage.zh);
   });
 
-  testWidgets('点 API 胶囊打开设置面板', (tester) async {
+  testWidgets('点设置胶囊打开设置菜单，再进接口面板', (tester) async {
     await pumpHome(tester);
-    await tester.tap(actions['API']!);
+    await tester.tap(actions['设置']!);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('接口与密钥'), findsOneWidget);
+    expect(find.text('缓存管理'), findsOneWidget);
+    await tester.tap(find.text('接口与密钥'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(SettingsForm), findsOneWidget);
