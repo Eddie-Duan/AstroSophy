@@ -115,10 +115,14 @@ void main() {
     expect(fillGradient(tester).colors[1], const Color(0xFFE8EEF5));
   });
 
-  testWidgets('只认出月亮、还没选的时候，还是原来的配色', (tester) async {
-    // 「认出月亮」和「决定只报月亮」是两件事：前者只是挂个标记问一句，
-    // 后者才换配色。混在一起的话，用户还没拿主意就先看到一套新颜色。
+  testWidgets('认出月亮就换成白色调', (tester) async {
+    // 用户要求：一认出月面就换成白色调，不必等他决定只报月亮。
     await pump(tester, const SkyProgressBar(value: 0.2, moon: true));
-    expect(fillGradient(tester).colors[1], kMint);
+    expect(fillGradient(tester).colors[1], const Color(0xFFE8EEF5));
+  });
+
+  testWidgets('在线或本机定位成功都收成红色调', (tester) async {
+    await pump(tester, const SkyProgressBar(value: 0.8, solved: true));
+    expect(fillGradient(tester).colors[1], const Color(0xFFFF6B6B));
   });
 }

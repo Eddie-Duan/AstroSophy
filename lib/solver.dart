@@ -94,6 +94,21 @@ class SolveLayerAttempt {
   int bestInliers = 0;
 }
 
+/// 三层星表索引在本进程里的预处理状态。
+class CatalogCacheStatus {
+  const CatalogCacheStatus({
+    required this.shallow,
+    required this.mid,
+    required this.deep,
+  });
+
+  final bool shallow;
+  final bool mid;
+  final bool deep;
+
+  bool get all => shallow && mid && deep;
+}
+
 /// 用户对「这张照片大概拍多大一片天」的选择。
 ///
 /// 三角形指纹只认形状、不认尺度，所以同一组图内三角形会匹配到全天各处、
@@ -375,6 +390,38 @@ class PlateSolver {
   /// 建索引是纯 CPU 的同步活儿，会卡住调用它的那个 isolate。用户挑图片、
   /// 填 API Key 的时间里提前跑掉，点「一键解析」时就不会先愣一秒。
   void warmUp() => _index;
+
+  CatalogCacheStatus get cacheStatus => CatalogCacheStatus(
+        shallow: _cachedIndex != null && _cachedIndex!.triangleCount > 0,
+        mid: _cachedMidIndex != null && _cachedMidIndex!.triangleCount > 0,
+        deep: _cachedDeepIndex != null && _cachedDeepIndex!.triangleCount > 0,
+      );
+
+  /// 预建某一层索引。0=浅层、1=中层、2=深层；只在后台 isolate 调用。
+  void prepareCache(int level) {
+    switch (level) {
+      case 0:
+        _index;
+      case 1:
+        _cachedMidIndex ??= _TriangleIndex.build(
+          catalog,
+          pool: _midPool,
+          neighbours: _midNeighbours,
+        );
+      case 2:
+        _cachedDeepIndex ??= _TriangleIndex.build(
+          catalog,
+          pool: catalog.stars,
+          neighbours: _deepNeighbours,
+        );
+    }
+  }
+
+  void clearCache() {
+    _cachedIndex = null;
+    _cachedMidIndex = null;
+    _cachedDeepIndex = null;
+  }
 
   /// 尝试解算。失败返回 null，由调用方决定要不要回退到在线服务。
   ///

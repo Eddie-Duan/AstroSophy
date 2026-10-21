@@ -76,6 +76,7 @@ class PipelineProgress {
     this.moonOnly = false,
     this.sunOnly = false,
     this.trailOnly = false,
+    this.solved = false,
     this.solvedLocally = false,
     this.deep = false,
   });
@@ -124,6 +125,9 @@ class PipelineProgress {
   /// 判据用这个字段，不去认阶段文案。文案是给人读的，随时可能改一句话，而
   /// 颜色一旦跟着文案走，改文案就会悄悄改掉一条判断——那种错查起来很费劲。
   final bool solvedLocally;
+
+  /// 无论本机还是在线，这一次已经拿到了定位结果。
+  final bool solved;
 
   /// 本机解算已经用上最深那层星表（整张表，G < 11）。
   ///
@@ -285,6 +289,7 @@ class SkyPipeline {
 
     // 本机解算成没成功。成功后进度条就换成另一套配色，一路持续到最后。
     var solvedLocally = false;
+    var solved = false;
     // 用户选了「只报月亮」之后，剩下的每一步都带着这个标记——进度条换成银白
     // 底加蓝斑点，直到这一屏结束。和 [solvedLocally] 一样，一路持续到最后：
     // 中间漏带一次，颜色就会在那一瞬间翻回去。
@@ -304,6 +309,7 @@ class SkyPipeline {
           moonOnly: moonOnlyReported,
           sunOnly: sunOnlyReported,
           trailOnly: trailOnlyReported,
+          solved: solved,
           deep: deep,
         ),
       );
@@ -496,6 +502,7 @@ class SkyPipeline {
         if (result != null) {
           // 成了。从这里开始「照片没出过手机」就是既成事实，不是承诺了。
           solvedLocally = true;
+          solved = true;
           report(
             progressIndex,
             1,
@@ -516,6 +523,7 @@ class SkyPipeline {
           apiKey: astrometryKey,
           onProgress: (local, stage) => report(progressIndex, local, stage),
         );
+        solved = true;
         // 在线服务只给 WCS，星座是本机补的。补不上不影响坐标和测光，所以
         // 失败了只记一条提示，不把已经拿到手的解算结果丢掉。
         try {
@@ -655,6 +663,7 @@ class SkyPipeline {
         sunOnly: sunOnlyReported,
         trailOnly: trailOnlyReported,
         solvedLocally: solvedLocally,
+        solved: solved,
       ),
     );
     return PipelineOutcome(
@@ -889,12 +898,20 @@ class SkyWorker {
         null,
       ) as SkyAnalysis;
 
+  Future<CatalogCacheStatus> cacheStatus() async =>
+      await _request('cache-status', null, null) as CatalogCacheStatus;
+
+  Future<CatalogCacheStatus> prepareCache(int level) async =>
+      await _request('cache-prepare', level, null) as CatalogCacheStatus;
+
+  Future<CatalogCacheStatus> clearCache() async =>
+      await _request('cache-clear', null, null) as CatalogCacheStatus;
+
   /// 本机离线解算。解不出来返回 null，由上层决定要不要回退在线服务。
   ///
   /// 连同 [SolveTrace] 一起返回：解不出来时上层要拿它说明「差在哪」，而记录
   /// 是在解算那一侧的 isolate 里填的，跨不过来，只能随结果一起送回来。
-  Future<(SolveResult?, SolveTrace)> solveLocal(
-    SkyAnalysis analysis, {
+  Future<(SolveResult?, SolveTrace)> solveLocal(    SkyAnalysis analysis, {
     void Function(SolveProgress)? onProgress,
     SolveHint hint = const SolveHint(),
   }) async =>
@@ -1011,6 +1028,20 @@ Future<void> _skyWorkerMain(_WorkerBoot boot) async {
                 profile: request.profile,
               ),
             ),
+          );
+        case 'cache-status':
+          boot.reply.send(
+            _WorkerReply(message.id, 'done', solver.cacheStatus),
+          );
+        case 'cache-prepare':
+          solver.prepareCache((message.payload as num).toInt());
+          boot.reply.send(
+            _WorkerReply(message.id, 'done', solver.cacheStatus),
+          );
+        case 'cache-clear':
+          solver.clearCache();
+          boot.reply.send(
+            _WorkerReply(message.id, 'done', solver.cacheStatus),
           );
         case 'solve':
           final request = message.payload! as _SolveRequest;

@@ -176,6 +176,7 @@ class JobCenter extends ChangeNotifier {
         moonOnly: outcome.moonOnly,
         sunOnly: outcome.sunOnly,
         trailOnly: outcome.trailOnly,
+        solved: outcome.solve != null,
       );
       // 没人在看的时候替用户存下来。
       //

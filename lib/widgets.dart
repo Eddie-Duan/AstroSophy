@@ -1030,6 +1030,7 @@ class SkyProgressBar extends StatelessWidget {
     this.moon = false,
     this.moonOnly = false,
     this.solvedLocally = false,
+    this.solved = false,
     this.deep = false,
   });
 
@@ -1071,6 +1072,9 @@ class SkyProgressBar extends StatelessWidget {
   /// 是薄荷绿（本机在算）或琥珀色（照片已经传上去了），而红色说的是
   /// 「不用再等了，结果已经出来了」。
   final bool solvedLocally;
+
+  /// 本机或在线已经拿到定位结果；进度条统一收成红色。
+  final bool solved;
 
   /// 本机解算已经动用最深那层星表（整张表，G < 11）。
   ///
@@ -1172,9 +1176,9 @@ class SkyProgressBar extends StatelessWidget {
                           // 顺序有意义：只报月亮是「这条链路不在找天体」，
                           // 它压过其余四种状态——真到那一刻，剩下的几种
                           // 说的都不是这次发生的事。
-                          colors: moonOnly
+                          colors: (moonOnly || moon)
                               ? _moonColours
-                              : solvedLocally
+                              : (solved || solvedLocally)
                                   ? _solvedColours
                                   : online
                                       ? _onlineColours
@@ -1184,7 +1188,7 @@ class SkyProgressBar extends StatelessWidget {
                         ),
                       ),
                       child: CustomPaint(
-                        painter: moonOnly
+                        painter: (moonOnly || moon)
                             ? const _MoonDustPainter()
                             : const _StarRushPainter(),
                       ),

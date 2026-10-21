@@ -17,6 +17,7 @@ import 'strings.dart';
 import 'agent_tools.dart';
 import 'analysis.dart';
 import 'astrometry.dart';
+import 'cache_manager.dart';
 import 'crop.dart';
 import 'deepsky_names.dart';
 import 'demo.dart';
@@ -613,8 +614,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       ),
       (
         icon: Icons.tune_rounded,
-        label: t('API 设置'),
-        detail: t('填模型 Key 才能用 AI 解读；Astrometry.net Key 用于窄视场在线解算'),
+        label: t('设置'),
+        detail: t('填模型/Astrometry.net Key，或预处理三层星表缓存'),
         accent: false,
       ),
     ];
@@ -1268,6 +1269,73 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             (await _storage.read(key: 'strongModel')) ?? 'deepseek-reasoner',
       );
 
+  Future<void> _openSettingsMenu() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: kPanel,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.key_outlined, color: kMint),
+              title: Text(t('接口与密钥')),
+              subtitle: Text(
+                t('模型 Key、Astrometry.net Key、上传授权'),
+                style: const TextStyle(fontSize: 11),
+              ),
+              onTap: () => Navigator.pop(context, 'api'),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.storage_outlined, color: kMint),
+              title: Text(t('缓存管理')),
+              subtitle: Text(
+                t('查看并预处理浅层 / 中层 / 深层星表'),
+                style: const TextStyle(fontSize: 11),
+              ),
+              onTap: () => Navigator.pop(context, 'cache'),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.info_outline, color: kMint),
+              title: Text(t('关于')),
+              subtitle: Text(
+                t('AstroSophy · 本机优先的天文解析'),
+                style: const TextStyle(fontSize: 11),
+              ),
+              onTap: () => Navigator.pop(context, 'about'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'api') {
+      await _settings();
+    } else if (choice == 'cache') {
+      await _openCacheManager();
+    } else if (choice == 'about') {
+      showAboutDialog(
+        context: context,
+        applicationName: 'AstroSophy',
+        applicationLegalese: t('本机优先 · 照片默认不出设备 · AGPL-3.0'),
+      );
+    }
+  }
+
+  Future<void> _openCacheManager() async {
+    final worker = await _ensureWorker();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: kPanel,
+      builder: (_) => CacheManagerSheet(worker: worker),
+    );
+  }
+
   Future<void> _settings() async {
     final current = await _readModelSettings();
     final astrometryKey = await _storage.read(key: 'astrometryKey') ?? '';
@@ -1313,9 +1381,9 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   Text(
                     '${(progress.fraction * 100).round()}%',
                     style: TextStyle(
-                      color: progress.moonOnly
+                      color: (progress.moon || progress.moonOnly)
                           ? const Color(0xFFE8EEF5)
-                          : progress.solvedLocally
+                          : (progress.solved || progress.solvedLocally)
                               ? const Color(0xFFFF6B6B)
                               : progress.online
                                   ? const Color(0xFFFFDE77)
@@ -1334,6 +1402,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 moon: progress.moon,
                 moonOnly: progress.moonOnly,
                 solvedLocally: progress.solvedLocally,
+                solved: progress.solved,
                 deep: progress.deep,
               ),
               if (progress.moonOnly) ...[
@@ -1602,6 +1671,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   moon: job.progress?.moon ?? false,
                   moonOnly: job.progress?.moonOnly ?? false,
                   solvedLocally: job.progress?.solvedLocally ?? false,
+                  solved: job.progress?.solved ?? false,
                 ),
               ),
               trailing: Text('${(job.fraction * 100).round()}%'),
@@ -1850,7 +1920,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           // 用一个带字的胶囊把它从「随便逛逛」的图标里拎出来。
           Padding(
             padding: const EdgeInsets.only(left: 2, right: 6),
-            child: _ApiEntry(onPressed: _settings),
+            child: _ApiEntry(onPressed: _openSettingsMenu),
           ),
         ],
       ),
@@ -5293,7 +5363,7 @@ class _ApiEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
         button: true,
-        label: t('API 设置'),
+        label: t('设置'),
         child: Material(
           color: kMint.withValues(alpha: 0.14),
           shape: StadiumBorder(
@@ -5302,18 +5372,17 @@ class _ApiEntry extends StatelessWidget {
           child: InkWell(
             onTap: onPressed,
             customBorder: const StadiumBorder(),
-            child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.tune_rounded, size: 15, color: kMint),
-                  SizedBox(width: 5),
-                  // 'API' 是这三门语言里都不用翻译的三个字母，刻意不套 t()。
+                  const Icon(Icons.settings_outlined, size: 15, color: kMint),
+                  const SizedBox(width: 5),
                   Text(
-                    'API',
-                    style: TextStyle(
-                        fontSize: 12,
+                    t('设置'),
+                    style: const TextStyle(
+                      fontSize: 12,
                       fontWeight: FontWeight.w700,
                       color: kMint,
                     ),
