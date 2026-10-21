@@ -286,7 +286,7 @@ class ModelService {
           final messages = <Map<String, Object?>>[
             {
               'role': 'system',
-              'content': t('{0}只依据本机测量和工具结果回答，明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，也不得把仪器星等说成校准视星等。除只读查询外，保存、改名、删除、联网解算和发送图片都属于有副作用的操作；只有用户明确要求时才可申请，应用仍会在执行前单独确认。简洁使用中文，不要为了调用工具而调用工具。', [persona]),
+              'content': t('{0}只依据本机测量和工具结果回答，明确区分目录确认、估算和未知；不得把视觉背景说成 SQM/Bortle，也不得把仪器星等说成校准视星等。除只读查询外，保存、改名、删除、联网解算和发送图片都属于有副作用的操作；只有用户明确要求时才可申请，应用仍会在执行前单独确认。回答越短越好：默认一到两句，最多三句；先给结论，不铺陈过程，不复述工具输出；语音播报时尤其只说结论。不要为了调用工具而调用工具。', [persona]),
             },
             for (final turn in history)
               if (turn['role'] == 'user' || turn['role'] == 'assistant')
@@ -319,6 +319,7 @@ class ModelService {
                   body: jsonEncode({
                     'model': model.trim(),
                     'temperature': 0.3,
+                    'max_tokens': 300,
                     'messages': messages,
                     'tools': _tools,
                     'tool_choice': 'auto',

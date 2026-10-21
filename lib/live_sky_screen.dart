@@ -928,16 +928,6 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         bridge: LiveNoxBridge(
           read: _noxRead,
           run: _noxRun,
-          onVoice: () async {
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  t('语音接口已留好；下一步接“嘿，Nox”的持续监听和语音合成。'),
-                ),
-              ),
-            );
-          },
         ),
       ),
     );
