@@ -4457,7 +4457,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () => _openLegacySurvey(solve),
                   icon: const Icon(Icons.travel_explore, size: 18),
-                  label: Text(t('在 Legacy Survey 中查看这片天区')),
+                  label: Text(t('在 Legacy Surveys 中查看这片天区')),
                 ),
               ),
               const SizedBox(height: 6),
@@ -4512,16 +4512,52 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   }
 
   Future<void> _openLegacySurvey(SolveResult solve) async {
-    // Legacy Survey 没有覆盖全天。M31 这类天区在 DR10 里就是一片黑，直接
-    // 打开只会看到「奇怪的背景」。先取一张 128 像素小图看有没有真的像素；
-    // 没有就切到全天覆盖的 unWISE W1/W2 NEO11 红外图层。
-    var layer = 'ls-dr10';
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: kPanel,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  t('选择巡天图层'),
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+            for (final (layer, title, note) in const [
+              ('auto', '自动', '有光学覆盖用 Legacy Surveys DR11，否则 unWISE'),
+              ('ls-dr11', 'Legacy Surveys DR11 images', '光学 + 红外合成'),
+              ('unwise-neo11', 'unWISE W1/W2 NEO11', '全天红外'),
+              ('sdss', 'SDSS', '光学，仅部分天区'),
+            ])
+              ListTile(
+                title: Text(t(title)),
+                subtitle: Text(
+                  t(note),
+                  style: const TextStyle(fontSize: 11),
+                ),
+                onTap: () => Navigator.pop(context, layer),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+
+    // 自动模式沿用原来的判断：Legacy Surveys 没有覆盖就切到全天 unWISE。
+    var layer = choice == 'auto' ? 'ls-dr11' : choice;
     var fallbackNote = false;
-    if (!await _legacyLayerHasPixels(
-      solve.centerRa,
-      solve.centerDec,
-      layer,
-    )) {
+    if (choice == 'auto' &&
+        !await _legacyLayerHasPixels(solve.centerRa, solve.centerDec, layer)) {
       layer = 'unwise-neo11';
       fallbackNote = true;
     }
@@ -4540,7 +4576,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            t('Legacy Survey 没有光学覆盖，已切到 unWISE W1/W2 NEO11 红外图层。'),
+            t('Legacy Surveys 没有光学覆盖，已切到 unWISE W1/W2 NEO11 红外图层。'),
           ),
         ),
       );

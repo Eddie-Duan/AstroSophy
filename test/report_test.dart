@@ -321,7 +321,7 @@ void main() {
       expect(url, startsWith('https://www.legacysurvey.org/viewer?'));
       expect(url, contains('ra=22.37330'));
       expect(url, contains('dec=-3.16830'));
-      expect(url, contains('layer=ls-dr10'));
+      expect(url, contains('layer=ls-dr11'));
       // 4.12° 的视场装进约 700px 宽时缩放约 8 级。
       expect(url, contains('zoom=8'));
     });

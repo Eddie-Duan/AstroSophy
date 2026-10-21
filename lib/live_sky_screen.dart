@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import 'ephemeris.dart';
+import 'live_nox.dart';
 import 'live_sky.dart';
 import 'live_star_tracker.dart';
 import 'moon.dart';
@@ -66,10 +67,13 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   ];
 
   /// 把画面压成红/黑两色，夜里看屏幕不刺眼。
+  ///
+  /// 关键是保留亮度差：三通道一起加到红通道，白字仍然亮红、黑底仍然黑，
+  /// 不会像单纯抽红通道那样把灰字压成一片深红。
   static const _redFilter = ColorFilter.matrix(<double>[
-    1.25, 0.20, 0.10, 0, 0,
-    0, 0.04, 0, 0, 0,
-    0, 0.02, 0, 0, 0,
+    0.75, 0.65, 0.60, 0, 0,
+    0.02, 0.04, 0.03, 0, 0,
+    0.01, 0.02, 0.03, 0, 0,
     0, 0, 0, 1, 0,
   ]);
   LiveSkyVisibility _visibility = LiveSkyVisibility.auto;
@@ -349,11 +353,18 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       return;
     }
     final speed = _gyroscope.length;
+    final dot = current.forward.dot(target.forward).clamp(-1.0, 1.0);
+    final angle = math.acos(dot);
+    // 手指/呼吸级的微抖：不要每一帧都去追加速度计的噪声，否则星图会“呼吸”。
+    if (speed < 0.02 && angle < 0.008) return;
     final gain = speed > 0.40
-        ? 0.006
+        ? 0.010
         : speed > 0.10
-            ? 0.015
-            : 0.040;
+            ? 0.035
+            : angle > 0.06
+                // 方向真的变了（例如从竖屏转到横屏）：快速跟过去，别慢慢爬。
+                ? 0.30
+                : 0.12;
     final forward = current.forward.lerp(target.forward, gain).normalized();
     if (forward.length <= 0) return;
     var up = current.up.lerp(target.up, gain);
@@ -501,6 +512,65 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     _refreshSkyIfNeeded(force: true);
   }
 
+  /// 静止时把相机解出来的修正做一点低通，避免每一帧都“啪”地跳半度。
+  LiveOrientationFix _smoothOrientationFix(LiveOrientationFix next) {
+    final previous = _orientationFix;
+    if (previous == null || _gyroscope.length > 0.10) return next;
+    double blend(double from, double to) {
+      var delta = to - from;
+      if (delta > 180) delta -= 360;
+      if (delta < -180) delta += 360;
+      return from + delta * 0.55;
+    }
+
+    return LiveOrientationFix(
+      yawDegrees: blend(previous.yawDegrees, next.yawDegrees),
+      pitchDegrees: blend(previous.pitchDegrees, next.pitchDegrees),
+      rollDegrees: blend(previous.rollDegrees, next.rollDegrees),
+      matches: next.matches,
+      rotation: next.rotation,
+      residual: next.residual,
+      matchedHips: next.matchedHips,
+    );
+  }
+
+  /// 视场中心最近的天体，用来在屏幕下方给一行小字介绍。
+  LiveObject? get _centeredObject {
+    final camera = _basis();
+    if (camera == null) return null;
+    final limit = math.cos((_effectiveFov * 0.06).clamp(2.5, 6.0) * math.pi / 180);
+    LiveObject? best;
+    var bestDot = limit;
+    for (final object in [
+      ..._stars.map((item) => item.object),
+      ..._planets.map((item) => item.object),
+      ..._deepSky.map((item) => item.object),
+      ..._smallBodyObjects,
+    ]) {
+      final enu = equatorialToEnu(
+        raDegrees: object.raDegrees,
+        decDegrees: object.decDegrees,
+        latitudeDegrees: _latitude,
+        localSiderealDegrees: _sidereal,
+      );
+      final dot = camera.forward.dot(enu);
+      if (dot > bestDot) {
+        bestDot = dot;
+        best = object;
+      }
+    }
+    return best;
+  }
+
+  String _objectType(LiveObject object) => switch (object.kind) {
+        LiveObjectKind.star => t('恒星'),
+        LiveObjectKind.deepSky => t('深空'),
+        LiveObjectKind.planet => t('行星'),
+        LiveObjectKind.smallBody => t('小天体'),
+        LiveObjectKind.sun => t('太阳'),
+        LiveObjectKind.moon => t('月球'),
+      };
+
   LiveCameraBasis? _basis() {
     if (!_solveMode) {
       // 巡天模式：冻结进入时的那套姿态，不再读 IMU；手指拖动只改 yaw/pitch。
@@ -515,6 +585,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     if (calibrated == null) return null;
     final fix = _orientationFix;
     if (fix == null) return calibrated;
+    // 快速转动时相机帧里的修正已经过期，继续套上去会把星图往回拽。
+    if (_gyroscope.length > 0.18) return calibrated;
     return calibrated.corrected(
       yawDegrees: fix.yawDegrees,
       pitchDegrees: fix.pitchDegrees,
@@ -591,7 +663,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       return;
     }
     setState(() {
-      _orientationFix = fix;
+      _orientationFix = _smoothOrientationFix(fix);
       _matchedStars = fix.matches;
       _lostFrames = 0;
       _matchedHips = fix.matchedHips;
@@ -847,6 +919,118 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         LiveObjectKind.moon => t('月球'),
       };
 
+  Future<void> _openNox() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: kPanel,
+      builder: (_) => LiveNoxPanel(
+        bridge: LiveNoxBridge(
+          read: _noxRead,
+          run: _noxRun,
+          onVoice: () async {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  t('语音接口已留好；下一步接“嘿，Nox”的持续监听和语音合成。'),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Map<String, Object?> _noxRead() => {
+        'red': _redMode,
+        'labels': _layers.contains(_LiveLayer.labels),
+        'constellations': _layers.contains(_LiveLayer.constellations),
+        'galactic': _showGalactic,
+        'below': _showBelowHorizon,
+        'locked': _locked,
+        'mode': _solveMode ? t('解算') : t('巡天'),
+      };
+
+  bool _toggleLayer(_LiveLayer layer) {
+    final next = !_layers.contains(layer);
+    setState(() {
+      if (next) {
+        _layers.add(layer);
+      } else {
+        _layers.remove(layer);
+      }
+    });
+    return next;
+  }
+
+  Future<String> _noxRun(String command) async {
+    final text = command.trim().toLowerCase();
+    if (text.isEmpty) return t('说点什么。');
+    if (text == '状态' || text.contains('status')) {
+      final center = _centeredObject;
+      return t('当前{0}，红光{1}，星名{2}；中心附近：{3}。', [
+        _solveMode ? t('解算') : t('巡天'),
+        _redMode ? t('开') : t('关'),
+        _layers.contains(_LiveLayer.labels) ? t('开') : t('关'),
+        center?.name ?? t('没有明显天体'),
+      ]);
+    }
+    if (text.contains('红光')) {
+      final on = !text.contains('关') && !text.contains('off');
+      setState(() => _redMode = on);
+      return on ? t('红光模式已开。') : t('红光模式已关。');
+    }
+    if (text.contains('银河')) {
+      setState(() => _showGalactic = !_showGalactic);
+      return t('银河{0}。', [_showGalactic ? t('已显示') : t('已隐藏')]);
+    }
+    if (text.contains('星座')) {
+      final on = _toggleLayer(_LiveLayer.constellations);
+      return t('星座连线{0}。', [on ? t('已显示') : t('已隐藏')]);
+    }
+    if (text.contains('星名') || text.contains('标签')) {
+      final on = _toggleLayer(_LiveLayer.labels);
+      return t('星名{0}。', [on ? t('已显示') : t('已隐藏')]);
+    }
+    if (text.contains('地平线')) {
+      setState(() => _showBelowHorizon = !_showBelowHorizon);
+      return t('地平线下天体{0}。',
+          [_showBelowHorizon ? t('已显示') : t('已隐藏')]);
+    }
+    if (text.contains('锁定')) {
+      setState(() => _locked = true);
+      return t('已锁定当前姿态。');
+    }
+    if (text.contains('取消目标')) {
+      setState(() => _targetObject = null);
+      return t('已取消目标。');
+    }
+    if (text.contains('找') || text.contains('目标')) {
+      final query = text
+          .replaceAll('找', '')
+          .replaceAll('目标', '')
+          .replaceAll('搜索', '')
+          .trim();
+      if (query.isEmpty) return t('要找哪颗星？');
+      final all = [
+        ..._stars.map((item) => item.object),
+        ..._planets.map((item) => item.object),
+        ..._deepSky.map((item) => item.object),
+        ..._smallBodyObjects,
+      ];
+      for (final object in all) {
+        if (object.name.toLowerCase().contains(query)) {
+          setState(() => _targetObject = object);
+          return t('目标已设为{0}。', [object.name]);
+        }
+      }
+      return t('没找到「{0}」。', [query]);
+    }
+    return t('可以试试：状态、红光、银河、星座、星名、地平线、找木星、取消目标。');
+  }
+
   Future<void> _openStarCalibration() async {
     final candidates = <LiveEnuObject>[
       for (final star in _stars)
@@ -859,9 +1043,13 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       for (final body in _planets)
         if (body.object.kind == LiveObjectKind.moon && body.enu.z > 0) body,
     ]..sort((a, b) {
-        final altA = altitudeDegreesOfEnu(a.enu);
-        final altB = altitudeDegreesOfEnu(b.enu);
-        return altB.compareTo(altA);
+        // 月亮永远置顶；其余按亮度从亮到暗，再按高度。
+        if (a.object.kind == LiveObjectKind.moon) return -1;
+        if (b.object.kind == LiveObjectKind.moon) return 1;
+        final byMagnitude = a.object.magnitude.compareTo(b.object.magnitude);
+        if (byMagnitude != 0) return byMagnitude;
+        return altitudeDegreesOfEnu(b.enu)
+            .compareTo(altitudeDegreesOfEnu(a.enu));
       });
     if (candidates.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1403,6 +1591,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   @override
   Widget build(BuildContext context) {
     final basis = _basis();
+    final centered = _centeredObject;
     final layers = {..._layers};
     final targetEnu = _targetObject == null
         ? null
@@ -1605,6 +1794,12 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                       ],
                     ),
                   ),
+                  _roundButton(
+                    icon: Icons.nightlight_round,
+                    tooltip: t('Nox'),
+                    onTap: _openNox,
+                  ),
+                  const SizedBox(width: 8),
                   if (_solveMode) ...[
                     _roundButton(
                       icon: Icons.star_border_rounded,
@@ -1670,6 +1865,45 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                       fontSize: 12,
                       height: 1.4,
                       color: Color(0xFFFFDE77),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (centered != null &&
+              _targetObject == null &&
+              _calibrationStar == null)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 58,
+              child: SafeArea(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.66),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    t('{0} · {1} · {2} 等 · 高度 {3}°', [
+                      centered.name,
+                      _objectType(centered),
+                      centered.magnitude.toStringAsFixed(1),
+                      altitudeDegreesOfEnu(
+                        equatorialToEnu(
+                          raDegrees: centered.raDegrees,
+                          decDegrees: centered.decDegrees,
+                          latitudeDegrees: _latitude,
+                          localSiderealDegrees: _sidereal,
+                        ),
+                      ).round(),
+                    ]),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFFD8E2F0),
                     ),
                   ),
                 ),

@@ -1179,7 +1179,7 @@ String legacySurveyUrl({
   required double dec,
   required double fieldOfViewDegrees,
   Wcs? wcs,
-  String layer = 'ls-dr10',
+  String layer = 'ls-dr11',
   int minZoom = 4,
 }) {
   final zoom = fieldOfViewDegrees > 0

@@ -79,7 +79,8 @@ class LiveStarTracker {
     final mean = sum / count;
     final variance = math.max(0.0, sumSq / count - mean * mean);
     final sigma = math.sqrt(variance);
-    final threshold = math.max(mean + 4.5 * sigma, 0.10);
+    final threshold =
+        math.min(math.max(mean + 4.5 * sigma, 0.10), 0.85);
 
     final candidates = <(int, int, double)>[];
     for (var row = 1; row < rows - 1; row++) {
@@ -112,6 +113,30 @@ class LiveStarTracker {
         }
       }
       if (tooClose) continue;
+
+      // 路灯/月亮/窗户是“宽”的亮斑，星点是“尖”的。数一下峰值周围有多少
+      // 像素也超过了检测阈值：亮星一般只占几个采样格，路灯会连成一大片。
+      var hot = 0;
+      var ring = 0.0;
+      var ringCount = 0;
+      for (var dy = -3; dy <= 3; dy++) {
+        final row = candidate.$2 + dy;
+        if (row < 0 || row >= rows) continue;
+        for (var dx = -3; dx <= 3; dx++) {
+          final col = candidate.$1 + dx;
+          if (col < 0 || col >= cols) continue;
+          final value = values[row * cols + col];
+          if (value >= threshold) hot++;
+          if (dy.abs() >= 2 || dx.abs() >= 2) {
+            ring += value;
+            ringCount++;
+          }
+        }
+      }
+      if (hot > 14) continue;
+      final localContrast =
+          ringCount == 0 ? 0.0 : candidate.$3 - ring / ringCount;
+      if (localContrast < 0.055) continue;
 
       // 在 5×5 采样邻域里做亮度加权重心，比直接取极大值像素稳。
       var weight = 0.0;
