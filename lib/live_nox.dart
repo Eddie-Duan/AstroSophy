@@ -50,6 +50,8 @@ class LiveNoxVoiceEngine {
   bool _busy = false;
   bool _transitioning = false;
   bool _onDevice = true;
+  String _localeId = 'zh_CN';
+  bool _languageFallbackTried = false;
 
   bool get active => _active;
 
@@ -63,20 +65,7 @@ class LiveNoxVoiceEngine {
     final ready = await _speech.initialize(
       onStatus: _onStatus,
       onError: (error) {
-        final message = error.errorMsg;
-        // 有 WiFi 也会 network_error：识别服务不在本机，或者服务端不可达。
-        // 先试设备端识别；设备端没模型再退回系统在线识别。
-        if (_onDevice &&
-            (message.contains('network') ||
-                message.contains('Network') ||
-                message.contains('not available') ||
-                message.contains('unavailable'))) {
-          _onDevice = false;
-          onError(t('设备端语音识别不可用，已尝试切回系统在线识别。'));
-          _scheduleRestart();
-          return;
-        }
-        onError(t('语音识别出错：{0}', [message]));
+        unawaited(_handleSpeechError(error.errorMsg));
       },
     );
     if (!ready) {
@@ -84,8 +73,63 @@ class LiveNoxVoiceEngine {
       onError(t('系统语音识别不可用，请检查麦克风权限或语音服务。'));
       return;
     }
+    await _pickLocale();
     _armIdle();
     await _listenWake();
+  }
+
+  Future<void> _handleSpeechError(String message) async {
+    final lower = message.toLowerCase();
+    final languageError = lower.contains('language') &&
+        (lower.contains('not supported') || lower.contains('unsupported'));
+    if (languageError && !_languageFallbackTried) {
+      _languageFallbackTried = true;
+      if (_onDevice) {
+        _onDevice = false;
+        onError(t('设备端没有中文语音包，已尝试切回系统在线识别。'));
+      } else {
+        final system = await _speech.systemLocale();
+        _localeId = system?.localeId ?? 'en_US';
+        onError(t('系统没有中文语音识别，已切到系统语言 {0}；请安装中文语音包。',
+            [_localeId]));
+      }
+      _scheduleRestart();
+      return;
+    }
+    // 有 WiFi 也会 network_error：识别服务不在本机，或者服务端不可达。
+    // 先试设备端识别；设备端没模型再退回系统在线识别。
+    if (_onDevice &&
+        (lower.contains('network') ||
+            lower.contains('not available') ||
+            lower.contains('unavailable'))) {
+      _onDevice = false;
+      onError(t('设备端语音识别不可用，已尝试切回系统在线识别。'));
+      _scheduleRestart();
+      return;
+    }
+    onError(t('语音识别出错：{0}', [message]));
+  }
+
+  Future<void> _pickLocale() async {
+    try {
+      final locales = await _speech.locales();
+      String? chinese;
+      for (final locale in locales) {
+        final id = locale.localeId.toLowerCase();
+        if (id.contains('zh') || id.contains('cmn') || id.contains('yue')) {
+          chinese = locale.localeId;
+          break;
+        }
+      }
+      if (chinese != null) {
+        _localeId = chinese;
+        return;
+      }
+      final system = await _speech.systemLocale();
+      _localeId = system?.localeId ?? 'en_US';
+    } catch (_) {
+      // 查询不到语言列表时保留 zh_CN，让系统自己报错，错误回调会再兜底。
+    }
   }
 
   Future<void> pause() async {
@@ -147,7 +191,7 @@ class LiveNoxVoiceEngine {
     try {
       await _speech.listen(
         listenOptions: SpeechListenOptions(
-          localeId: 'zh_CN',
+          localeId: _localeId,
           listenFor: const Duration(seconds: 30),
           pauseFor: const Duration(seconds: 6),
           partialResults: true,
@@ -208,7 +252,7 @@ class LiveNoxVoiceEngine {
     try {
       await _speech.listen(
         listenOptions: SpeechListenOptions(
-          localeId: 'zh_CN',
+          localeId: _localeId,
           listenFor: const Duration(seconds: 8),
           pauseFor: const Duration(seconds: 2),
           partialResults: true,
