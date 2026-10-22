@@ -169,7 +169,7 @@ class LiveStarTracker {
     return picked;
   }
 
-  /// 把检测到的星点和星表投影比对，估计 yaw/pitch/roll 小修正。
+/// 把检测到的星点和星表投影比对，估计 yaw/pitch/roll 小修正。
   ///
   /// 返回 null 表示匹配不够，宁可继续用 IMU，也不要瞎修。
   static LiveOrientationFix? solve({
@@ -330,5 +330,98 @@ class LiveStarTracker {
     }
     final mean = count == 0 ? 1.0 : residual / count;
     return (count: count, score: count - mean * 8, residual: mean, hips: hips);
+  }
+}
+
+  /// 相邻帧的星点光流。
+///
+/// 相机以 4–5 Hz 出解算帧，星点在两帧之间只移动几个像素。与其每帧都全图
+/// 重新找局部极大值，不如以上一帧的星点为中心做小窗口块匹配；匹配不到足够
+/// 点数时再退回全图检测。
+class LiveStarFlow {
+  Uint8List? _previous;
+  int _width = 0;
+  int _height = 0;
+  int _stride = 0;
+  List<LiveStarDetection> _points = const [];
+
+  bool get ready => _previous != null && _points.length >= 4;
+
+  void seed(
+    Uint8List yPlane,
+    int width,
+    int height,
+    int stride,
+    List<LiveStarDetection> points,
+  ) {
+    _width = width;
+    _height = height;
+    _stride = stride;
+    _previous = Uint8List.fromList(yPlane);
+    _points = points.take(60).toList(growable: false);
+  }
+
+  /// 返回 null 表示这一帧光流不可靠，调用方应退回全图检测。
+  List<LiveStarDetection>? track(
+    Uint8List yPlane,
+    int width,
+    int height,
+    int stride,
+  ) {
+    final previous = _previous;
+    if (previous == null ||
+        width != _width ||
+        height != _height ||
+        stride != _stride) {
+      return null;
+    }
+    final result = <LiveStarDetection>[];
+    const radius = 2;
+    const search = 6;
+    for (final point in _points) {
+      final px = (point.x * width).round();
+      final py = (point.y * height).round();
+      if (px < search + radius ||
+          py < search + radius ||
+          px >= width - search - radius ||
+          py >= height - search - radius) {
+        continue;
+      }
+      var bestDx = 0;
+      var bestDy = 0;
+      var bestScore = double.infinity;
+      for (var dy = -search; dy <= search; dy++) {
+        for (var dx = -search; dx <= search; dx++) {
+          var score = 0.0;
+          for (var oy = -radius; oy <= radius; oy++) {
+            final pRow = (py + oy) * stride;
+            final cRow = (py + oy + dy) * stride;
+            for (var ox = -radius; ox <= radius; ox++) {
+              final difference =
+                  previous[pRow + px + ox] - yPlane[cRow + px + ox + dx];
+              score += difference.abs();
+            }
+          }
+          if (score < bestScore) {
+            bestScore = score;
+            bestDx = dx;
+            bestDy = dy;
+          }
+        }
+      }
+      // 25 个像素的平均差超过 18/255，说明这一块已经对不上了。
+      if (bestScore / 25 > 18) continue;
+      result.add(
+        LiveStarDetection(
+          ((px + bestDx) / width).clamp(0.0, 1.0),
+          ((py + bestDy) / height).clamp(0.0, 1.0),
+          point.brightness,
+        ),
+      );
+    }
+    if (result.length < 4) return null;
+    _previous = Uint8List.fromList(yPlane);
+    _points = result;
+    return result;
   }
 }

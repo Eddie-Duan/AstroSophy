@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import 'ephemeris.dart';
+import 'live_ekf.dart';
 import 'live_nox.dart';
 import 'live_sky.dart';
 import 'live_star_tracker.dart';
@@ -96,6 +97,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   /// 视觉修正后的姿态偏置。锁定时保持不变；重新锁定时清零。
   LiveOrientationFix? _orientationFix;
   bool _locked = false;
+  final _ekf = LiveAttitudeEkf();
+  final _starFlow = LiveStarFlow();
+  DateTime _lastEkfAt = DateTime.now();
   LiveNoxVoiceEngine? _noxVoice;
   bool _noxActive = false;
   String _noxState = '';
@@ -112,6 +116,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   double _zoom = 1;
   double _zoomStart = 1;
   double _maxZoom = 1;
+  int _trackHz = 4;
 
   StreamSubscription<AccelerometerEvent>? _accelSub;
   StreamSubscription<MagnetometerEvent>? _magSub;
@@ -195,6 +200,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       final fov = double.tryParse(await _store.read(key: 'liveFov') ?? '');
       final offset =
           double.tryParse(await _store.read(key: 'liveHeadingOffset') ?? '');
+      final trackHz =
+          int.tryParse(await _store.read(key: 'liveTrackHz') ?? '');
       final visibility = await _store.read(key: 'liveVisibility');
       if (!mounted) return;
       setState(() {
@@ -205,6 +212,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
         }
         if (fov != null) _fov = fov.clamp(35.0, 100.0);
         if (offset != null) _headingOffset = offset.clamp(-180.0, 180.0);
+        if (trackHz != null) _trackHz = trackHz.clamp(2, 8);
         _visibility = LiveSkyVisibility.fromStorage(visibility);
       });
     } on Exception {
@@ -522,27 +530,6 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   }
 
   /// 静止时把相机解出来的修正做一点低通，避免每一帧都“啪”地跳半度。
-  LiveOrientationFix _smoothOrientationFix(LiveOrientationFix next) {
-    final previous = _orientationFix;
-    if (previous == null || _gyroscope.length > 0.10) return next;
-    double blend(double from, double to) {
-      var delta = to - from;
-      if (delta > 180) delta -= 360;
-      if (delta < -180) delta += 360;
-      return from + delta * 0.55;
-    }
-
-    return LiveOrientationFix(
-      yawDegrees: blend(previous.yawDegrees, next.yawDegrees),
-      pitchDegrees: blend(previous.pitchDegrees, next.pitchDegrees),
-      rollDegrees: blend(previous.rollDegrees, next.rollDegrees),
-      matches: next.matches,
-      rotation: next.rotation,
-      residual: next.residual,
-      matchedHips: next.matchedHips,
-    );
-  }
-
   /// 视场中心最近的天体，用来在屏幕下方给一行小字介绍。
   LiveObject? get _centeredObject {
     final camera = _basis();
@@ -592,14 +579,11 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     }
     final calibrated = _calibratedBasis();
     if (calibrated == null) return null;
-    final fix = _orientationFix;
-    if (fix == null) return calibrated;
-    // 快速转动时相机帧里的修正已经过期，继续套上去会把星图往回拽。
-    if (_gyroscope.length > 0.18) return calibrated;
+    if (!_ekf.hasMeasurement) return calibrated;
     return calibrated.corrected(
-      yawDegrees: fix.yawDegrees,
-      pitchDegrees: fix.pitchDegrees,
-      rollDegrees: fix.rollDegrees,
+      yawDegrees: _ekf.yawDegrees,
+      pitchDegrees: _ekf.pitchDegrees,
+      rollDegrees: _ekf.rollDegrees,
     );
   }
 
@@ -636,19 +620,33 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     // 把已经对好的姿态带偏。保持锁定，交给 IMU 跟随，缩回 1× 再恢复跟踪。
     if (_locked && _zoom > 1.2) return;
     final now = DateTime.now();
-    final interval = _locked
-        ? const Duration(milliseconds: 220)
-        : const Duration(milliseconds: 260);
+    final interval = Duration(milliseconds: 1000 ~/ _trackHz.clamp(2, 10));
     if (now.difference(_lastTrackerRun) < interval) return;
     _lastTrackerRun = now;
     if (image.format.group != ImageFormatGroup.yuv420) return;
     final plane = image.planes.first;
-    final detections = LiveStarTracker.detect(
-      plane.bytes,
-      image.width,
-      image.height,
-      plane.bytesPerRow,
-    );
+    final tracked = _locked ? _starFlow.track(
+          plane.bytes,
+          image.width,
+          image.height,
+          plane.bytesPerRow,
+        ) : null;
+    final detections = tracked ??
+        LiveStarTracker.detect(
+          plane.bytes,
+          image.width,
+          image.height,
+          plane.bytesPerRow,
+        );
+    if (tracked == null) {
+      _starFlow.seed(
+        plane.bytes,
+        image.width,
+        image.height,
+        plane.bytesPerRow,
+        detections,
+      );
+    }
     if (detections.length < 4) {
       _trackingLost();
       return;
@@ -673,8 +671,21 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       _trackingLost();
       return;
     }
+    final dt = now.difference(_lastEkfAt).inMicroseconds / 1e6;
+    _lastEkfAt = now;
+    _ekf.predict(dt.clamp(0.01, 0.2));
+    if (_gyroscope.length < 0.50) {
+      _ekf.update(
+        yaw: fix.yawDegrees,
+        pitch: fix.pitchDegrees,
+        roll: fix.rollDegrees,
+        matches: fix.matches,
+        residualPixels: fix.residual,
+        angularSpeed: _gyroscope.length,
+      );
+    }
     setState(() {
-      _orientationFix = _smoothOrientationFix(fix);
+      _orientationFix = fix;
       _matchedStars = fix.matches;
       _lostFrames = 0;
       _matchedHips = fix.matchedHips;
@@ -705,6 +716,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       _matchedHips = const {};
       _trackedStars = const [];
       _matchedStars = 0;
+      _ekf.reset();
+      _lastEkfAt = DateTime.now();
       if (_locked) {
         _locked = false;
         _orientationFix = null;
@@ -721,6 +734,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
       _matchedHips = const {};
       _trackedStars = const [];
       _lostFrames = 0;
+      _ekf.reset();
+      _lastEkfAt = DateTime.now();
     });
     final controller = _camera;
     if (controller != null && !_streaming) {
@@ -1245,6 +1260,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
           (_manualPitch - dy * vfov / _previewAspect).clamp(-89.0, 89.0);
       _calibrationStar = null;
       _orientationFix = null;
+      _ekf.reset();
+      _lastEkfAt = DateTime.now();
       _locked = true;
       _trackedStars = const [];
       _matchedHips = const {};
@@ -1603,6 +1620,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   Future<void> _editCalibration() async {
     var fov = _fov;
     var offset = _headingOffset;
+    var trackHz = _trackHz;
     final saved = await showModalBottomSheet<bool>(
       context: context,
       showDragHandle: true,
@@ -1644,6 +1662,27 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                   divisions: 72,
                   onChanged: (value) => setSheetState(() => offset = value),
                 ),
+                Text(t('解算频率：{0} Hz', [trackHz])),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final hz in const [2, 4, 8])
+                      ChoiceChip(
+                        label: Text('$hz Hz'),
+                        selected: trackHz == hz,
+                        onSelected: (_) => setSheetState(() => trackHz = hz),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  t('这是每秒重检星点的次数，不是曝光时间。250 ms 曝光会让星点拖线，相机曝光仍由系统决定。'),
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    height: 1.4,
+                    color: Color(0xFF8192A8),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
@@ -1662,17 +1701,21 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     setState(() {
       _fov = fov;
       _headingOffset = offset;
+      _trackHz = trackHz;
       _orientationFix = null;
       _locked = false;
       _matchedStars = 0;
       _manualYaw = 0;
       _manualPitch = 0;
       _calibrationStar = null;
+      _ekf.reset();
+      _lastEkfAt = DateTime.now();
       _fusedBasis = _rawSensorBasis();
     });
     unawaited(_restartTracking());
     await _store.write(key: 'liveFov', value: '$_fov');
     await _store.write(key: 'liveHeadingOffset', value: '$_headingOffset');
+    await _store.write(key: 'liveTrackHz', value: '$_trackHz');
   }
 
   @override
