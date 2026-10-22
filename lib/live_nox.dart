@@ -49,6 +49,7 @@ class LiveNoxVoiceEngine {
   bool _listening = false;
   bool _busy = false;
   bool _transitioning = false;
+  bool _onDevice = true;
 
   bool get active => _active;
 
@@ -62,7 +63,20 @@ class LiveNoxVoiceEngine {
     final ready = await _speech.initialize(
       onStatus: _onStatus,
       onError: (error) {
-        onError(t('语音识别出错：{0}', [error.errorMsg]));
+        final message = error.errorMsg;
+        // 有 WiFi 也会 network_error：识别服务不在本机，或者服务端不可达。
+        // 先试设备端识别；设备端没模型再退回系统在线识别。
+        if (_onDevice &&
+            (message.contains('network') ||
+                message.contains('Network') ||
+                message.contains('not available') ||
+                message.contains('unavailable'))) {
+          _onDevice = false;
+          onError(t('设备端语音识别不可用，已尝试切回系统在线识别。'));
+          _scheduleRestart();
+          return;
+        }
+        onError(t('语音识别出错：{0}', [message]));
       },
     );
     if (!ready) {
@@ -106,6 +120,14 @@ class LiveNoxVoiceEngine {
     });
   }
 
+  void _scheduleRestart() {
+    _restartTimer?.cancel();
+    _restartTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!_active || _paused || _busy || _listening) return;
+      _listenWake();
+    });
+  }
+
   void _onStatus(String status) {
     _listening = false;
     if (!_active || _paused || _busy || _transitioning) return;
@@ -130,6 +152,7 @@ class LiveNoxVoiceEngine {
           pauseFor: const Duration(seconds: 6),
           partialResults: true,
           cancelOnError: true,
+          onDevice: _onDevice,
           listenMode: ListenMode.confirmation,
         ),
         onResult: (result) {
@@ -152,7 +175,13 @@ class LiveNoxVoiceEngine {
       );
     } catch (error) {
       _listening = false;
-      onError(t('无法启动语音识别：{0}', [error]));
+      if (_onDevice) {
+        _onDevice = false;
+        onError(t('设备端语音识别不可用，已尝试切回系统在线识别。'));
+        _scheduleRestart();
+      } else {
+        onError(t('无法启动语音识别：{0}', [error]));
+      }
     }
   }
 
@@ -184,6 +213,7 @@ class LiveNoxVoiceEngine {
           pauseFor: const Duration(seconds: 2),
           partialResults: true,
           cancelOnError: true,
+          onDevice: _onDevice,
           listenMode: ListenMode.dictation,
         ),
         onResult: (result) {
@@ -195,7 +225,13 @@ class LiveNoxVoiceEngine {
       );
     } catch (error) {
       _listening = false;
-      onError(t('命令识别失败：{0}', [error]));
+      if (_onDevice) {
+        _onDevice = false;
+        onError(t('设备端语音识别不可用，已尝试切回系统在线识别。'));
+        _scheduleRestart();
+      } else {
+        onError(t('命令识别失败：{0}', [error]));
+      }
     }
   }
 

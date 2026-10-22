@@ -25,19 +25,24 @@ const noxIcon = Icons.nightlight_round;
 /// 轮廓仍是圆的，白银色月牙占左侧，剩下偏黄的部分在右侧，两个褐色斑点
 /// 当环形山。尺寸很小（16–42 px）时也要能看出「这是月亮」。
 class NoxMoonIcon extends StatelessWidget {
-  const NoxMoonIcon({super.key, this.size = 22});
+  const NoxMoonIcon({super.key, this.size = 22, this.active = false});
 
   final double size;
+
+  /// 关闭时黄色月牙 + 银白月面；开启时反过来。
+  final bool active;
 
   @override
   Widget build(BuildContext context) => CustomPaint(
         size: Size.square(size),
-        painter: const _NoxMoonPainter(),
+        painter: _NoxMoonPainter(active: active),
       );
 }
 
 class _NoxMoonPainter extends CustomPainter {
-  const _NoxMoonPainter();
+  const _NoxMoonPainter({required this.active});
+
+  final bool active;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -47,18 +52,20 @@ class _NoxMoonPainter extends CustomPainter {
     canvas.save();
     canvas.clipPath(disc);
 
-    // 底：偏黄的月面。
-    canvas.drawCircle(center, radius, Paint()..color = const Color(0xFFF2C14E));
+    // 底色是露在外面的月牙：关闭时黄色，开启时银白。
+    final face = active ? const Color(0xFFE8EEF5) : const Color(0xFFF2C14E);
+    canvas.drawCircle(center, radius, Paint()..color = face);
 
-    // 白银色月牙：一个偏移的圆盖住左侧大部分，右侧留出黄色月牙。
+    // 偏移圆是月面：关闭时银白，开启时黄色。
+    final crescent = active ? const Color(0xFFF2C14E) : const Color(0xFFE8EEF5);
     final silverCenter = center.translate(radius * 0.28, -radius * 0.10);
     canvas.drawCircle(
       silverCenter,
       radius * 1.02,
-      Paint()..color = const Color(0xFFE8EEF5),
+      Paint()..color = crescent,
     );
 
-    // 两个褐色环形山，落在右侧偏黄的月面上。
+    // 两个褐色环形山，落在月面上。
     final craterPaint = Paint()..color = const Color(0xFF8A6A45);
     canvas.drawCircle(
       center.translate(radius * 0.62, radius * 0.05),
@@ -83,7 +90,8 @@ class _NoxMoonPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _NoxMoonPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _NoxMoonPainter oldDelegate) =>
+      oldDelegate.active != active;
 }
 
 /// Nox 要「熟悉」的东西：这个应用是什么、会什么、数据在哪儿。

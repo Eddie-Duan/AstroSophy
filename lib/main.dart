@@ -2047,7 +2047,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             clipBehavior: Clip.antiAlias,
             child: Stack(
               children: [
-                const Positioned.fill(child: CustomPaint(painter: OrbitPainter())),
+                Positioned.fill(
+                  child: Image.asset(
+                    'assets/ui/home_hero.jpg',
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                const Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x220B1626), Color(0xCC0B1626)],
+                      ),
+                    ),
+                  ),
+                ),
                 Positioned(
                   left: 20,
                   top: 22,
@@ -2152,14 +2168,80 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _openLiveSky,
-              icon: const Icon(Icons.explore_outlined, size: 18),
-              label: Text(t('实时星图 · 举起手机认星座')),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 13),
+          AspectRatio(
+            aspectRatio: 2,
+            child: Material(
+              color: const Color(0xFF0B1626),
+              borderRadius: BorderRadius.circular(18),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: _openLiveSky,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.asset(
+                      'assets/ui/live_entry.jpg',
+                      fit: BoxFit.cover,
+                    ),
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [Color(0xE60B1626), Color(0x330B1626)],
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 12, 14, 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  t('实时星图'),
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 5),
+                                Text(
+                                  t('举起手机，认星座、找月亮。'),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11.5,
+                                    color: Color(0xFFD8E2F0),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.all(9),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.35),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: kMint.withValues(alpha: 0.45),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.explore_outlined,
+                              color: kMint,
+                              size: 22,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

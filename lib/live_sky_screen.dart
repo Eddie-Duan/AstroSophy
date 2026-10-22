@@ -15,6 +15,7 @@ import 'live_star_tracker.dart';
 import 'model.dart';
 import 'models.dart';
 import 'moon.dart';
+import 'nox.dart';
 import 'strings.dart';
 import 'theme.dart';
 
@@ -530,6 +531,33 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   }
 
   /// 静止时把相机解出来的修正做一点低通，避免每一帧都“啪”地跳半度。
+  LiveObject? get _moonObject {
+    for (final body in _planets) {
+      if (body.object.kind == LiveObjectKind.moon) return body.object;
+    }
+    return null;
+  }
+
+  bool get _moonOnScreen {
+    final moon = _moonObject;
+    final camera = _basis();
+    if (moon == null || camera == null) return false;
+    final enu = equatorialToEnu(
+      raDegrees: moon.raDegrees,
+      decDegrees: moon.decDegrees,
+      latitudeDegrees: _latitude,
+      localSiderealDegrees: _sidereal,
+    );
+    if (enu.z < 0) return false;
+    return camera.project(
+          enu,
+          horizontalFovDegrees: _effectiveFov,
+          viewport: Size(1, _previewAspect),
+          margin: 0,
+        ) !=
+        null;
+  }
+
   /// 视场中心最近的天体，用来在屏幕下方给一行小字介绍。
   LiveObject? get _centeredObject {
     final camera = _basis();
@@ -1722,6 +1750,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   Widget build(BuildContext context) {
     final basis = _basis();
     final centered = _centeredObject;
+    final moonTracking = _moonOnScreen;
     final layers = {..._layers};
     final targetEnu = _targetObject == null
         ? null
@@ -1920,20 +1949,26 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                         Text(
                           !_solveMode
                               ? t('巡天模式 · 自由浏览')
-                              : !_chartMode
-                                  ? (_locked
-                                      ? t('纯净模式 · 已锁定 {0} 颗', [_matchedStars])
-                                      : t('纯净模式 · 解算中'))
-                                  : (_locked
-                                      ? t('已锁定 {0} 颗星', [_matchedStars])
-                                      : t('校准中 · 已匹配 {0} 颗', [_matchedStars])),
+                              : moonTracking
+                                  ? t('跟踪中 · 月球')
+                                  : !_chartMode
+                                      ? (_locked
+                                          ? t('纯净模式 · 已锁定 {0} 颗',
+                                              [_matchedStars])
+                                          : t('纯净模式 · 解算中'))
+                                      : (_locked
+                                          ? t('已锁定 {0} 颗星', [_matchedStars])
+                                          : t('校准中 · 已匹配 {0} 颗',
+                                              [_matchedStars])),
                           style: TextStyle(
                             fontSize: 10.5,
                             color: !_solveMode
                                 ? const Color(0xFFA6B5C8)
-                                : _locked
-                                    ? kMint.withValues(alpha: 0.9)
-                                    : const Color(0xFF8192A8),
+                                : moonTracking
+                                    ? const Color(0xFFE8EEF5)
+                                    : _locked
+                                        ? kMint.withValues(alpha: 0.9)
+                                        : const Color(0xFF8192A8),
                           ),
                         ),
                       ],
@@ -1941,9 +1976,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                   ),
                   _roundButton(
                     icon: Icons.nightlight_round,
-                    color: _noxActive
-                        ? const Color(0xFFFFD166)
-                        : const Color(0xFF8192A8),
+                    iconWidget: NoxMoonIcon(size: 21, active: _noxActive),
                     tooltip: _noxActive ? t('关闭 Nox') : t('唤醒 Nox'),
                     onTap: _toggleNox,
                   ),
@@ -2303,6 +2336,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     required String tooltip,
     required VoidCallback onTap,
     Color color = kMint,
+    Widget? iconWidget,
   }) =>
       Material(
         color: Colors.black54,
@@ -2314,7 +2348,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
             onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.all(9),
-              child: Icon(icon, size: 20, color: color),
+              child: iconWidget ?? Icon(icon, size: 20, color: color),
             ),
           ),
         ),

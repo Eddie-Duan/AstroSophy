@@ -88,6 +88,18 @@ ART = {
         "in teal, amber and pale white, no star points, "
         + PALETTE + ", centered, " + NO_TEXT
     ),
+    "home_hero": (
+        "flat vector illustration, wide night landscape under a deep navy sky, "
+        "the Milky Way arching over low mountains, a tiny silhouette holding a "
+        "phone up at the stars, a thin crescent moon, quiet and inviting, "
+        + PALETTE + ", " + NO_TEXT
+    ),
+    "live_entry": (
+        "flat vector illustration, a hand holding a phone up toward a wide "
+        "starry sky, constellation lines and a few bright stars connecting above "
+        "the screen, low mountain horizon, sense of looking up and identifying "
+        "constellations, " + PALETTE + ", " + NO_TEXT
+    ),
     "scene_moon": (
         "flat vector illustration, a large detailed full moon with silver lit crescent "
         "and warm yellow earthshine, two brown craters, a small telescope silhouette "
