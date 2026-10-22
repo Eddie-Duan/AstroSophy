@@ -20,6 +20,7 @@
   "Agent 正在处理…": "The Agent is working…",
   "Agent 解读": "Agent commentary",
   "Agent 达到本轮工具调用上限（{0} 次）。": "The Agent hit its tool-call limit for this turn ({0}).",
+  "AGPL-3.0\n作者：Dwuan Boyoung / UCAS\nduanbaiyang25@mails.ucas.ac.cn": "AGPL-3.0\nAuthor: Dwuan Boyoung / UCAS\nduanbaiyang25@mails.ucas.ac.cn",
   "AstroSophy · 本机优先的天文解析": "AstroSophy · local-first astronomy",
   "AstroSophy 标注图": "AstroSophy annotated image",
   "Astrometry.net 在线解算": "Solved online with Astrometry.net",

@@ -23,6 +23,7 @@ const Map<String, Map<String, String>> kLocalizedStrings = {
     '- 视场 =={0}== · =={1}″==/像素 · 星表匹配 =={2}== 颗': '- Field =={0}== · =={1}″==/px · =={2}== catalogue matches',
     '- 银道坐标 ==l={0}° b={1}°== · 距银心 =={2}°== · 星点密度 =={3}/平方度==': '- Galactic coordinates ==l={0}° b={1}°== · =={2}°== from the Galactic centre · star density =={3}/deg²==',
     '=={0}==（占像场 {1}%）': '=={0}== (covers {1}% of the frame)',
+    'AGPL-3.0\n作者：Dwuan Boyoung / UCAS\nduanbaiyang25@mails.ucas.ac.cn': 'AGPL-3.0\nAuthor: Dwuan Boyoung / UCAS\nduanbaiyang25@mails.ucas.ac.cn',
     'API 设置': 'API settings',
     'Agent 正在处理…': 'The Agent is working…',
     'Agent 解读': 'Agent commentary',

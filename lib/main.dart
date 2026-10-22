@@ -1320,7 +1320,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       showAboutDialog(
         context: context,
         applicationName: 'AstroSophy',
-        applicationLegalese: t('本机优先 · 照片默认不出设备 · AGPL-3.0'),
+        applicationLegalese: t('AGPL-3.0\n作者：Dwuan Boyoung / UCAS\nduanbaiyang25@mails.ucas.ac.cn'),
       );
     }
   }

@@ -637,8 +637,8 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     if (_locked && _zoom > 1.2) return;
     final now = DateTime.now();
     final interval = _locked
-        ? const Duration(milliseconds: 400)
-        : const Duration(milliseconds: 300);
+        ? const Duration(milliseconds: 220)
+        : const Duration(milliseconds: 260);
     if (now.difference(_lastTrackerRun) < interval) return;
     _lastTrackerRun = now;
     if (image.format.group != ImageFormatGroup.yuv420) return;
@@ -655,7 +655,9 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     }
     final base = _calibratedBasis();
     if (base == null) return;
-    final tracking = _locked && _trackedStars.isNotEmpty;
+    // 锁定后优先跟已经对上的星；但如果上一帧只剩三四颗，下一帧随便丢一颗
+    // 就会解除锁定，所以少于 8 颗时退回整片亮星，宁可多算一点。
+    final tracking = _locked && _trackedStars.length >= 8;
     final fix = LiveStarTracker.solve(
       detections: detections,
       // 锁定后只跟这几颗已经对上的星；不再拿整张星表重解。
@@ -691,7 +693,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   /// 跟丢一小会儿先忍着；连续几帧都对不上才清掉绿色并解锁。
   void _trackingLost() {
     _lostFrames++;
-    final threshold = _locked ? 3 : 2;
+    final threshold = _locked ? 5 : 2;
     if (_lostFrames < threshold) return;
     if (!mounted) return;
     if (!_locked && _matchedHips.isEmpty) {
@@ -1716,21 +1718,36 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 onScaleStart: (_) => _zoomStart = _zoom,
                 onScaleUpdate: (details) {
                   // 巡天模式：单指拖动星图，不再跟随手机角度。
-                  if (!_solveMode && details.pointerCount <= 1) {
+                  if (details.pointerCount <= 1) {
                     final width =
                         math.max(1.0, MediaQuery.sizeOf(context).width);
                     final degPerPixel = _effectiveFov / width;
-                    setState(() {
-                      var yaw =
-                          _panYaw - details.focalPointDelta.dx * degPerPixel;
-                      // 方位角是圆的，不该在 ±180° 处硬停住。
-                      if (yaw > 180) yaw -= 360;
-                      if (yaw < -180) yaw += 360;
-                      _panYaw = yaw;
-                      _panPitch = (_panPitch +
-                              details.focalPointDelta.dy * degPerPixel)
-                          .clamp(-89.0, 89.0);
-                    });
+                    if (!_solveMode) {
+                      setState(() {
+                        var yaw = _panYaw -
+                            details.focalPointDelta.dx * degPerPixel;
+                        // 方位角是圆的，不该在 ±180° 处硬停住。
+                        if (yaw > 180) yaw -= 360;
+                        if (yaw < -180) yaw += 360;
+                        _panYaw = yaw;
+                        _panPitch = (_panPitch +
+                                details.focalPointDelta.dy * degPerPixel)
+                            .clamp(-89.0, 89.0);
+                      });
+                    } else if (!_locked) {
+                      // 解算模式下也允许手动对星：手指把星图挪到照片里的星点上，
+                      // 松手后偏移保留，再点锁定。它不是巡天的自由平移。
+                      setState(() {
+                        var yaw = _manualYaw -
+                            details.focalPointDelta.dx * degPerPixel;
+                        if (yaw > 180) yaw -= 360;
+                        if (yaw < -180) yaw += 360;
+                        _manualYaw = yaw;
+                        _manualPitch = (_manualPitch +
+                                details.focalPointDelta.dy * degPerPixel)
+                            .clamp(-89.0, 89.0);
+                      });
+                    }
                   }
                   if (details.scale == 1) return;
                   _applyZoom(_zoomStart * details.scale, _maxZoom);
