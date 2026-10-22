@@ -59,6 +59,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   bool _showEquatorialGrid = false;
   bool _showBelowHorizon = false;
   bool _redMode = false;
+  bool _cameraOn = true;
 
   static const _fallbackSurveyBasis = LiveCameraBasis(
     forward: LiveVec3.north,
@@ -753,8 +754,39 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     });
   }
 
+  Future<void> _setCameraOn(bool value) async {
+    if (value == _cameraOn) return;
+    final controller = _camera;
+    if (!value) {
+      if (_streaming) {
+        try {
+          await controller?.stopImageStream();
+        } on CameraException {
+          // 停不下来也不阻塞黑底模式。
+        }
+        _streaming = false;
+      }
+      try {
+        await controller?.pausePreview();
+      } on CameraException {
+        // 某些设备没有 pausePreview，黑底仍然可用。
+      }
+    } else {
+      try {
+        await controller?.resumePreview();
+      } on CameraException {
+        // 恢复失败时下面的 restart 会再试一次。
+      }
+    }
+    if (!mounted) return;
+    setState(() => _cameraOn = value);
+    if (value) {
+      await _restartTracking();
+    }
+  }
+
   Future<void> _restartTracking() async {
-    if (!_solveMode) return;
+    if (!_solveMode || !_cameraOn) return;
     setState(() {
       _locked = false;
       _orientationFix = null;
@@ -1349,6 +1381,18 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
             child: ListView(
               shrinkWrap: true,
               children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.dark_mode_outlined, color: kMint),
+                  title: Text(t('黑色背景')),
+                  subtitle: Text(
+                    t('关闭摄像头，只显示星图。省电，也不用把镜头对着天空。'),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  value: !_cameraOn,
+                  onChanged: (value) => update(() {
+                    unawaited(_setCameraOn(!value));
+                  }),
+                ),
                 ExpansionTile(
                   initiallyExpanded: true,
                   leading: const Icon(Icons.layers_outlined, color: kMint),
@@ -1827,7 +1871,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (_camera != null)
+                    if (_camera != null && _cameraOn)
                       CameraPreview(_camera!)
                     else
                       const ColoredBox(color: Color(0xFF02040A)),

@@ -37,6 +37,7 @@ import 'pipeline.dart';
 import 'report.dart';
 import 'smallbodies.dart';
 import 'solver.dart';
+import 'sky_atlas_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -1776,6 +1777,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     );
   }
 
+  Future<void> _openSkyAtlas() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const SkyAtlasScreen()),
+    );
+  }
+
   /// 打开 Nox。
   ///
   /// Nox 和结果页那张「Agent 解读」卡不是一回事，两者都要留着：那张卡问的是
@@ -2047,23 +2054,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             clipBehavior: Clip.antiAlias,
             child: Stack(
               children: [
-                Positioned.fill(
-                  child: Image.asset(
-                    'assets/ui/home_hero.jpg',
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                const Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Color(0x220B1626), Color(0xCC0B1626)],
-                      ),
-                    ),
-                  ),
-                ),
+                const Positioned.fill(child: CustomPaint(painter: OrbitPainter())),
                 Positioned(
                   left: 20,
                   top: 22,
@@ -2168,82 +2159,34 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          AspectRatio(
-            aspectRatio: 2,
-            child: Material(
-              color: const Color(0xFF0B1626),
-              borderRadius: BorderRadius.circular(18),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: _openLiveSky,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image.asset(
-                      'assets/ui/live_entry.jpg',
-                      fit: BoxFit.cover,
-                    ),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                          colors: [Color(0xE60B1626), Color(0x330B1626)],
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 12, 14, 12),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  t('实时星图'),
-                                  style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 5),
-                                Text(
-                                  t('举起手机，认星座、找月亮。'),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11.5,
-                                    color: Color(0xFFD8E2F0),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.all(9),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.35),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: kMint.withValues(alpha: 0.45),
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.explore_outlined,
-                              color: kMint,
-                              size: 22,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+          Row(
+            children: [
+              Expanded(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: _FeatureCard(
+                    image: 'assets/ui/live_entry.jpg',
+                    title: t('实时星图'),
+                    subtitle: t('举起手机认星座'),
+                    icon: Icons.explore_outlined,
+                    onTap: _openLiveSky,
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: _FeatureCard(
+                    image: 'assets/ui/home_hero.jpg',
+                    title: t('我的星空足迹'),
+                    subtitle: t('亮星 · 星云 · 取景框'),
+                    icon: Icons.public,
+                    onTap: _openSkyAtlas,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       );
@@ -5997,3 +5940,86 @@ bool _isRawName(String filename) => const {
 
 bool _isSafeObservationId(String id) =>
     RegExp(r'^\d{8}-\d{6}-\d{3}(?:-\d+)?$').hasMatch(id);
+
+/// 首页下方的方形入口：实时星图 / 我的星空足迹。
+class _FeatureCard extends StatelessWidget {
+  const _FeatureCard({
+    required this.image,
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String image;
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: const Color(0xFF0B1626),
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(image, fit: BoxFit.cover),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0x220B1626), Color(0xE60B1626)],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.38),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: kMint.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      child: Icon(icon, color: kMint, size: 17),
+                    ),
+                    const Spacer(),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        height: 1.3,
+                        color: Color(0xFFD8E2F0),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
