@@ -84,7 +84,7 @@ class _SkyAtlasScreenState extends State<SkyAtlasScreen> {
         backgroundColor: const Color(0xFF050A12),
         appBar: AppBar(
           backgroundColor: const Color(0xFF050A12),
-          title: Text(t('我的星空足迹')),
+          title: Text(t('星空足迹')),
           actions: [
             IconButton(
               tooltip: t('天体列表'),
@@ -300,30 +300,44 @@ class _AtlasPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    final scale = math.min(size.width / 4.6, size.height / 2.5);
+    const padding = 7.0;
+    final width = size.width - padding * 2;
+    final height = size.height - padding * 2;
     Offset project(double ra, double dec) {
-      final lon = (ra - 180) * math.pi / 180;
-      final lat = dec * math.pi / 180;
-      final denominator =
-          math.sqrt(1 + math.cos(lat) * math.cos(lon / 2));
-      final x = 2 * math.sqrt2 * math.cos(lat) * math.sin(lon / 2) / denominator;
-      final y = math.sqrt2 * math.sin(lat) / denominator;
-      return center + Offset(x * scale, -y * scale);
+      final wrapped = ((ra % 360) + 360) % 360;
+      final x = padding + wrapped / 360 * width;
+      final y = padding + (90 - dec) / 180 * height;
+      return Offset(x, y);
     }
 
-    // 天球外轮廓。
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: center,
-        width: 4 * math.sqrt2 * scale,
-        height: 2 * math.sqrt2 * scale,
-      ),
+    // 全天球铺满整块，不再缩成一个圆球。
+    final frame = RRect.fromRectAndRadius(
+      Rect.fromLTWH(padding, padding, width, height),
+      const Radius.circular(4),
+    );
+    canvas.drawRRect(
+      frame,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
         ..color = const Color(0xFF1E3450),
     );
+
+    // 赤经/赤纬网格。
+    final grid = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7
+      ..color = const Color(0x33496A8C);
+    for (var ra = 0; ra <= 360; ra += 30) {
+      final top = project(ra.toDouble(), 90);
+      final bottom = project(ra.toDouble(), -90);
+      canvas.drawLine(top, bottom, grid);
+    }
+    for (var dec = -60; dec <= 60; dec += 30) {
+      final left = project(0, dec.toDouble());
+      final right = project(360, dec.toDouble());
+      canvas.drawLine(left, right, grid);
+    }
 
     // 银道带用一条淡色曲线示意。
     final galactic = Path();
@@ -340,7 +354,7 @@ class _AtlasPainter extends CustomPainter {
       galactic,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 6
+        ..strokeWidth = 10
         ..color = const Color(0x2235D6FF),
     );
 

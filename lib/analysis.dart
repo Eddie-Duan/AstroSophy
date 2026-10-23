@@ -168,6 +168,56 @@ class SkyAnalysis {
 
   bool get isSunShot => sunDisc != null;
 
+  /// 如果拉长候选的方向高度一致，把这些统一方向的拖线从解算输入里剔除。
+  ///
+  /// 长曝光星场的拖线方向由天球旋转决定，所有星点几乎平行；飞机/卫星/风刮
+  /// 的条带则方向杂乱。只有“方向高度一致且数量足够”时才剔除，避免把双星、
+  /// 边缘星点误删。
+  SkyAnalysis withoutUniformTrails() {
+    final trails = [
+      for (final star in stars)
+        if (!star.isRejected && star.isElongated) star,
+    ];
+    if (trails.length < 4) return this;
+    var sinSum = 0.0;
+    var cosSum = 0.0;
+    for (final trail in trails) {
+      sinSum += math.sin(trail.orientation * 2);
+      cosSum += math.cos(trail.orientation * 2);
+    }
+    final coherence =
+        math.sqrt(sinSum * sinSum + cosSum * cosSum) / trails.length;
+    if (coherence < 0.85) return this;
+    return SkyAnalysis(
+      width: width,
+      height: height,
+      stars: [
+        for (final star in stars)
+          if (!star.isElongated) star,
+      ],
+      quality: quality,
+      background: background,
+      noise: noise,
+      backgroundIndex: backgroundIndex,
+      saturatedFraction: saturatedFraction,
+      diagnostics: diagnostics,
+      preview: preview,
+      processedPreview: processedPreview,
+      fwhm: fwhm,
+      nonStarFraction: nonStarFraction,
+      maskRegions: maskRegions,
+      isLikelyStarfield: isLikelyStarfield,
+      starfieldConfidence: starfieldConfidence,
+      brightFlatFraction: brightFlatFraction,
+      solverExtras: [
+        for (final star in solverExtras)
+          if (!star.isElongated) star,
+      ],
+      moonDisc: moonDisc,
+      sunDisc: sunDisc,
+    );
+  }
+
   /// 参与星表匹配和测光的紧凑点源（排除拉长候选和用户剔除项）。
   List<DetectedStar> get compactSources => stars
       .where((star) => !star.isElongated && !star.isRejected)

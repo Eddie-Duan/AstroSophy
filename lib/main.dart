@@ -1770,9 +1770,14 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   /// 它和「选图解析」是两条独立的入口：实时模式不读相册、不保存照片，也不
   /// 上传任何东西；相机只是取景器，星表和解算都在本机。
   Future<void> _openLiveSky() async {
+    final worker = await _ensureWorker();
+    if (!mounted) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => LiveSkyScreen(loadModelSettings: _readModelSettings),
+        builder: (_) => LiveSkyScreen(
+          worker: worker,
+          loadModelSettings: _readModelSettings,
+        ),
       ),
     );
   }
@@ -2179,7 +2184,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   aspectRatio: 1,
                   child: _FeatureCard(
                     image: 'assets/ui/home_hero.jpg',
-                    title: t('我的星空足迹'),
+                    title: t('星空足迹'),
                     subtitle: t('亮星 · 星云 · 取景框'),
                     icon: Icons.public,
                     onTap: _openSkyAtlas,
@@ -5941,7 +5946,7 @@ bool _isRawName(String filename) => const {
 bool _isSafeObservationId(String id) =>
     RegExp(r'^\d{8}-\d{6}-\d{3}(?:-\d+)?$').hasMatch(id);
 
-/// 首页下方的方形入口：实时星图 / 我的星空足迹。
+/// 首页下方的方形入口：实时星图 / 星空足迹。
 class _FeatureCard extends StatelessWidget {
   const _FeatureCard({
     required this.image,

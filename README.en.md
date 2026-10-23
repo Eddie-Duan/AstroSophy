@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/brand/astrosophy_social_preview.png" alt="AstroSophy: give it a phone photo of the night sky and it works out what you captured" width="100%">
+<img src="assets/brand/astrosophy_social_preview.png" alt="AstroSophy: Snap the sky. Read the stars." width="100%">
 
 # AstroSophy
 

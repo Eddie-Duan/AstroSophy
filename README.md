@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/brand/astrosophy_social_preview.png" alt="AstroSophy：把手机拍的星空照片交给它，本机算出你拍到了哪片天" width="100%">
+<img src="assets/brand/astrosophy_social_preview.png" alt="AstroSophy：随手拍星，星象自明" width="100%">
 
 # AstroSophy
 

@@ -13,9 +13,13 @@ import 'live_nox.dart';
 import 'live_sky.dart';
 import 'live_star_tracker.dart';
 import 'model.dart';
+import 'analysis.dart';
+import 'camera_pro.dart';
 import 'models.dart';
 import 'moon.dart';
 import 'nox.dart';
+import 'pipeline.dart';
+import 'solver.dart';
 import 'strings.dart';
 import 'theme.dart';
 
@@ -25,12 +29,20 @@ import 'theme.dart';
 /// 看见真实的天空；方向来自加速度计和磁力计，位置来自 GPS，时间来自系统时钟。
 /// 因此它不需要联网、不需要上传照片，也不会把相机帧送去做识别。
 class LiveSkyScreen extends StatefulWidget {
-  const LiveSkyScreen({super.key, this.storage, this.loadModelSettings});
+  const LiveSkyScreen({
+    super.key,
+    this.storage,
+    this.loadModelSettings,
+    this.worker,
+  });
 
   final FlutterSecureStorage? storage;
 
   /// Nox 的自由输入回退到模型时，用来读取本机 API 设置。
   final Future<ModelSettings> Function()? loadModelSettings;
+
+  /// 拍照解析复用的后台星表/解算 isolate。
+  final SkyWorker? worker;
 
   @override
   State<LiveSkyScreen> createState() => _LiveSkyScreenState();
@@ -60,6 +72,10 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
   bool _showBelowHorizon = false;
   bool _redMode = false;
   bool _cameraOn = true;
+  double _exposureSeconds = 0.5;
+  int _iso = 800;
+  bool _captureBusy = false;
+  Timer? _captureTimer;
 
   static const _fallbackSurveyBasis = LiveCameraBasis(
     forward: LiveVec3.north,
@@ -182,6 +198,7 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
 
   @override
   void dispose() {
+    _captureTimer?.cancel();
     unawaited(_noxVoice?.stop() ?? Future<void>.value());
     _ticker?.cancel();
     _solarTimer?.cancel();
@@ -1348,6 +1365,282 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
     }
   }
 
+  Future<void> _openProCapture() async {
+    CameraProCapabilities caps;
+    try {
+      caps = await CameraProService.capabilities();
+    } on Exception {
+      caps = CameraProCapabilities.unsupported;
+    }
+    if (!mounted) return;
+    if (!caps.supported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('这台设备的相机不支持手动曝光/ISO。'))),
+      );
+      return;
+    }
+    final minExposure =
+        (caps.exposureMinNs / 1e9).clamp(0.0001, 10.0).toDouble();
+    final maxExposure =
+        (caps.exposureMaxNs / 1e9).clamp(minExposure, 10.0).toDouble();
+    var exposure = _exposureSeconds.clamp(minExposure, maxExposure).toDouble();
+    var iso = _iso.clamp(caps.isoMin, caps.isoMax);
+    var autoSeconds = 0;
+    final shoot = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: kPanel,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  t('专业拍照解析'),
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  t('全分辨率 JPEG · {0}×{1}', [caps.width, caps.height]),
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF8192A8)),
+                ),
+                const SizedBox(height: 14),
+                Text(t('曝光：{0} 秒', [exposure.toStringAsFixed(2)])),
+                Slider(
+                  value: exposure,
+                  min: minExposure,
+                  max: maxExposure,
+                  onChanged: (value) => setSheetState(() => exposure = value),
+                ),
+                Text(t('ISO：{0}', [iso])),
+                Slider(
+                  value: iso.toDouble(),
+                  min: caps.isoMin.toDouble(),
+                  max: caps.isoMax.toDouble(),
+                  divisions: math.max(
+                    1,
+                    (caps.isoMax - caps.isoMin).clamp(1, 100),
+                  ),
+                  onChanged: (value) =>
+                      setSheetState(() => iso = value.round()),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  t('长曝光请把手机放稳；广角 1 秒的星点轨迹通常不到 1 像素。'),
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    height: 1.4,
+                    color: Color(0xFF8192A8),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(t('增强解算')),
+                  subtitle: Text(
+                    t('定时拍摄全分辨率照片并解算；会比连续预览看到更多星点。'),
+                    style: const TextStyle(fontSize: 10.5),
+                  ),
+                  value: autoSeconds > 0,
+                  onChanged: (value) =>
+                      setSheetState(() => autoSeconds = value ? 5 : 0),
+                ),
+                if (autoSeconds > 0)
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final seconds in const [5, 10])
+                        ChoiceChip(
+                          label: Text(t('{0} 秒', [seconds])),
+                          selected: autoSeconds == seconds,
+                          onSelected: (_) =>
+                              setSheetState(() => autoSeconds = seconds),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () => Navigator.pop(context, true),
+                    icon: const Icon(Icons.camera_alt),
+                    label: Text(t('拍照并解析')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (shoot != true || !mounted) return;
+    _exposureSeconds = exposure;
+    _iso = iso;
+    if (autoSeconds > 0) {
+      await _captureAndSolve(exposure, iso);
+    } else {
+      await _runSingleCapture(exposure, iso);
+    }
+    if (!mounted) return;
+    _captureTimer?.cancel();
+    if (autoSeconds > 0) {
+      _captureTimer = Timer.periodic(
+        Duration(seconds: autoSeconds),
+        (_) {
+          if (!_captureBusy) {
+            unawaited(_captureAndSolve(exposure, iso));
+          }
+        },
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('增强解算已开：每 {0} 秒一张。', [autoSeconds]))),
+      );
+    }
+  }
+
+  Future<void> _captureAndSolve(
+    double exposureSeconds,
+    int iso, {
+    ValueNotifier<_CaptureState>? state,
+  }) async {
+    final worker = widget.worker;
+    if (worker == null) {
+      state?.value = const _CaptureState(
+        stage: '后台解算器尚未就绪。',
+        fraction: 0,
+        error: '后台解算器尚未就绪。',
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('后台解算器尚未就绪。'))),
+      );
+      return;
+    }
+    setState(() => _captureBusy = true);
+    state?.value = const _CaptureState(stage: '正在释放预览相机…', fraction: 0.08);
+    final oldCamera = _camera;
+    try {
+      if (_streaming) {
+        try {
+          await oldCamera?.stopImageStream();
+        } on CameraException {
+          // ignore
+        }
+        _streaming = false;
+      }
+      await oldCamera?.dispose();
+      if (mounted) setState(() => _camera = null);
+      // Camera2 会话需要相机完全释放，给系统一点时间。
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      state?.value = const _CaptureState(stage: '正在拍摄全分辨率照片…', fraction: 0.22);
+      final bytes = await CameraProService.capture(
+        exposureSeconds: exposureSeconds,
+        iso: iso,
+      );
+      state?.value = const _CaptureState(stage: '正在检测星点…', fraction: 0.42);
+      final analysis = (await worker.analyze(
+        bytes,
+        detectMoon: true,
+        profile: StarDetectionProfile.wide,
+      ))
+          .withoutUniformTrails();
+      state?.value = const _CaptureState(stage: '正在解算天区…', fraction: 0.66);
+      final (solve, _) = await worker.solveLocal(
+        analysis,
+        hint: const SolveHint(
+          maxFieldDegrees: 120,
+          budgetMilliseconds: 20000,
+          patchSolve: true,
+        ),
+      );
+      if (!mounted) return;
+      final result = _CaptureState(
+        stage: solve == null ? '没有解出天区' : '解算完成',
+        fraction: 1,
+        solve: solve,
+        starCount: analysis.stars.length,
+        done: true,
+      );
+      state?.value = result;
+      if (state == null) {
+        if (solve == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(t('照片拍到了，但没能解出天区。星点 {0} 颗。',
+                  [analysis.stars.length])),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(t('增强解算完成：RA {0}°，匹配 {1} 颗。', [
+                solve.centerRa.toStringAsFixed(2),
+                solve.matchedCount,
+              ])),
+            ),
+          );
+        }
+      }
+    } on Exception catch (error) {
+      state?.value = _CaptureState(
+        stage: '拍照解析失败',
+        fraction: 0,
+        error: '$error',
+      );
+      if (mounted && state == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t('拍照解析失败：{0}', [error]))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _captureBusy = false);
+        if (state != null) {
+          final current = state.value;
+          if (!current.done && current.error == null) {
+            state.value = _CaptureState(
+              stage: '正在恢复预览…',
+              fraction: current.fraction,
+            );
+          }
+        }
+        await _initCamera();
+        if (mounted && _solveMode) await _restartTracking();
+        if (state != null) {
+          final current = state.value;
+          if (!current.done && current.error == null) {
+            state.value = const _CaptureState(
+              stage: '预览已恢复',
+              fraction: 1,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  Future<void> _runSingleCapture(double exposureSeconds, int iso) async {
+    final state = ValueNotifier<_CaptureState>(
+      const _CaptureState(stage: '准备拍照…', fraction: 0.02),
+    );
+    if (!mounted) return;
+    unawaited(
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: kPanel,
+        builder: (_) => _CaptureSheet(state: state),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _captureAndSolve(exposureSeconds, iso, state: state);
+  }
+
   Future<void> _openLayersSheet() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -2293,6 +2586,19 @@ class _LiveSkyScreenState extends State<LiveSkyScreen> {
                 children: [
                   if (_solveMode) ...[
                     _roundButton(
+                      icon: _captureBusy
+                          ? Icons.hourglass_top
+                          : Icons.camera_alt_outlined,
+                      color: const Color(0xFFFFD166),
+                      tooltip: _captureBusy ? t('正在拍照解析…') : t('专业拍照解析'),
+                      onTap: _captureBusy
+                          ? () {}
+                          : () {
+                              unawaited(_openProCapture());
+                            },
+                    ),
+                    const SizedBox(width: 10),
+                    _roundButton(
                       icon: _redMode ? Icons.circle : Icons.circle_outlined,
                       color: const Color(0xFFFF5A5A),
                       tooltip: _redMode ? t('关闭红光模式') : t('红光模式'),
@@ -3049,3 +3355,110 @@ class LiveSkyPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant LiveSkyPainter oldDelegate) => true;
 }
+
+class _CaptureState {
+  const _CaptureState({
+    required this.stage,
+    required this.fraction,
+    this.solve,
+    this.starCount = 0,
+    this.error,
+    this.done = false,
+  });
+
+  final String stage;
+  final double fraction;
+  final SolveResult? solve;
+  final int starCount;
+  final String? error;
+  final bool done;
+}
+
+class _CaptureSheet extends StatelessWidget {
+  const _CaptureSheet({required this.state});
+
+  final ValueNotifier<_CaptureState> state;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: ValueListenableBuilder<_CaptureState>(
+          valueListenable: state,
+          builder: (context, value, _) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.auto_awesome, color: kMint, size: 19),
+                    const SizedBox(width: 7),
+                    Text(
+                      t('增强解算'),
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (!value.done && value.error == null) ...[
+                  LinearProgressIndicator(
+                    value: value.fraction.clamp(0.0, 1.0),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Text(
+                  value.error ?? value.stage,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: value.error == null
+                        ? const Color(0xFFD8E2F0)
+                        : const Color(0xFFFF8A8A),
+                  ),
+                ),
+                if (value.solve != null) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    t('中心 RA {0}°，Dec {1}°', [
+                      value.solve!.centerRa.toStringAsFixed(3),
+                      value.solve!.centerDec.toStringAsFixed(3),
+                    ]),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    t('视场 {0}° · 匹配 {1} 颗 · 检出 {2} 颗', [
+                      value.solve!.fieldOfViewDegrees.toStringAsFixed(2),
+                      value.solve!.matchedCount,
+                      value.starCount,
+                    ]),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFFA6B5C8),
+                    ),
+                  ),
+                ] else if (value.done && value.error == null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    t('没有解出天区，检出 {0} 颗星。', [value.starCount]),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(t('关闭')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
