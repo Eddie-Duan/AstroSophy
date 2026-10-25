@@ -4,7 +4,7 @@
 
 # AstroSophy
 
-**Give it a photo of the night sky. It works out which part of the sky you captured — on the device.**
+**Snap the sky. Read the stars.**
 
 [中文](./README.md) · [English](./README.en.md)
 

@@ -4,7 +4,7 @@
 
 # AstroSophy
 
-**把手机拍的星空照片交给它，本机算出你拍到了哪片天。**
+**随手拍星，星象自明**
 
 [中文](./README.md) · [English](./README.en.md)
 
