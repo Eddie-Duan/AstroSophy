@@ -544,15 +544,39 @@ class SkyAnalysis {
         .toList(growable: false);
 
     final maskRegions = [...classified.regions, ...excludedRegions];
+    // 落在屋脊、栏杆、文字、灯光掩膜里的“星点”不是天体；它们只是建筑纹理
+    // 和灯珠。展示、计数和解算都不应该再看到它们。
+    bool inMask(DetectedStar star) => maskRegions.any(
+          (region) =>
+              star.x >= region.x &&
+              star.x <= region.x + region.width &&
+              star.y >= region.y &&
+              star.y <= region.y + region.height,
+        );
+    final visibleStars =
+        stars.where((star) => !inMask(star)).toList(growable: false);
+    final visibleExtras =
+        solverExtras.where((star) => !inMask(star)).toList(growable: false);
     final brightFlatFraction = _brightFlatFraction(gray, width, height);
     final starfield = _judgeStarfield(
-      stars: stars,
+      stars: visibleStars,
       maskRegions: maskRegions,
       brightFlatFraction: brightFlatFraction,
       width: width,
       height: height,
     );
-    final fwhm = _estimateFwhm(stars);
+    // 掩膜已经占了大半画面、而且整体也不像星空：剩下那些点状纹理不值得
+    // 当作星点展示，更不该进入解算。
+    var finalStars = visibleStars;
+    var finalExtras = visibleExtras;
+    if (!starfield.isStarfield &&
+        maskRegions.fold<double>(0, (sum, region) => sum + region.area) /
+                (width * height) >
+            0.6) {
+      finalStars = const [];
+      finalExtras = const [];
+    }
+    final fwhm = _estimateFwhm(finalStars);
 
     // 被文字抑制掉的点也要从画面里抹掉，否则处理图上会留下文字残影。
     final mask = Uint8List(width * height);
@@ -572,7 +596,7 @@ class SkyAnalysis {
     }
 
     final diagnostics = _buildDiagnostics(
-      stars: stars,
+      stars: finalStars,
       regions: maskRegions,
       starfield: starfield,
       background: grid.globalBackground,
@@ -591,9 +615,9 @@ class SkyAnalysis {
     return SkyAnalysis(
       width: width,
       height: height,
-      stars: stars,
+      stars: finalStars,
       quality: _qualityLabel(
-        stars: stars,
+        stars: finalStars,
         noise: grid.globalNoise,
         saturatedFraction: saturatedFraction,
         starfieldConfidence: starfield.confidence,
@@ -611,7 +635,7 @@ class SkyAnalysis {
       isLikelyStarfield: starfield.isStarfield,
       starfieldConfidence: starfield.confidence,
       brightFlatFraction: brightFlatFraction,
-      solverExtras: solverExtras,
+      solverExtras: finalExtras,
     );
   }
 }
@@ -2080,8 +2104,14 @@ _StarfieldVerdict _judgeStarfield({
     score += 0.25;
   } else if (maskedFraction < 0.2) {
     score += 0.1;
+  } else if (maskedFraction > 0.65) {
+    // 屋脊、栏杆、城市灯光占了大半画面：即使剩下一些点状亮点，也不能
+    // 靠“亮点很多”翻回星空结论。
+    score -= 0.55;
+  } else if (maskedFraction > 0.4) {
+    score -= 0.35;
   } else {
-    score -= 0.25;
+    score -= 0.2;
   }
   // 大片**明亮**的平坦区域是截图/文档的典型特征（夜空也会平坦，但它是暗的）。
   if (brightFlatFraction < 0.15) {

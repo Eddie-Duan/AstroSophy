@@ -131,6 +131,8 @@ MoonDisc? measureMoonDisc({
   if (coarseLevel <= 0) return null;
   final disc = _fitDisc(gray, width, height, coarseLevel, frameArea);
   if (disc == null) return null;
+  // 半径 12 像素的圆斑和一盏路灯没有区别；真月亮在小预览里也至少有十几像素。
+  if (disc.radius < 14) return null;
 
   // 第二遍：用圆外的天空估出背景与噪声，把阈值定在「刚好看得出比天空亮」，
   // 再数一遍圆里有多少像素在它之上——这一遍定的是**亮面占比**。
