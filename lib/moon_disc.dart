@@ -64,7 +64,7 @@ double _asDouble(Object? value) => value is num ? value.toDouble() : 0;
 /// 量得出月面的最低门槛：亮面至少占画面这么多。
 ///
 /// 低于它的多半是路灯、窗玻璃、被照亮的墙面——一个亮团，但不是月亮。
-const double _minimumLitFraction = 0.0015;
+const double _minimumLitFraction = 0.0008;
 
 /// 月面外缘至少要在最小外接圆的圆周上盖住这么多角度。
 ///
@@ -143,17 +143,6 @@ MoonDisc? measureMoonDisc({
   if (level <= 0) return null;
   final lit = _litPixelsInside(gray, width, height, disc, level);
 
-  // 小亮斑的额外一道门：小月亮和小路灯的面积可以一样大，但**小月亮几乎不可能
-  // 是满圆**——满圆的小亮斑更可能是路灯、窗反光或失焦的光点。大亮斑不走这条，
-  // 因为满月占画面够大时本来就是满圆。
-  final litFraction = lit / frameArea;
-  final discArea = math.pi * disc.radius * disc.radius;
-  if (litFraction < _minimumLitFraction * 3 &&
-      discArea > 0 &&
-      lit / discArea > 0.92) {
-    return null;
-  }
-
   return MoonDisc(
     centerX: disc.x,
     centerY: disc.y,
@@ -205,26 +194,74 @@ _Circle? _fitDisc(
   }
   if (lit < frameArea * _minimumLitFraction) return null;
 
-  final largest = _largestRegion(mask, width, height);
-  if (largest.length < frameArea * _minimumLitFraction) return null;
+  final regions = _regions(mask, width, height)
+    ..sort((a, b) => b.length.compareTo(a.length));
+  _Circle? best;
+  var bestScore = 0.0;
+  for (final largest in regions.take(24)) {
+    if (largest.length < frameArea * _minimumLitFraction) continue;
 
-  // 月牙的两个尖角比一个像素还细，栅格化之后会断成孤立的小块。只取最大的那
-  // 一块，等于把钉住圆心的两个尖角扔掉了：实测 k=0.15 时圆心会偏出 13 像素，
-  // 画出来的圈就落在月亮旁边。所以把最大块外扩一圈，连同这些碎块一起收进来
-  // （外扩的那点范围里若有孤立的星点，面积小到可以忽略）。
-  final region = _regionWithin(largest, mask, width, height, _regionMargin);
-  if (region.length < frameArea * _minimumLitFraction) return null;
+    // 月牙的两个尖角比一个像素还细，栅格化之后会断成孤立的小块。只取最大那
+    // 一块，等于把钉住圆心的两个尖角扔掉了：实测 k=0.15 时圆心会偏出 13 像素，
+    // 画出来的圈就落在月亮旁边。所以把候选块外扩一圈，连同这些碎块一起收进来
+    // （外扩的那点范围里若有孤立的星点，面积小到可以忽略）。
+    final region = _regionWithin(largest, mask, width, height, _regionMargin);
+    if (region.length < frameArea * _minimumLitFraction) continue;
 
-  final boundary = _boundaryOf(mask, width, height, region);
-  final hull = _convexHull(boundary);
-  if (hull.length < 3) return null;
+    final boundary = _boundaryOf(mask, width, height, region);
+    final hull = _convexHull(boundary);
+    if (hull.length < 3) continue;
 
-  final disc = _minEnclosingCircle(hull);
-  if (disc.radius <= 0) return null;
+    final disc = _minEnclosingCircle(hull);
+    if (disc.radius <= 0) continue;
 
-  if (_arcCoverage(boundary, disc) < _minimumArcCoverage) return null;
+    final arc = _arcCoverage(boundary, disc);
+    if (arc < _minimumArcCoverage) continue;
+    final fill = largest.length / (math.pi * disc.radius * disc.radius);
+    if (fill < 0.12 || fill > 1.25) continue;
+    // 圆形亮面优先；细长的栏杆灯带、连成一片的桥灯会被圆弧覆盖率和填充率压下去。
+    final score = arc * 0.7 + fill.clamp(0.0, 1.0) * 0.3;
+    if (score > bestScore) {
+      bestScore = score;
+      best = disc;
+    }
+  }
+  return best;
+}
 
-  return disc;
+/// 所有 8 邻域连通块。
+List<List<int>> _regions(Uint8List mask, int width, int height) {
+  final visited = Uint8List(mask.length);
+  final stack = <int>[];
+  final regions = <List<int>>[];
+  for (var start = 0; start < mask.length; start++) {
+    if (mask[start] == 0 || visited[start] == 1) continue;
+    final region = <int>[];
+    stack
+      ..clear()
+      ..add(start);
+    visited[start] = 1;
+    while (stack.isNotEmpty) {
+      final index = stack.removeLast();
+      region.add(index);
+      final x = index % width;
+      final y = index ~/ width;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0) continue;
+          final nx = x + dx;
+          final ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          final next = ny * width + nx;
+          if (mask[next] == 0 || visited[next] == 1) continue;
+          visited[next] = 1;
+          stack.add(next);
+        }
+      }
+    }
+    regions.add(region);
+  }
+  return regions;
 }
 
 /// 粗阈值取「背景与峰值的中点」。只用来圈个大概，精度无所谓。
@@ -356,40 +393,6 @@ double _litLevel(Uint8List gray, int width, int height, _Circle disc) {
   final margin = math.max(_sigmaAboveSky * sky.sigma, floor);
   if (margin <= 0) return 0;
   return sky.mean + margin;
-}
-
-/// 最大的一块连通区域（8 邻域）的像素下标。
-List<int> _largestRegion(Uint8List mask, int width, int height) {  final visited = Uint8List(mask.length);
-  final stack = <int>[];
-  var best = <int>[];
-  for (var start = 0; start < mask.length; start++) {
-    if (mask[start] == 0 || visited[start] == 1) continue;
-    final region = <int>[];
-    stack
-      ..clear()
-      ..add(start);
-    visited[start] = 1;
-    while (stack.isNotEmpty) {
-      final index = stack.removeLast();
-      region.add(index);
-      final x = index % width;
-      final y = index ~/ width;
-      for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-          if (dx == 0 && dy == 0) continue;
-          final nx = x + dx;
-          final ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          final next = ny * width + nx;
-          if (mask[next] == 0 || visited[next] == 1) continue;
-          visited[next] = 1;
-          stack.add(next);
-        }
-      }
-    }
-    if (region.length > best.length) best = region;
-  }
-  return best;
 }
 
 /// 最大块往外扩多少像素去找那些碎块。
