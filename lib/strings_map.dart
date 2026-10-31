@@ -255,6 +255,7 @@ const Map<String, Map<String, String>> kLocalizedStrings = {
     '只找月亮，随即报告。': 'Moon only; report right away.',
     '只报月亮 · 亮面 {0}%': 'Moon only · {0}% lit',
     '只显示地平线以上': 'Above the horizon only',
+    '只检出 {0} 颗较可靠的星点；广域解算通常需要更多星点，建议增加曝光、避开地景，或使用在线解算。': 'Only {0} reliable stars found; wide-field solving usually needs more. Increase exposure, avoid foreground, or use online solving.',
     '只记录拉长的星点轨迹。': 'Record elongated star trails only.',
     '可以试试：状态、红光、银河、星座、星名、地平线、找木星、取消目标。': 'Try: status, red light, Milky Way, constellations, labels, horizon, find Jupiter, clear target.',
     '可打开的页面只有 history 和 settings。': 'The only pages that can be opened are history and settings.',

@@ -2191,6 +2191,11 @@ List<String> _buildDiagnostics({
   }
   if (compact.length < 8) {
     diagnostics.add(t('检出的紧凑亮点较少；可能曝光不足、虚焦或云雾遮挡。'));
+  } else if (compact.length < 40 && starfield.isStarfield) {
+    diagnostics.add(
+      t('只检出 {0} 颗较可靠的星点；广域解算通常需要更多星点，建议增加曝光、避开地景，或使用在线解算。',
+          [compact.length]),
+    );
   }
   if (noise > 0.06) diagnostics.add(t('背景噪声偏高，弱星检测和相对亮度测量可靠性下降。'));
   if (saturatedFraction > 0.01) diagnostics.add(t('部分像素接近饱和，亮星核心的亮度信息可能丢失。'));

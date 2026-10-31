@@ -2,6 +2,13 @@
 
 版本号取自 [`pubspec.yaml`](./pubspec.yaml) 的 `version`，对应的 Git 标签是 `v<版本名>`。推送标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建 release APK 并发布到 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases)。
 
+## [0.5.4] - 2026-10-31
+
+### 变更
+
+- 稀疏星野会明确提示“只检出 N 颗较可靠的星点”，并建议增加曝光、避开地景或使用在线解算，而不是只给一个笼统的失败结论。
+- 手机广域星空样片实测：地平线以上只有约 25 颗可靠星点，星表匹配最多 4 个内点；这种星点密度不足以可靠本机定位。
+
 ## [0.5.3] - 2026-10-23
 
 ### 新增
