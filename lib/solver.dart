@@ -47,6 +47,13 @@ class SolveTrace {
   int bestInliers = 0;
   int bestRequired = 0;
 
+  /// 差一点够着门槛、最像真实天区的那条候选。
+  ///
+  /// 只在整幅都解不出来、而且它确实比「纯巧合」像得多的时候才有值。
+  /// 不是解算结果——[PlateSolver.solve] 依然返回 null，报告里据此说明
+  /// 「差在哪、是不是还值得交给在线服务」，而不是只留一句「没找到」。
+  SolveCandidate? weakCandidate;
+
   /// 开一层，返回的记录由调用方在跑那一层时更新。
   SolveLayerAttempt startLayer(String label, int starCount) {
     final layer = SolveLayerAttempt(label: label, starCount: starCount);
@@ -94,6 +101,43 @@ class SolveLayerAttempt {
   int bestInliers = 0;
 }
 
+/// 一条「差一点」的候选：整幅没解出来时，最像真实天区的那组对应关系。
+///
+/// 它**不是**解算结果。给出的中心坐标来自那组对应关系拟合出的相似变换，
+/// 门槛没够着之前没有任何东西保证它对——所以这里必须带上两个数：
+/// 差几颗、以及「这种程度的巧合在随机噪声里出现」的概率。报告要把两个数
+/// 都写出来，让用户自己判断是重拍一张还是交给在线服务，而不是替他猜。
+class SolveCandidate {
+  const SolveCandidate({
+    required this.centerRa,
+    required this.centerDec,
+    required this.arcsecPerPixel,
+    required this.inliers,
+    required this.required,
+    required this.falseAcceptProbability,
+  });
+
+  /// 拟合出的天区中心（度）。
+  final double centerRa;
+  final double centerDec;
+
+  /// 像素尺度（角秒/像素）。
+  final double arcsecPerPixel;
+
+  /// 对上的内点数和当时要求的下限。
+  final int inliers;
+  final int required;
+
+  /// 这条候选是假解的概率（0–1），按这张图自己的星点密度算出来。
+  ///
+  /// 0.3 说的是「随机摆一组三角形也有三成机会凑出这么多内点」；1e-4
+  /// 说的是「这么巧的事在纯噪声里几乎不会发生」。只有后者才值得让用户
+  /// 拿去参考。
+  final double falseAcceptProbability;
+
+  bool get isSuggestive => falseAcceptProbability < 0.02;
+}
+
 /// 三层星表索引在本进程里的预处理状态。
 class CatalogCacheStatus {
   const CatalogCacheStatus({
@@ -125,6 +169,7 @@ class SolveHint {
     this.patchSolve = false,
     this.skipShallow = false,
     this.patchGrid = 2,
+    this.brightLayers,
   });
 
   /// 视场对角线下限（度）。
@@ -159,6 +204,13 @@ class SolveHint {
   /// 分块解算的网格数：2 就是 2×2，3 就是 3×3。
   final int patchGrid;
 
+  /// 是否先试「亮星层」（短曝光手机星野，见 [_brightMagnitudeLimits]）。
+  ///
+  /// true = 一定先试；false = 不试；null = 由解算器按检出数量自己判断
+  /// （700 颗以内才试）。显式给 true/false，是为了让「广域 / 星野」这两个
+  /// 场景吃到这条优化，而深空、长焦这些场景一个字节的行为都不变。
+  final bool? brightLayers;
+
   SolveHint copyWith({
     double? minFieldDegrees,
     double? maxFieldDegrees,
@@ -167,6 +219,7 @@ class SolveHint {
     bool? patchSolve,
     bool? skipShallow,
     int? patchGrid,
+    bool? brightLayers,
   }) =>
       SolveHint(
         minFieldDegrees: minFieldDegrees ?? this.minFieldDegrees,
@@ -176,6 +229,7 @@ class SolveHint {
         patchSolve: patchSolve ?? this.patchSolve,
         skipShallow: skipShallow ?? this.skipShallow,
         patchGrid: patchGrid ?? this.patchGrid,
+        brightLayers: brightLayers ?? this.brightLayers,
       );
 }
 
@@ -229,6 +283,8 @@ enum ShootingScene {
             allowDeep: false,
             budgetMilliseconds: 15000,
             patchSolve: true,
+            // 手机短曝光星野也走亮星层：这正是它要解决的场景。
+            brightLayers: true,
           ),
         ShootingScene.wide => const SolveHint(
             minFieldDegrees: 8,
@@ -237,11 +293,14 @@ enum ShootingScene {
             budgetMilliseconds: 15000,
             patchSolve: true,
             patchGrid: 3,
+            // 广域/超广角正是短曝光+亮星最典型的场景，先试亮星层。
+            brightLayers: true,
           ),
         ShootingScene.deepSky => const SolveHint(
             minFieldDegrees: 2,
             maxFieldDegrees: 15,
             budgetMilliseconds: 15000,
+            brightLayers: false,
           ),
         ShootingScene.narrow => const SolveHint(
             minFieldDegrees: 0.5,
@@ -249,10 +308,11 @@ enum ShootingScene {
             budgetMilliseconds: 20000,
             patchSolve: true,
             skipShallow: true,
+            brightLayers: false,
           ),
-        ShootingScene.starTrails => const SolveHint(),
-        ShootingScene.moon => const SolveHint(),
-        ShootingScene.sun => const SolveHint(),
+        ShootingScene.starTrails => const SolveHint(brightLayers: false),
+        ShootingScene.moon => const SolveHint(brightLayers: false),
+        ShootingScene.sun => const SolveHint(brightLayers: false),
       };
 }
 
@@ -320,6 +380,12 @@ class PlateSolver {
 
   SolveTrace? _lastTrace;
 
+  /// 整幅解不出来时最像真实天区的那条候选，见 [SolveTrace.weakCandidate]。
+  _WeakCandidate? _weak;
+
+  /// 正在跑分块解算。块内拟合出的坐标不能当成整幅的候选。
+  bool _patching = false;
+
   /// 浅层索引：只用 Hipparcos（V ≤ 8）那批星。
   ///
   /// 索引构建要一秒上下，第一次用完之后缓存住。
@@ -343,6 +409,35 @@ class PlateSolver {
   /// 量级，多数窄视场目标（Seestar 那类机器拍的星云星团）在中间层就出结果了，
   /// 不该为它们付这一份账。
   _TriangleIndex? _cachedDeepIndex;
+
+  /// 亮星层的星等上限。手机 1–4 s 的短曝光通常只拍得到 V≈4–6 的亮星，而
+  /// 「浅层」整表是 V≤8。索引端的近邻取的是**几何最近**，那批拍不到的暗星
+  /// 会把图内端能看到的真邻居顶掉——两边枚举出来的根本不是同一批三角形，
+  /// 星点明明不少却一颗都对不上。
+  ///
+  /// 把星表按星等收窄到和图内检出相当，两边手里的星集就几乎同一批，三角形
+  /// 重新对得上。实测一张 583 颗检出的手机广角照片（视场约 70°）：V≤8 层
+  /// 最多 5 颗内点、解不出；V≤5.0 层 12 颗内点，一次成功。代价只是一毫秒
+  /// 上下的索引构建，比跑一遍整表再认输便宜两个数量级。
+  static const _brightMagnitudeLimits = [4.5, 5.0, 6.0, 7.0];
+
+  /// 检出超过这个数就不先走亮星层。
+  ///
+  /// 亮星层解决的是「图里只剩最亮的一批星」（手机短曝光），这类图通常只有
+  /// 几百颗检出；深空/窄视场照片动辄几千颗，那一层的星集本来就和整表对不上，
+  /// 先跑四层只是白花二十几秒。阈值取在 700：实测手机广角照片 328–583 颗，
+  /// M45 2508 颗、M31 4530 颗。
+  static const _brightLayerMaxDetections = 700;
+
+  /// 亮星层索引。按星等上限缓存，键就是那一层的上限。
+  final Map<double, _TriangleIndex> _cachedBrightIndices = {};
+
+  /// 只取主星表里亮过 [limit] 的那些星；Gaia 补充层不掺进来——那一层的
+  /// 星等是 G 波段，混进 V 波段的阈值里会悄悄改变每一层的成员。
+  List<CatalogStar> _brightPool(double limit) => [
+        for (final star in catalog.stars)
+          if (!star.isGaia && star.vMagnitude <= limit) star,
+      ];
 
   /// 这一层的近邻取法要跟图内端一致，所以图内端组三角形时也得用同一个值。
   ///
@@ -421,6 +516,7 @@ class PlateSolver {
     _cachedIndex = null;
     _cachedMidIndex = null;
     _cachedDeepIndex = null;
+    _cachedBrightIndices.clear();
   }
 
   /// 尝试解算。失败返回 null，由调用方决定要不要回退到在线服务。
@@ -448,12 +544,27 @@ class PlateSolver {
   /// 层就够了，不该为它们付第三层的账。
   ///
   /// 每一层里还要再按「图内端取多少颗星」试几档，见 [_imageStarRungs]。
+  ///
+  /// 解不出来时不会只剩一个 null：[SolveTrace.weakCandidate] 会带上「最像
+  /// 真实天区的那条候选差几颗、是假解的概率多大」，由报告层解释给用户。
   SolveResult? solve(
     SkyAnalysis analysis, {
     void Function(SolveProgress progress)? onProgress,
     SolveHint hint = const SolveHint(),
   }) {
+    final result = _solveInternal(analysis, onProgress: onProgress, hint: hint);
+    // 分块解算里每一块自己会调一次 solve；块内坐标不能冒充整幅的候选。
+    if (result == null && !_patching) _attachWeakCandidate();
+    return result;
+  }
+
+  SolveResult? _solveInternal(
+    SkyAnalysis analysis, {
+    void Function(SolveProgress progress)? onProgress,
+    SolveHint hint = const SolveHint(),
+  }) {
     _activeHint = hint;
+    _weak = null;
     final trace = _lastTrace = SolveTrace();
     // 候选由分析层给：那边多收了一类「形似略拉长的亮源」。这里不再自己按
     // `isElongated` 过滤——展示用的拉长候选和能拿来解算的候选不是一回事，
@@ -463,6 +574,63 @@ class PlateSolver {
     if (detections.length < _minimumDetections) return null;
 
     onProgress?.call(SolveProgress(0.05, t('正在准备离线解算索引')));
+    // 短曝光手机星野先走亮星层：整表 V≤8 对这个场景几乎必然对不上，
+    // 让它先跑只是白等十几秒。每层只给几秒预算——正确的星等上限一旦命中，
+    // 一部分档位是几十毫秒的事（实测 583 颗检出的手机广角图 0.2 s 内解出）。
+    //
+    // 是否先付这笔账由 [SolveHint.brightLayers] 决定：广域/星野两个场景显式
+    // 给 true，深空/长焦显式给 false；auto 留 null，由解算器按检出数量判断。
+    // 深空/窄视场照片的检出动辄几千颗，亮星层只对「图里只剩亮星」的短曝光
+    // 有用，实测 M45/M31 是 2508/4530 颗，手机广角照片是 328–583 颗。
+    final wantBright = hint.brightLayers ??
+        detections.length <= _brightLayerMaxDetections;
+    if (!hint.skipShallow &&
+        hint.maxFieldDegrees >= 20 &&
+        wantBright) {
+      // 四层共用一份总预算：亮星层是「先试便宜的」，不是「每一层都能把
+      // 整段时间花满」。不设这道总闸，一张怎么都解不出的图会在这四层里
+      // 各等到超时，加起来比整张星表那一层还久。
+      final brightTotal =
+          hint.budgetMilliseconds > 0 ? hint.budgetMilliseconds : 15000;
+      final brightWatch = Stopwatch()..start();
+      for (var i = 0; i < _brightMagnitudeLimits.length; i++) {
+        final limit = _brightMagnitudeLimits[i];
+        final pool = _brightPool(limit);
+        // 视场里连几颗亮星都没有的层不用建索引：那一层给不出三角形。
+        if (pool.length < 8) continue;
+        final bright = _forFrame(
+          _cachedBrightIndices[limit] ??= _TriangleIndex.build(
+            catalog,
+            pool: pool,
+            neighbours: neighbours,
+            restrictCandidatesToPool: true,
+          ),
+          analysis,
+        );
+        if (bright == null) continue;
+        final remaining = brightTotal - brightWatch.elapsedMilliseconds;
+        if (remaining <= 0) break;
+        final layerBudget = math.min(remaining, _brightLayerBudgets[i]);
+        final solved = _matchWithRungs(
+          analysis,
+          bright,
+          detections,
+          rungs: _brightImageStarRungs,
+          neighbours: neighbours,
+          candidatesPerTriangle: _candidatesPerTriangle,
+          verificationBudget: _verificationBudget,
+          budgetMilliseconds: layerBudget,
+          progressBase: 0.06 + 0.04 * i,
+          progressSpan: 0.03,
+          onProgress: onProgress,
+          layer: trace.startLayer(
+            t('亮星层 V≤{0}', [limit.toStringAsFixed(1)]),
+            pool.length,
+          ),
+        );
+        if (solved != null) return solved;
+      }
+    }
     if (!hint.skipShallow) {
       final index = _index;
       if (index.triangleCount == 0) return null;
@@ -576,6 +744,19 @@ class PlateSolver {
   /// 只用于超广角/拼接片/地景占角的照片。每块都以自己的对角线缩放场景视场，
   /// 解出来之后把 WCS 的 CRPIX 加回块偏移、把坐标从块局部搬回整幅。
   SolveResult? _solvePatches(
+    SkyAnalysis analysis,
+    SolveHint hint,
+    void Function(SolveProgress progress)? onProgress,
+  ) {
+    _patching = true;
+    try {
+      return _solvePatchesUnchecked(analysis, hint, onProgress);
+    } finally {
+      _patching = false;
+    }
+  }
+
+  SolveResult? _solvePatchesUnchecked(
     SkyAnalysis analysis,
     SolveHint hint,
     void Function(SolveProgress progress)? onProgress,
@@ -737,6 +918,23 @@ class PlateSolver {
   /// 把预算跑满才肯认输。
   static const _imageStarRungs = [8, 16, 24, 120];
 
+  /// 亮星层的档位。
+  ///
+  /// 比 [_imageStarRungs] 多一档 480，而且允许取完整幅图的检出：短曝光照片
+  /// 的亮星本来就稀，正确星等层里同一天区的星数常常只有几十到几百颗。图内端
+  /// 如果只取最亮的 120 颗，索引端近邻域里那些第 121 颗往后的星就不在取值域
+  /// 里，近邻关系照样对不上——实测一张 490 颗检出的 60° 合成短曝光图，
+  /// V≤6.5 层降到 120 颗时失败，放到 480 颗就解出来了。
+  ///
+  /// 种子仍然按亮度取前 40 颗，所以加大档位只是把近邻取值域铺满，三角形数
+  /// 不会跟着涨（40 × C(7,3)）。
+  static const _brightImageStarRungs = [120, 480, 24, 8];
+
+  /// 每一层亮星层给多少毫秒。广角短曝光图里，正确的解几乎总落在「大档」
+  /// 上（图内端要铺满近邻域才能和索引端对上，见 [_brightImageStarRungs]），
+  /// 所以大档排在前面，小档只作为兜底。四层加起来不超过十秒。
+  static const _brightLayerBudgets = [4000, 10000, 8000, 8000];
+
   /// 中间层星表用的是同一串刻度：那一层的星多四倍，但「图内端比目录端多出
   /// 多少颗」这件事和层数无关。窄视场反而最需要小档——中间层本来就是给
   /// 「浅层星数不够」的天区兜底的，而窄视场正是这样的天区。
@@ -889,8 +1087,13 @@ class PlateSolver {
             attempt < fits.length && attempt < _permutationAttempts;
             attempt++) {
           final fit = fits[attempt];
-          final inliers = _collectInliers(index, grid, fit, stars.length);
-          if (inliers.isEmpty) continue;
+          final verification = _collectInliers(index, grid, fit, stars.length);
+          if (!verification.accepted) {
+            // 够不着门槛也先记下：整幅失败时，这条候选就是「差在哪」的证据。
+            _noteWeakCandidate(index, analysis, detections, fit, verification);
+            continue;
+          }
+          final inliers = verification.inliers;
           final refined = _fitSimilarity(
             [for (final i in inliers) _complexOf(stars[i.detectionIndex])],
             [
@@ -1108,9 +1311,10 @@ class PlateSolver {
 
   /// 把这些目录星投影回图像，数有多少颗落在检出星点附近。
   ///
-  /// [floor] 是早退用的下限：剩下的目录星全中也不够，这一条候选已经没戏。
+  /// [floor] 只是早退用的下限：剩下的目录星全中也不够，这一条候选已经没戏。
   /// 目录星按亮到暗排，真的对应关系靠前，所以这一刀通常只砍在假候选上——
-  /// 而假候选是绝大多数。
+  /// 而假候选是绝大多数。返回的是**所有**对上的内点，够不够门槛由调用方判
+  /// （[`_Verification.accepted`]）——「差几颗」本身也是要报告出去的证据。
   List<_Inlier> _matchInliers(
     _TriangleIndex index,
     List<int> candidates,
@@ -1138,26 +1342,111 @@ class PlateSolver {
       used.add(match.index);
       inliers.add(_Inlier(match.index, vertex, match.distance));
     }
-    _lastTrace?.noteInliers(inliers.length, floor);
-    return inliers.length < floor ? const [] : inliers;
+    // 早退下限只有「验证」这道门有；`_expandInliers` 补内点那一步传的是 1，
+    // 记进 trace 会把「需要几颗」显示成 1，反而把真正的门槛盖掉。
+    if (floor > 1) _lastTrace?.noteInliers(inliers.length, floor);
+    return inliers;
   }
 
-  /// 验一条候选：门槛由 [_inlierFloor] 按这张图自己的概率算出来；够不着门槛
-  /// 就返回空表，调用方只当「这次候选没戏」。
-  List<_Inlier> _collectInliers(
+  /// 验一条候选：门槛由 [_inlierFloor] 按这张图自己的概率算出来。
+  ///
+  /// 除了内点表，还带回门槛、这次验证面对的目录星数、以及单颗目录星「正好
+  /// 落进某颗检出星旁边」的概率——失败时算假解概率要用后两个数。
+  _Verification _collectInliers(
     _TriangleIndex index,
     _DetectionGrid grid,
     _Fit fit,
     int imageStars,
   ) {
     final candidates = _catalogCandidates(index, fit);
+    final area = index.frameWidth * index.frameHeight;
     final floor = _inlierFloor(
       imageStars: imageStars,
       catalogStars: candidates.length,
-      areaPixels: index.frameWidth * index.frameHeight,
+      areaPixels: area,
     );
-    if (candidates.length < floor) return const [];
-    return _matchInliers(index, candidates, grid, fit, floor: floor);
+    final hit = area <= 0
+        ? 1.0
+        : (imageStars *
+                math.pi *
+                _inlierTolerancePixels *
+                _inlierTolerancePixels /
+                area)
+            .clamp(0.0, 1.0);
+    if (candidates.length < floor) {
+      return _Verification(
+        inliers: const [],
+        floor: floor,
+        catalogStars: candidates.length,
+        hitChance: hit,
+      );
+    }
+    return _Verification(
+      inliers: _matchInliers(index, candidates, grid, fit, floor: floor),
+      floor: floor,
+      catalogStars: candidates.length,
+      hitChance: hit,
+    );
+  }
+
+  /// 记下一条没够着门槛的候选。只留内点最多的那一条。
+  void _noteWeakCandidate(
+    _TriangleIndex index,
+    SkyAnalysis analysis,
+    List<DetectedStar> detections,
+    _Fit fit,
+    _Verification verification,
+  ) {
+    final count = verification.inliers.length;
+    // 定义变换的那三颗必然算内点；至少再对上两颗，才谈得上「有点像」。
+    if (count < _definingCorrespondences + 2) return;
+    final previous = _weak;
+    if (previous != null && previous.inliers >= count) return;
+    fit.inliers = verification.inliers;
+    _weak = _WeakCandidate(
+      index: index,
+      analysis: analysis,
+      detections: detections,
+      fit: fit,
+      inliers: count,
+      required: verification.floor,
+      catalogStars: verification.catalogStars,
+      hitChance: verification.hitChance,
+    );
+  }
+
+  /// 整幅都没解出来时，把最像的那条候选算成天区坐标写进 trace。
+  ///
+  /// 「像」要用这张图自己的概率来量：一条候选由三颗星定义，此外每多对上
+  /// 一颗都是运气。门槛是按「四千次候选里蒙出这么多额外内点的期望低于 1e-3」
+  /// 定的；没够着门槛的候选就按同一个公式回算出它自己那次巧合的概率。
+  void _attachWeakCandidate() {
+    final weak = _weak;
+    final trace = _lastTrace;
+    if (weak == null || trace == null || trace.weakCandidate != null) return;
+    final wcs = _buildWcs(
+      weak.index,
+      weak.analysis,
+      weak.detections,
+      weak.fit,
+    );
+    if (wcs == null) return;
+    final (ra, dec) = wcs.imageCenter;
+    final extra = weak.inliers - _definingCorrespondences;
+    final trials = weak.catalogStars - _definingCorrespondences;
+    var expected = 1.0;
+    for (var i = 1; i <= extra; i++) {
+      expected *= (trials - i + 1) / i * weak.hitChance;
+    }
+    expected *= _verificationBudget;
+    trace.weakCandidate = SolveCandidate(
+      centerRa: ra,
+      centerDec: dec,
+      arcsecPerPixel: wcs.arcsecPerPixel,
+      inliers: weak.inliers,
+      required: weak.required,
+      falseAcceptProbability: expected.clamp(0.0, 1.0),
+    );
   }
 
   /// 一个候选最多试几种顶点对应。排在前面的是残差小的，正常三角形第一个
@@ -1806,17 +2095,83 @@ class PlateSolver {
     if (wcs == null) return result;
     final (centreRa, centreDec) = wcs.imageCenter;
     final radius = math.max(wcs.fieldOfViewDegrees / 2 + 0.3, 0.05);
+    final catalogStars = catalog.starsNear(centreRa, centreDec, radius);
     final decoration = _decorate(
       wcs,
       centreRa,
       centreDec,
-      catalog.starsNear(centreRa, centreDec, radius),
+      catalogStars,
     );
-    return result.withConstellationDecoration(
-      decoration.constellations,
-      decoration.figures,
-      deepSkyObjects: _sizedDeepSky(result),
-    );
+    return result
+        .withConstellationDecoration(
+          decoration.constellations,
+          decoration.figures,
+          deepSkyObjects: _sizedDeepSky(result),
+        )
+        .withNamedStars(
+          _namedStarsInFrame(wcs, catalogStars, result.namedStars),
+        );
+  }
+
+  /// 一张画面里最多标几颗有名字的星。
+  ///
+  /// 不是所有非 Gaia 星都值得上图：内置目录里没有通行名字的星只能写成
+  /// 「HIP 12345」，那对用户没有信息量。所以只收有名字的，并按亮度取前几十颗
+  /// ——广角照片里亮星多，全标出来会把深空天体和星座线淹掉。
+  static const _maxDecoratedStars = 48;
+
+  /// 用内置亮星目录给解算结果补上「画面里有哪些名字」。
+  ///
+  /// 本机和在线两条路共用：在线回来的坐标只带 SIMBAD 的写法，报告里的
+  /// 「亮星」一栏只认中文名，不补这一步就永远是 0 颗。位置按 [wcs] 投影，
+  /// 和星点一样落在图上；和已有条目按像素距离去重（同一个位置不画两个名字）。
+  List<SkyObject> _namedStarsInFrame(
+    Wcs wcs,
+    List<CatalogStar> stars,
+    List<SkyObject> existing,
+  ) {
+    final reused = <SkyObject>[];
+    final positions = <(double, double)>[];
+    bool taken(double x, double y) => positions.any(
+          (position) =>
+              (position.$1 - x).abs() < 8 && (position.$2 - y).abs() < 8,
+        );
+    // 先放内置中文名：它们是这个应用自己的星名来源，优先于在线 ID。
+    for (final star in stars) {
+      if (reused.length >= _maxDecoratedStars) break;
+      if (star.isGaia) continue;
+      final name = catalog.nameOf(star);
+      if (name == null) continue; // 只有 HIP 编号的不上图和列表。
+      final (x, y) = wcs.worldToPixel(star.ra, star.dec);
+      if (!x.isFinite || !y.isFinite) continue;
+      if (x < 0 || y < 0 || x >= wcs.width || y >= wcs.height) continue;
+      if (taken(x, y)) continue;
+      reused.add(
+        SkyObject(
+          catalog.displayName(star),
+          star.ra,
+          star.dec,
+          name.spectralType?.isNotEmpty == true
+              ? t('恒星 · {0}', [name.spectralType!])
+              : t('恒星'),
+          magnitude: star.vMagnitude,
+          magnitudeBand: 'V',
+          x: x,
+          y: y,
+          isLocal: true,
+        ),
+      );
+      positions.add((x, y));
+    }
+    // 在线那条路可能还带回了内置目录没有的名字（SIMBAD 的写法），只要不和
+    // 已经摆好的名字撞位置，就保留在列表里——名单不缺，标签也不重叠。
+    for (final object in existing) {
+      if (reused.length >= _maxDecoratedStars * 2) break;
+      if (taken(object.x, object.y)) continue;
+      reused.add(object);
+      positions.add((object.x, object.y));
+    }
+    return reused;
   }
 
   /// 标出疑似运动天体（行星、小行星、彗星、太阳）。
@@ -2058,9 +2413,16 @@ class _TriangleIndex {
     required this.order,
     required this.bucketStart,
     required this.triangleCount,
+    this.poolHips,
   });
 
   final StarCatalog catalog;
+
+  /// 这一层允许拿来做对应关系的星（HIP 号）。只有亮星层会存它：那一层是
+  /// **故意按星等收窄**过的，验证和精修也必须只用池内的星，否则数内点时会把
+  /// 池外那些拍不到的暗星也数进来——门槛按它们的数量抬高、真正的匹配又够不着，
+  /// 收窄了反而解不出。其余各层维持旧行为（null = 不限制）。
+  final Set<int>? poolHips;
 
   /// 每个三角形的三个顶点，指向 [StarCatalog.stars] 的下标；顺序是
   /// 「最短边对面的顶点、次长边对面的顶点、最长边对面的顶点」。
@@ -2127,6 +2489,7 @@ class _TriangleIndex {
     required List<CatalogStar> pool,
     required int neighbours,
     void Function(double fraction)? onProgress,
+    bool restrictCandidatesToPool = false,
   }) {
     if (pool.isEmpty) {
       return _TriangleIndex._(
@@ -2138,6 +2501,7 @@ class _TriangleIndex {
         order: Int32List(0),
         bucketStart: Int32List(bucketCount + 1),
         triangleCount: 0,
+        poolHips: restrictCandidatesToPool ? <int>{} : null,
       );
     }
     // 池里最暗的那颗。近邻查询先用它当星等上限缩小扫描范围，再按池的
@@ -2300,6 +2664,7 @@ class _TriangleIndex {
       order: order,
       bucketStart: bucketStart,
       triangleCount: count,
+      poolHips: restrictCandidatesToPool ? inPool : null,
     );
   }
 
@@ -2504,7 +2869,9 @@ class _TriangleIndex {
     int? limit,
   }) {
     final result = <int>[];
+    final only = poolHips;
     for (final star in catalog.starsNear(ra, dec, radius)) {
+      if (only != null && !only.contains(star.hip)) continue;
       final index = _starIndex[star.hip];
       if (index == null) continue;
       result.add(index);
@@ -2667,9 +3034,54 @@ class _Inlier {
   final double distance;
 }
 
+/// 一次候选验证的完整结果。
+class _Verification {
+  const _Verification({
+    required this.inliers,
+    required this.floor,
+    required this.catalogStars,
+    required this.hitChance,
+  });
+
+  final List<_Inlier> inliers;
+
+  /// 这一次验证要求的内点下限。
+  final int floor;
+
+  /// 这一次验证面对的目录星数（[_MaximumCatalogCandidates] 封顶）。
+  final int catalogStars;
+
+  /// 单颗目录星「正好落进某颗检出星旁边」的概率。
+  final double hitChance;
+
+  bool get accepted => inliers.length >= floor;
+}
+
+/// 一条没够着门槛、但内点最多的候选，供失败时解释「差在哪」。
+class _WeakCandidate {
+  const _WeakCandidate({
+    required this.index,
+    required this.analysis,
+    required this.detections,
+    required this.fit,
+    required this.inliers,
+    required this.required,
+    required this.catalogStars,
+    required this.hitChance,
+  });
+
+  final _TriangleIndex index;
+  final SkyAnalysis analysis;
+  final List<DetectedStar> detections;
+  final _Fit fit;
+  final int inliers;
+  final int required;
+  final int catalogStars;
+  final double hitChance;
+}
+
 class _ImageTriangle {
-  const _ImageTriangle({
-    required this.vertices,
+  const _ImageTriangle({    required this.vertices,
     required this.r2,
     required this.r3,
     required this.ratioTolerance,

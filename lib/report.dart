@@ -736,6 +736,18 @@ List<String> buildSolveFailureAdvice(
     advice.add(
       t('本机没能认出这片天区。图上检出了 {0} 个紧凑点源，所以不是星点太少，而是图中点源与已知恒星位置对不上：内置目录收录到 V=8.0 的亮星，另有一层 9 等以内的背景星兜底；视场窄到 4° 以下、或者画面里大半「星点」其实是星系星云一类并非点源的东西，就还是对不上。换更广的焦段（或加 0.5× 减焦镜）更容易成功。', [compact]),
     );
+    // 这一类失败在用户那边只有一句「没找到」，但原因完全不同：超广角/
+    // 鱼眼/全景拼接片的像面不是一张相似变换能描述的，本机算法从根上就不适用；
+    // 而「连巧合都算不上」则说明这次重拍同一个构图也不会有改变。两条都只在
+    // 没有像样候选时才说，免得和「差一点」的提示混在一起。
+    if (attempt?.weakCandidate?.isSuggestive != true) {
+      advice.add(
+        t('这次没有任何能和随机巧合区分开的候选：图上点源的几何关系与全天任何一片亮星分布都对不上。重拍同一构图大概率还是同样的结果——换目标、换焦段，或者直接交给在线解算。'),
+      );
+      advice.add(
+        t('如果这张是超广角或鱼眼镜头拍的（等效焦距 ≤ 16mm、视场对角线接近 90° 以上），或者来自手机全景/拼接模式：像面投影畸变远超本机解算的相似变换模型，这类照片请改用在线解算。'),
+      );
+    }
   }
 
   // 先把「该做什么」说完，再摆这次到底试了什么。顺序不能反：用户第一眼看
@@ -743,6 +755,20 @@ List<String> buildSolveFailureAdvice(
   // 到底可不可信，就看得出这几层是不是真跑过。
   final detail = describeSolveAttempt(attempt);
   if (detail != null) advice.add(detail);
+
+  // 「差一颗」和「差十颗」要分开说：前者很可能是真实天区，只是星点位置
+  // 误差大、或镜头畸变把相似变换撑破了；后者说明画面里的点源和星表不是
+  // 同一片天，再给坐标就是编。判据用那条候选自己的假解概率，不用内点数。
+  final weak = attempt?.weakCandidate;
+  if (weak != null && weak.isSuggestive) {
+    advice.add(
+      t('上面那个候选很可能就是真实天区：随机凑出这么多内点的概率只有 {0}。它没通过严格判据，不能作为测量结果，但按赤经 {1}、赤纬 {2} 去理解「大概拍了哪片天」通常不会差太远；想把它变成正式结果，把曝光时间加倍、重新对焦后再拍一张。', [
+        _probabilityPercent(weak.falseAcceptProbability),
+        formatRa(weak.centerRa),
+        formatDec(weak.centerDec),
+      ]),
+    );
+  }
 
   if (uploadAllowed && hasApiKey) {
     advice.add(
@@ -794,7 +820,29 @@ String? describeSolveAttempt(SolveTrace? trace) {
       t('最多数到 {0} 颗内点，需要 {1} 颗。', [trace.bestInliers, trace.bestRequired]),
     );
   }
+  // 「差一点」和「差得远」对用户是两件事：前者还值得补救，后者说明画面
+  // 点源和星表根本不是同一片天。概率按这张图自己的星点密度算，不是拍的。
+  final weak = trace.weakCandidate;
+  if (weak != null) {
+    buffer.write(
+      t('最像的那个候选指向赤经 {0}、赤纬 {1}，但只对上 {2} 颗（门槛 {3} 颗）；按这张图的星点密度，这种巧合有 {4} 的概率是随机凑出来的。', [
+        formatRa(weak.centerRa),
+        formatDec(weak.centerDec),
+        weak.inliers,
+        weak.required,
+        _probabilityPercent(weak.falseAcceptProbability),
+      ]),
+    );
+  }
   return buffer.toString();
+}
+
+/// 概率写成百分比：小于 0.1% 时写「不到 0.1%」，免得出现 0.00003% 这种
+/// 读不出信息量的数字。
+String _probabilityPercent(double probability) {
+  final percent = probability * 100;
+  if (percent < 0.1) return t('不到 0.1%');
+  return '${percent.toStringAsFixed(percent < 1 ? 1 : 0)}%';
 }
 
 /// 这个深空天体值不值得在**图上**画一个圈。

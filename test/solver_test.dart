@@ -1,4 +1,4 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:astrosophy/catalog.dart';
 import 'package:astrosophy/models.dart';
@@ -180,7 +180,9 @@ void main() {
 
       final trace = shallowOnly.lastTrace;
       expect(trace, isNotNull);
-      final layer = trace!.layers.single;
+      // 亮星层可能会先跑（取决于检出数量），这里关心的是「最后一层」把
+      // 过程记下来没有：星数如实报、档位真的试过。
+      final layer = trace!.layers.last;
       expect(layer.label, '浅层');
       // 星数要如实报——资产读坏了就是靠这个数看出来的。
       expect(layer.starCount, greaterThan(40000));
@@ -589,6 +591,101 @@ void main() {
           object.name],
         [for (final object in local.deepSkyObjects) object.name],
       );
+    });
+  });
+
+  group('短曝光手机星野的亮星层', () {
+    // 手机 1–4 s 曝光只拍得到最亮的一批星，而浅层索引是 V≤8 的整表；
+    // 索引端的最近邻被那些拍不到的暗星顶掉，两侧枚举出来的不是同一批
+    // 三角形。这一组盯的就是这条链路：图里只有 V≤5.5 的星，必须解得出来。
+    test('只有亮星的 55° 广角合成图能解出（整表 V≤8 会失败）', () {
+      final catalog = loadTestCatalog();
+      final field = synthesiseField(
+        catalog: catalog,
+        centerRa: 83.8,
+        centerDec: -1.5,
+        degreesPerPixel: 0.04, // 900x1200 → 约 55° 对角线
+        width: 900,
+        height: 1200,
+        magnitudeLimit: 5.5,
+        positionJitter: 0.35,
+        randomSeed: 7,
+      );
+      final solver = PlateSolver(catalog);
+      final solve = solver.solve(
+        field,
+        hint: const SolveHint(
+          minFieldDegrees: 8,
+          maxFieldDegrees: 120,
+          allowDeep: false,
+          budgetMilliseconds: 15000,
+        ),
+      );
+      expect(solve, isNotNull,
+          reason: '短曝光广角图必须靠亮星层解出来（旧版这里解不出）');
+      expect(solve!.centerRa, closeTo(83.8, 1.0));
+      expect(solve.centerDec, closeTo(-1.5, 1.0));
+      // 记录一下是哪一层接住的：将来改档位时，这条断言就是「别退回整表」的闸。
+      expect(
+        solver.lastTrace!.layers
+            .where((layer) => layer.label.startsWith('亮星层'))
+            .map((layer) => layer.label),
+        isNotEmpty,
+      );
+    });
+  });
+
+  group('在线解算的亮星命名', () {
+    // 在线那条路只拿 SIMBAD/Gaia 的写法当名字，报告里的「亮星」一栏只认中文名，
+    // 于是画面里明明有天津四、辇道增七，报告却写「亮星 0」。补名的活必须由持有
+    // 内置星表的一侧做，而且本机/在线两条路共用。
+    test('只有坐标没有名字的在线结果，也会补上内置目录的中文名', () {
+      final catalog = loadTestCatalog();
+      final solver = PlateSolver(catalog);
+      const width = 1024;
+      const height = 768;
+      const centerRa = 83.8;
+      const centerDec = -1.5;
+      final wcs = Wcs.fromPixels(
+        width: width,
+        height: height,
+        centerRa: centerRa,
+        centerDec: centerDec,
+        degreesPerPixel: 0.008,
+      );
+      final online = SolveResult(
+        centerRa: centerRa,
+        centerDec: centerDec,
+        arcsecPerPixel: wcs.arcsecPerPixel,
+        namedStars: const [],
+        deepSkyObjects: const [],
+        matchedStars: const [],
+        magnitudeZeroPoint: null,
+        magnitudeScatter: null,
+        catalogWarning: null,
+        source: SolveSource.online,
+        fieldOfViewDegrees: wcs.fieldOfViewDegrees,
+        wcs: wcs,
+      );
+
+      final decorated = solver.decorateSolve(online);
+      expect(decorated.namedStars, isNotEmpty,
+          reason: '在线解算的结果也必须能标出亮星名字');
+      // 猎户座这片天区一定有中文名的亮星；坐标落在画面内、星等按 V 给。
+      final names = [for (final star in decorated.namedStars) star.name];
+      expect(names.any((name) => RegExp(r'[\u4e00-\u9fff]').hasMatch(name)),
+          isTrue,
+          reason: '补的名字必须来自内置目录（中文名），而不是 Gaia 编号：$names');
+      expect(
+        names,
+        contains('参宿二'),
+        reason: '猎户座中心 8° 视场必须包含参宿二（Alnilam）',
+      );
+      for (final star in decorated.namedStars) {
+        expect(star.x, inInclusiveRange(0, width));
+        expect(star.y, inInclusiveRange(0, height));
+        expect(star.magnitudeBand, 'V');
+      }
     });
   });
 }

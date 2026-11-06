@@ -810,6 +810,32 @@ class SolveResult {
         primaryDeepSky: primaryDeepSky,
       );
 
+  /// 附上「画面里的亮星名字」。
+  ///
+  /// 这是本机星表给的：在线解算拿回来的坐标，一样要能标出天津四、辇道增七
+  /// 这些名字。在线那条路原来只靠 SIMBAD 的写法（`* alf Cyg`），对不上内置
+  /// 中文名，报告里「亮星」一栏就永远是空的。
+  SolveResult withNamedStars(List<SkyObject> stars) => SolveResult(
+        centerRa: centerRa,
+        centerDec: centerDec,
+        arcsecPerPixel: arcsecPerPixel,
+        namedStars: stars,
+        deepSkyObjects: deepSkyObjects,
+        matchedStars: matchedStars,
+        magnitudeZeroPoint: magnitudeZeroPoint,
+        magnitudeScatter: magnitudeScatter,
+        catalogWarning: catalogWarning,
+        source: source,
+        fieldOfViewDegrees: fieldOfViewDegrees,
+        constellations: constellations,
+        constellationFigures: constellationFigures,
+        wcs: wcs,
+        rotationDegrees: rotationDegrees,
+        matchedCount: matchedCount,
+        movingBodies: movingBodies,
+        primaryDeepSky: primaryDeepSky,
+      );
+
   /// 附上疑似运动天体的判定结果。
   ///
   /// 单独一步而不是塞进 [solve]：这件事需要拍摄时刻，而时刻是主 isolate 才有
