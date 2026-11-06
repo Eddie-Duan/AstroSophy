@@ -275,6 +275,10 @@ class Wcs {
     required this.cd12,
     required this.cd21,
     required this.cd22,
+    this.sipA = const {},
+    this.sipB = const {},
+    this.sipAP = const {},
+    this.sipBP = const {},
   });
 
   final int width;
@@ -287,6 +291,108 @@ class Wcs {
   final double cd12;
   final double cd21;
   final double cd22;
+
+  /// SIP 正变换系数：键是 `(p, q)`，对应 `u^p·v^q` 项，`u = x+1-crpix1`。
+  ///
+  /// 只有二阶及以上的项——一阶项已经并进 CD 矩阵。手机广角镜头的桶形畸变
+  /// 在像面边上能到十几像素，纯 TAN 会让标注和星座线整体歪掉；这个多项式
+  /// 就是补那一段的。astrometry.net 回来的 WCS 里本来就带它。
+  final Map<(int, int), double> sipA;
+  final Map<(int, int), double> sipB;
+
+  /// SIP 逆变换系数（astrometry.net 的 AP/BP）。没有就靠迭代求逆。
+  final Map<(int, int), double> sipAP;
+  final Map<(int, int), double> sipBP;
+
+  bool get hasSip => sipA.isNotEmpty || sipB.isNotEmpty;
+
+  /// 去掉曲率项的同一份坐标。
+  Wcs get withoutSip => hasSip
+      ? Wcs(
+          width: width,
+          height: height,
+          crval1: crval1,
+          crval2: crval2,
+          crpix1: crpix1,
+          crpix2: crpix2,
+          cd11: cd11,
+          cd12: cd12,
+          cd21: cd21,
+          cd22: cd22,
+        )
+      : this;
+
+  /// 换上新的曲率项。
+  Wcs withSip({
+    Map<(int, int), double>? a,
+    Map<(int, int), double>? b,
+    Map<(int, int), double>? inverseA,
+    Map<(int, int), double>? inverseB,
+  }) =>
+      Wcs(
+        width: width,
+        height: height,
+        crval1: crval1,
+        crval2: crval2,
+        crpix1: crpix1,
+        crpix2: crpix2,
+        cd11: cd11,
+        cd12: cd12,
+        cd21: cd21,
+        cd22: cd22,
+        sipA: a ?? sipA,
+        sipB: b ?? sipB,
+        sipAP: inverseA ?? sipAP,
+        sipBP: inverseB ?? sipBP,
+      );
+
+  static double _sipValue(
+    Map<(int, int), double> coefficients,
+    double u,
+    double v,
+  ) {
+    var sum = 0.0;
+    coefficients.forEach((key, value) {
+      sum += value * math.pow(u, key.$1) * math.pow(v, key.$2);
+    });
+    return sum;
+  }
+
+  /// 系数在像素侧的量纲是「像素 / 像素^(p+q)」，缩放像面时要同步换算。
+  static Map<(int, int), double> _scaleSip(
+    Map<(int, int), double> coefficients,
+    double scaleX,
+    double scaleY,
+  ) {
+    if (coefficients.isEmpty) return coefficients;
+    final scaled = <(int, int), double>{};
+    coefficients.forEach((key, value) {
+      scaled[key] = value /
+          (math.pow(scaleX, key.$1 - 1) * math.pow(scaleY, key.$2));
+    });
+    return scaled;
+  }
+
+  static List<List<double>>? _sipToJson(Map<(int, int), double> coefficients) =>
+      coefficients.isEmpty
+          ? null
+          : [
+              for (final entry in coefficients.entries)
+                [entry.key.$1.toDouble(), entry.key.$2.toDouble(), entry.value],
+            ];
+
+  static Map<(int, int), double> _sipFromJson(Object? value) {
+    if (value is! List) return const {};
+    final result = <(int, int), double>{};
+    for (final item in value) {
+      if (item is! List || item.length < 3) continue;
+      final p = (item[0] as num).toInt();
+      final q = (item[1] as num).toInt();
+      final coefficient = (item[2] as num).toDouble();
+      if (coefficient.isFinite) result[(p, q)] = coefficient;
+    }
+    return result;
+  }
 
   /// 由像素坐标构造：给定中心天球坐标和每个像素的角尺度（度/像素），
   /// 生成无旋转、无扭曲的 CD 矩阵。本地解算器求出旋转角后走这里。
@@ -351,9 +457,16 @@ class Wcs {
       crpix2: (crpix2 - 0.5) * scaleY + 0.5,
       // 像面变大，每个像素对应的天球角度就变小，所以是除不是乘。
       cd11: cd11 / scaleX,
-      cd12: cd12 / scaleX,
-      cd21: cd21 / scaleY,
+      // CD 的列对应像素坐标的两个方向：第 2 列（cd12/cd22 里的 y 分量）
+      // 跟 scaleY 走，不是 scaleX。宽高比不变时两者相同，一旦被非等比
+      // 缩放（拼图、裁切后再缩放）就会差出可见的旋转误差。
+      cd12: cd12 / scaleY,
+      cd21: cd21 / scaleX,
       cd22: cd22 / scaleY,
+      sipA: _scaleSip(sipA, scaleX, scaleY),
+      sipB: _scaleSip(sipB, scaleX, scaleY),
+      sipAP: _scaleSip(sipAP, scaleX, scaleY),
+      sipBP: _scaleSip(sipBP, scaleX, scaleY),
     );
   }
 
@@ -387,10 +500,17 @@ class Wcs {
 
   (double, double) pixelToWorld(double x, double y) {
     const radians = math.pi / 180;
-    final deltaX = x + 1 - crpix1;
-    final deltaY = y + 1 - crpix2;
-    final xi = (cd11 * deltaX + cd12 * deltaY) * radians;
-    final eta = (cd21 * deltaX + cd22 * deltaY) * radians;
+    var u = x + 1 - crpix1;
+    var v = y + 1 - crpix2;
+    if (hasSip) {
+      // A、B 都必须在**同一组** (u, v) 上求值，不能先改 u 再拿新 u 算 B。
+      final correctionU = _sipValue(sipA, u, v);
+      final correctionV = _sipValue(sipB, u, v);
+      u += correctionU;
+      v += correctionV;
+    }
+    final xi = (cd11 * u + cd12 * v) * radians;
+    final eta = (cd21 * u + cd22 * v) * radians;
     final rho = math.sqrt(xi * xi + eta * eta);
     if (rho == 0) return (crval1 % 360, crval2);
     final c = math.atan(rho);
@@ -426,7 +546,27 @@ class Wcs {
         radians;
     final dx = (cd22 * xi - cd12 * eta) / determinant;
     final dy = (-cd21 * xi + cd11 * eta) / determinant;
-    return (crpix1 + dx - 1, crpix2 + dy - 1);
+    // dx、dy 是「没有曲率时应该在的像素偏移」。SIP 是像素侧的修正，
+    // 所以要反解 u + A(u,v) = dx：给了 AP/BP 就直接用，没给就迭代收敛
+    // （二阶多项式的迭代收敛很快，5 次足够到 1e-3 像素）。
+    var u = dx;
+    var v = dy;
+    if (hasSip) {
+      if (sipAP.isNotEmpty || sipBP.isNotEmpty) {
+        u = dx + _sipValue(sipAP, dx, dy);
+        v = dy + _sipValue(sipBP, dx, dy);
+      } else {
+        for (var iteration = 0; iteration < 6; iteration++) {
+          final nextU = dx - _sipValue(sipA, u, v);
+          final nextV = dy - _sipValue(sipB, u, v);
+          final converged = (nextU - u).abs() < 1e-4 && (nextV - v).abs() < 1e-4;
+          u = nextU;
+          v = nextV;
+          if (converged) break;
+        }
+      }
+    }
+    return (crpix1 + u - 1, crpix2 + v - 1);
   }
 
   Map<String, Object?> toJson() => {
@@ -440,6 +580,10 @@ class Wcs {
         'cd12': cd12,
         'cd21': cd21,
         'cd22': cd22,
+        if (hasSip) 'sip_a': _sipToJson(sipA),
+        if (hasSip) 'sip_b': _sipToJson(sipB),
+        if (sipAP.isNotEmpty) 'sip_ap': _sipToJson(sipAP),
+        if (sipBP.isNotEmpty) 'sip_bp': _sipToJson(sipBP),
       };
 
   static Wcs fromJson(Map<String, Object?> json) => Wcs(
@@ -453,6 +597,10 @@ class Wcs {
         cd12: _number(json['cd12']),
         cd21: _number(json['cd21']),
         cd22: _number(json['cd22']),
+        sipA: _sipFromJson(json['sip_a']),
+        sipB: _sipFromJson(json['sip_b']),
+        sipAP: _sipFromJson(json['sip_ap']),
+        sipBP: _sipFromJson(json['sip_bp']),
       );
 
   /// 解析 FITS 头（astrometry.net 的 wcs_file 接口返回）。
@@ -497,14 +645,33 @@ class Wcs {
     // 抛 FormatException，用户看到的是「在线解算未能完成」加一个空结果，而
     // astrometry.net 的页面上明明写着 Success。两份报告都撞在这一行上。
     //
-    // 不去读 SIP 的 A_*/B_* 系数也一样是有意的：SIP 是几角秒量级的多项式
-    // 修正（实测那一份里 A_2_0 是 4.5e-8），而这一层的用途是「中心坐标、像
-    // 素尺度、以及把目录星投到画面上做标注」，误差比星点质心小一个量级。
+    // SIP 系数（A_*/B_* 与逆变换 AP_*/BP_*）以前是按设计丢掉的，理由是「几
+    // 角秒量级、比质心误差还小」。那只对窄视场成立：实测一张 83° 视场的手机
+    // 广角照片，不带 SIP 的 TAN 模型星点残差中位 12′、边角最大 42′，标注会
+    // 整体歪掉；把二阶 SIP 用上之后中位降到 1.8′。所以现在照读。
     final width =
         int.tryParse(values['IMAGEW'] ?? '') ?? int.tryParse(values['NAXIS1'] ?? '');
     final height =
         int.tryParse(values['IMAGEH'] ?? '') ?? int.tryParse(values['NAXIS2'] ?? '');
     if (width == null || height == null) throw FormatException(t('解算结果缺少有效图像尺寸。'));
+
+    /// 一组 SIP 多项式系数。键是 `(p, q)`，对应 `u^p·v^q` 项；一阶项并进 CD。
+    Map<(int, int), double> sipTerms(String axis) {
+      final order = int.tryParse(values['${axis}_ORDER'] ?? '') ?? 3;
+      final terms = <(int, int), double>{};
+      for (var p = 0; p <= order; p++) {
+        for (var q = 0; p + q <= order; q++) {
+          if (p + q < 2) continue;
+          final raw = values['${axis}_${p}_$q']?.replaceAll('D', 'E');
+          final value = raw == null ? null : double.tryParse(raw);
+          if (value != null && value != 0 && value.isFinite) {
+            terms[(p, q)] = value;
+          }
+        }
+      }
+      return terms;
+    }
+
     return Wcs(
       width: width,
       height: height,
@@ -516,6 +683,10 @@ class Wcs {
       cd12: number('CD1_2'),
       cd21: number('CD2_1'),
       cd22: number('CD2_2'),
+      sipA: sipTerms('A'),
+      sipB: sipTerms('B'),
+      sipAP: sipTerms('AP'),
+      sipBP: sipTerms('BP'),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'strings.dart';
 import 'analysis.dart';
 import 'catalog.dart';
 import 'deepsky.dart';
+import 'distortion.dart';
 import 'ephemeris.dart';
 import 'models.dart';
 import 'moving.dart';
@@ -170,6 +171,7 @@ class SolveHint {
     this.skipShallow = false,
     this.patchGrid = 2,
     this.brightLayers,
+    this.wideCurvature = false,
   });
 
   /// 视场对角线下限（度）。
@@ -211,6 +213,15 @@ class SolveHint {
   /// 场景吃到这条优化，而深空、长焦这些场景一个字节的行为都不变。
   final bool? brightLayers;
 
+  /// 是否试「宽视场曲率」解算（中心亮星粗定位 + SIP 拟合 + 复投影）。
+  ///
+  /// 默认 **关闭**：曲率拟合与复投影这一段已经验证可用（拿 astrometry.net
+  /// 的真值检验，442 个正确配对拟合出 440 个内点、RMS 1.24 px），但「从零
+  /// 粗定位」还不可靠——83° 视场照片上，中心亮星三角形与星表近邻集合的
+  /// 重合率只有三成，候选解全部落在随机水平。打开它只会让每张解不出的
+  /// 广角图多等半分钟，所以先留作实验开关，等粗定位那块补上再默认开启。
+  final bool wideCurvature;
+
   SolveHint copyWith({
     double? minFieldDegrees,
     double? maxFieldDegrees,
@@ -220,6 +231,7 @@ class SolveHint {
     bool? skipShallow,
     int? patchGrid,
     bool? brightLayers,
+    bool? wideCurvature,
   }) =>
       SolveHint(
         minFieldDegrees: minFieldDegrees ?? this.minFieldDegrees,
@@ -230,6 +242,7 @@ class SolveHint {
         skipShallow: skipShallow ?? this.skipShallow,
         patchGrid: patchGrid ?? this.patchGrid,
         brightLayers: brightLayers ?? this.brightLayers,
+        wideCurvature: wideCurvature ?? this.wideCurvature,
       );
 }
 
@@ -631,6 +644,12 @@ class PlateSolver {
         if (solved != null) return solved;
       }
     }
+    // 亮星层之后：宽视场曲率解算。只对「星野/广域」显式开启、或检出数量在
+    // 短曝光量级的图试——这一步要迭代拟合，深空/窄视场图不需要它。
+    if (hint.wideCurvature && wantBright && hint.maxFieldDegrees >= 20) {
+      final wide = _solveWideSip(analysis, detections, trace, onProgress);
+      if (wide != null) return wide;
+    }
     if (!hint.skipShallow) {
       final index = _index;
       if (index.triangleCount == 0) return null;
@@ -861,6 +880,331 @@ class PlateSolver {
       }
     }
     return null;
+  }
+
+  /// 宽视场真正缺的那一块：先用中心亮星粗定位，再把镜头曲率拟合出来。
+  ///
+  /// 前面的层都假设「像素坐标 = 切平面坐标的相似变换」。视场到 80° 以上时，
+  /// 这个假设在边角会差出十几像素（实测一张 83° 照片：无曲率模型星点残差
+  /// 中位 12′、最大 42′），三角形指纹和标注都跟着歪。这里换一个顺序：
+  ///
+  /// 1. **只用画面中心**的亮星（离中心 10° 内，投影畸变 ≤2%）组三角形找粗
+  ///    对应。全画面最亮的星彼此隔着几十度，形状早被投影拉歪，比值对不上；
+  ///    中心一对上，剩下就能交给曲率模型；
+  /// 2. 用粗 WCS 把目录亮星投影回画面，与整幅检出做鲁棒配对；
+  /// 3. 用配对残差拟合 SIP 二阶/三阶曲率（[fitSipDistortion]），换带曲率的
+  ///    坐标重新配对、重新拟合，按 3 像素内点数验收。
+  ///
+  /// 只对显式标了星野/广域、或检出数量在短曝光量级的图调用（见 [solve]），
+  /// 深空、长焦路径的行为不变。
+  SolveResult? _solveWideSip(
+    SkyAnalysis analysis,
+    List<DetectedStar> detections,
+    SolveTrace trace,
+    void Function(SolveProgress progress)? onProgress,
+  ) {
+    if (detections.length < 80) return null;
+    final width = analysis.width.toDouble();
+    final height = analysis.height.toDouble();
+    final cx = width / 2;
+    final cy = height / 2;
+    final diagonal = math.sqrt(width * width + height * height);
+    final watch = Stopwatch()..start();
+    const budgetMilliseconds = 30000;
+    const maxCoarseVerifications = 600;
+    var coarseVerifications = 0;
+    var bestInliers = 0;
+
+    final layer = trace.startLayer(t('宽视场曲率'), detections.length);
+    final grid = _DetectionGrid(detections);
+
+    for (final limit in const [6.0, 5.5, 7.0]) {
+      if (watch.elapsedMilliseconds > budgetMilliseconds) break;
+      final pool = _brightPool(limit);
+      if (pool.length < 400) continue;
+      final index = _cachedBrightIndices[limit] ??= _TriangleIndex.build(
+        catalog,
+        pool: pool,
+        neighbours: neighbours,
+      );
+      if (_forFrame(index, analysis) == null) continue;
+      for (final fraction in const [0.13, 0.20, 0.09]) {
+        if (watch.elapsedMilliseconds > budgetMilliseconds) break;
+        final radius = diagonal * fraction;
+        final central = <DetectedStar>[];
+        for (final star in detections) {
+          final dx = star.x - cx;
+          final dy = star.y - cy;
+          if (dx * dx + dy * dy <= radius * radius) central.add(star);
+        }
+        if (central.length < 12) continue;
+        final imageTriangles = _imageTriangles(central, neighbours);
+        for (final triangle in imageTriangles) {
+          if (watch.elapsedMilliseconds > budgetMilliseconds ||
+              coarseVerifications >= maxCoarseVerifications) {
+            break;
+          }
+          for (final candidate in index.lookup(
+            triangle.r2,
+            triangle.r3,
+            ratioTolerance: triangle.ratioTolerance,
+            limit: 24,
+            vertexMagnitudes: [
+              central[triangle.vertices.$1].instrumentalMagnitude,
+              central[triangle.vertices.$2].instrumentalMagnitude,
+              central[triangle.vertices.$3].instrumentalMagnitude,
+            ],
+            imageLongestSidePixels: triangle.longestSidePixels,
+            minScaleDegreesPerPixel: _activeHint == null
+                ? null
+                : _activeHint!.minFieldDegrees / diagonal * 0.5,
+            maxScaleDegreesPerPixel: _activeHint == null
+                ? null
+                : _activeHint!.maxFieldDegrees / diagonal * 2.0,
+          )) {
+            if (watch.elapsedMilliseconds > budgetMilliseconds ||
+                coarseVerifications >= maxCoarseVerifications) {
+              break;
+            }
+            final fits =
+                _fitsFromCorrespondence(index, central, triangle, candidate);
+            for (final fit in fits.take(_permutationAttempts)) {
+              if (watch.elapsedMilliseconds > budgetMilliseconds ||
+                  coarseVerifications >= maxCoarseVerifications) {
+                break;
+              }
+              coarseVerifications++;
+              final solved = _refineWide(
+                index,
+                analysis,
+                detections,
+                grid,
+                fit,
+                onProgress,
+              );
+              if (solved != null) {
+                layer.bestInliers = solved.matchedCount;
+                return solved;
+              }
+            }
+          }
+        }
+      }
+    }
+    layer.bestInliers = bestInliers;
+    return null;
+  }
+
+  /// 宽视场解算的内点下限。
+  ///
+  /// 随机凑到 40 颗内点的概率已经可以忽略（3 像素容差下，460 颗检出、1500 颗
+  /// 目录星里随机命中的期望只有个位数）。真正的验收看的是 3 像素紧容差下的
+  /// 内点数；这张 83° 照片实测能到 200 颗上下。
+  static const _wideMinimumInliers = 40;
+
+  /// 从粗相似变换 refine 出一份带曲率的解。
+  SolveResult? _refineWide(
+    _TriangleIndex index,
+    SkyAnalysis analysis,
+    List<DetectedStar> detections,
+    _DetectionGrid grid,
+    _Fit coarse,
+    void Function(SolveProgress progress)? onProgress,
+  ) {
+    final startWcs = _wcsFromSimilarity(coarse, analysis);
+    if (startWcs == null || !_plausibleWideWcs(startWcs)) return null;
+    Wcs wcs = startWcs;
+    var matches = _matchWideStars(wcs, index, detections, grid);
+    for (var iteration = 0; iteration < 3; iteration++) {
+      if (matches.length < 12) return null;
+      final refit = _refitWcsFromMatches(wcs, matches, analysis);
+      if (refit == null || !_plausibleWideWcs(refit)) return null;
+      wcs = refit;
+      matches = _matchWideStars(wcs, index, detections, grid);
+    }
+    if (matches.length < 20) return null;
+
+    // 曲率：二阶先试，三阶只在内点明显更多时才采用。三阶多四个参数，
+    // 星点少的时候容易把噪声一起拟合进去。
+    SipFitResult? best;
+    for (final order in const [2, 3]) {
+      final fitted = fitSipDistortion(
+        wcs,
+        [
+          for (final match in matches)
+            SipMatch(match.x, match.y, match.ra, match.dec),
+        ],
+        order: order,
+        inlierTolerancePixels: 3.0,
+      );
+      if (fitted == null) continue;
+      if (best == null || fitted.inliers > best.inliers) best = fitted;
+      if (best.inliers >= 120) break;
+    }
+    if (best == null) return null;
+    onProgress?.call(SolveProgress(0.2, t('正在拟合镜头曲率')));
+
+    // 用曲率模型做一次紧容差配对，再拟合一次精修。
+    final finalMatches = _matchWideStars(
+      best.wcs,
+      index,
+      detections,
+      grid,
+      baseTolerance: 3.0,
+      radialGrowth: 1.5,
+    );
+    var finalWcs = best.wcs;
+    var finalCount = finalMatches.length;
+    for (final order in const [2, 3]) {
+      final refitSip = fitSipDistortion(
+        wcs,
+        [
+          for (final match in finalMatches)
+            SipMatch(match.x, match.y, match.ra, match.dec),
+        ],
+        order: order,
+        inlierTolerancePixels: 3.0,
+      );
+      if (refitSip == null) continue;
+      if (refitSip.inliers > finalCount) {
+        finalWcs = refitSip.wcs;
+        finalCount = refitSip.inliers;
+      }
+    }
+    if (finalCount < _wideMinimumInliers) return null;
+
+    final resultFit = _Fit(const _Complex(1, 0), _Complex.zero, false)
+      ..inliers = [
+        for (final match in finalMatches)
+          _Inlier(match.detectionIndex, match.catalogVertex, match.distance),
+      ];
+    return _buildResult(index, analysis, detections, resultFit, finalWcs);
+  }
+
+  /// 粗相似变换 → 一张不带曲率的 TAN 坐标。
+  Wcs? _wcsFromSimilarity(_Fit fit, SkyAnalysis analysis) {
+    if (!fit.isFinite) return null;
+    final width = analysis.width.toDouble();
+    final height = analysis.height.toDouble();
+    final cx = width / 2;
+    final cy = height / 2;
+    final centreSky = fit.apply(_Complex(cx, cy));
+    final (ra, dec) = _TriangleIndex.unproject(centreSky, fit.reference);
+    if (!ra.isFinite || !dec.isFinite) return null;
+    final a = fit.a;
+    if (a.abs < 1e-9) return null;
+    return Wcs(
+      width: analysis.width,
+      height: analysis.height,
+      crval1: ra % 360,
+      crval2: dec,
+      crpix1: cx + 1,
+      crpix2: cy + 1,
+      cd11: a.real,
+      cd12: -a.imaginary,
+      cd21: a.imaginary,
+      cd22: a.real,
+    );
+  }
+
+  /// 这份 WCS 的尺度和视场是否落在一个合理范围里。
+  bool _plausibleWideWcs(Wcs wcs) {
+    final arcsec = wcs.arcsecPerPixel;
+    if (!arcsec.isFinite || arcsec <= 1 || arcsec >= 3600) return false;
+    final fov = wcs.fieldOfViewDegrees;
+    return fov.isFinite && fov >= 5 && fov <= 125;
+  }
+
+  /// 用当前的 WCS 把目录亮星投回画面，和检出做一对一配对。
+  ///
+  /// 容差随离像面中心的距离放大：曲率误差在中心几乎为零，在边角能到十几
+  /// 像素。这样初配不会因为「边上差 10 像素」就整片漏掉。
+  List<_WideMatch> _matchWideStars(
+    Wcs wcs,
+    _TriangleIndex index,
+    List<DetectedStar> detections,
+    _DetectionGrid grid, {
+    double baseTolerance = 6.0,
+    double radialGrowth = 10.0,
+  }) {
+    final (ra0, dec0) = wcs.imageCenter;
+    final radius = math.min(120.0, wcs.fieldOfViewDegrees / 2 + 2.0);
+    final candidates = index.starsNearSky(ra0, dec0, radius, limit: 1500);
+    final cx = wcs.width / 2.0;
+    final cy = wcs.height / 2.0;
+    final maxRadius = math.sqrt(cx * cx + cy * cy);
+    final used = <int>{};
+    final matches = <_WideMatch>[];
+    for (final vertex in candidates) {
+      final star = index.starOf(vertex);
+      final (px, py) = wcs.worldToPixel(star.ra, star.dec);
+      if (!px.isFinite || !py.isFinite) continue;
+      if (px < -30 || py < -30 || px > wcs.width + 30 || py > wcs.height + 30) {
+        continue;
+      }
+      final dx = px - cx;
+      final dy = py - cy;
+      final radial =
+          maxRadius <= 0 ? 0.0 : math.sqrt(dx * dx + dy * dy) / maxRadius;
+      final tolerance =
+          baseTolerance + radialGrowth * radial.clamp(0.0, 1.0);
+      final match = grid.nearest(px, py, tolerance, used);
+      if (match == null) continue;
+      used.add(match.index);
+      matches.add(
+        _WideMatch(
+          detectionIndex: match.index,
+          catalogVertex: vertex,
+          x: detections[match.index].x,
+          y: detections[match.index].y,
+          ra: star.ra,
+          dec: star.dec,
+          distance: match.distance,
+        ),
+      );
+    }
+    return matches;
+  }
+
+  /// 用一批配对重新解一次相似变换（只校准 CD 和中心，不碰曲率）。
+  Wcs? _refitWcsFromMatches(
+    Wcs wcs,
+    List<_WideMatch> matches,
+    SkyAnalysis analysis,
+  ) {
+    if (matches.length < 6) return null;
+    final reference = (wcs.crval1, wcs.crval2);
+    final sky = <_Complex>[];
+    final pixels = <_Complex>[];
+    for (final match in matches) {
+      final (xi, eta) = _TriangleIndex.project(match.ra, match.dec, reference);
+      if (!xi.isFinite || !eta.isFinite) continue;
+      sky.add(_Complex(xi, eta));
+      pixels.add(_Complex(match.x, match.y));
+    }
+    if (pixels.length < 6) return null;
+    final fit = _fitSimilarity(pixels, sky, false);
+    if (fit == null) return null;
+    final width = analysis.width.toDouble();
+    final height = analysis.height.toDouble();
+    final cx = width / 2;
+    final cy = height / 2;
+    final centreSky = fit.apply(_Complex(cx, cy));
+    final (ra, dec) = _TriangleIndex.unproject(centreSky, reference);
+    if (!ra.isFinite || !dec.isFinite) return null;
+    final a = fit.a;
+    return Wcs(
+      width: analysis.width,
+      height: analysis.height,
+      crval1: ra % 360,
+      crval2: dec,
+      crpix1: cx + 1,
+      crpix2: cy + 1,
+      cd11: a.real,
+      cd12: -a.imaginary,
+      cd21: a.imaginary,
+      cd22: a.real,
+    );
   }
 
   /// 建索引时并不知道像面尺寸，解算前每帧都要补上——[_collectInliers] 靠它
@@ -2998,6 +3342,27 @@ class _DetectionGrid {
     final found = best;
     return found == null ? null : (index: found, distance: bestDistance);
   }
+}
+
+/// 宽视场解算里的一对匹配：第 [detectionIndex] 颗检出 ↔ 第 [catalogVertex] 颗目录星。
+class _WideMatch {
+  const _WideMatch({
+    required this.detectionIndex,
+    required this.catalogVertex,
+    required this.x,
+    required this.y,
+    required this.ra,
+    required this.dec,
+    required this.distance,
+  });
+
+  final int detectionIndex;
+  final int catalogVertex;
+  final double x;
+  final double y;
+  final double ra;
+  final double dec;
+  final double distance;
 }
 
 /// 拟合出来的相似变换：`w = a·u + b`。
