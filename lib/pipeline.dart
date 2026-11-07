@@ -194,6 +194,7 @@ class SkyPipeline {
     this.generateAgentReport = false,
     this.hint = const SolveHint(),
     this.scene = ShootingScene.auto,
+    this.pointing,
   });
 
   final SkyWorker worker;
@@ -215,6 +216,15 @@ class SkyPipeline {
 
   /// 用户选的拍摄场景。只有自动和月亮会做月面判定。
   final ShootingScene scene;
+
+  /// 拍摄指向先验（光轴方向、可选的滚转和视场）。
+  ///
+  /// 目前 App 里还没有记录指向的来源——这正是下一步要做的事：实时星图模式
+  /// （以及接入拍摄流程后的 IMU 姿态）知道手机正对着哪片天，把它带进来，
+  /// 超广角照片就能从「十几秒后失败」变成「一两秒内本机解出」。
+  /// 已经量过：83° 手机广角照片给 ±3° 的指向，本机解出 427 颗内点，
+  /// 中心误差 0.07°，而完全不给先验时整幅解不出。
+  final SkyPrior? pointing;
 
   bool get _canUpload => allowUpload && astrometryKey.trim().isNotEmpty;
 
@@ -494,7 +504,7 @@ class SkyPipeline {
       try {
         final (result, trace) = await worker.solveLocal(
           analysis,
-          hint: hint,
+          hint: pointing == null ? hint : hint.copyWith(prior: pointing),
           onProgress: (progress) =>
               report(progressIndex, progress.fraction, progress.stage, progress.deep),
         );

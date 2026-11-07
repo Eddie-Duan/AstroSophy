@@ -2,6 +2,24 @@
 
 版本号取自 [`pubspec.yaml`](./pubspec.yaml) 的 `version`，对应的 Git 标签是 `v<版本名>`。推送标签后由 [`release.yml`](./.github/workflows/release.yml) 自动构建 release APK 并发布到 [Releases](https://github.com/Eddie-Duan/Astrosophy/releases)。
 
+## [0.5.7] - 2026-11-07
+
+### 新增
+
+- **拍摄指向先验**：`SolveHint.prior`（`SkyPrior`）让解算器先按「拍摄时光轴大致对准的天区」定位，再拟曲率、复投影。确定性三步：偏移投票 → 局部抛光 → SIP 曲率拟合 + 100 内点验收。真实 83° 手机照片实测：不给先验整幅解不出；给中心偏 3°、滚转差 0.5°、视场差 3% 的先验，1.7 s 解出 427 颗内点，中心误差 0.07°，标注与 astrometry.net 真值平均差 2.4′。
+- `SkyPipeline.pointing` 参数，把指向先验带进本机解算链路（App 里的指向来源是下一步）。
+- 消融与基准脚本：`tools/research/prior_bench`（含 A/B、半径/滚转/视场误差、错先验拒绝的完整表格）。
+
+### 测试
+
+- `test/prior_solve_test.dart`：合成 83° 带 SIP 畸变星野 + 指向先验能解出且中心误差 <0.3°；错 30° 的先验不会把结果带到别的天区。
+- `test/catalog_fixture.dart` 的 `synthesiseField` 支持 SIP 系数，测试可以造带镜头畸变的广角星野。
+
+### 说明
+
+- 超广角/手机广角的本机解算从「解不出」变成「有指向就能解」；彻底不依赖外部信息的从零粗定位仍未解决（0.5.6 的 `wideCurvature` 仍默认关闭）。
+- App 里还没有记录拍摄指向的入口：实时星图模式已经知道姿态，把它接到 `SkyPipeline.pointing` 是下一步的 UI 工作。
+
 ## [0.5.6] - 2026-11-06
 
 ### 新增

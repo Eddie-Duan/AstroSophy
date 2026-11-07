@@ -58,6 +58,8 @@ SkyAnalysis synthesiseField({
   bool mirrored = false,
   double positionJitter = 0.25,
   int? randomSeed,
+  Map<(int, int), double> sipA = const {},
+  Map<(int, int), double> sipB = const {},
 }) {
   final wcs = Wcs.fromPixels(
     width: width,
@@ -66,7 +68,7 @@ SkyAnalysis synthesiseField({
     centerDec: centerDec,
     degreesPerPixel: degreesPerPixel,
     rotationRadians: rotationRadians,
-  );
+  ).withSip(a: sipA, b: sipB);
   // 取外接圆半径，保证四角的天区也覆盖到。
   final radius = math.sqrt(
         math.pow(width / 2, 2) + math.pow(height / 2, 2),
